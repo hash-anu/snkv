@@ -13,10 +13,15 @@ $(TARGET): $(OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+tests/test_prod: tests/test_prod.c src/kvstore.c src/os.c src/os_unix.c src/os_win.c src/util.c src/printf.c src/random.c src/hash.c src/pager.c   src/btree.c   src/busy_stub.c src/stub_value.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+test_prod: tests/test_prod
+
 tests/test_columnfamily: tests/test_columnfamily.c src/kvstore.c src/os.c src/os_unix.c src/os_win.c src/util.c src/printf.c src/random.c src/hash.c src/pager.c   src/btree.c   src/busy_stub.c src/stub_value.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 test_cf: tests/test_columnfamily
 
 clean:
-	rm -f $(OBJ) $(TARGET) tests/test_columnfamily
+	rm -f $(OBJ) $(TARGET) tests/test_columnfamily tests/test_prod

@@ -1,2 +1,4 @@
 *.o
 snkv
+tests/test_columnfamily
+tests/test_prod
