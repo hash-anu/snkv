@@ -1568,6 +1568,10 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   i64 nNameLen;
   int loc;
   u32 cfCount;
+  u32 dataSize;
+  unsigned char tableRootBytes[4];
+  int iTable;
+  int iMoved = 0;  // For sqlite3BtreeDropTable
   
   if( !pKV || !zName ){
     if( pKV ) kvstoreSetError(pKV, "invalid parameters to cf_drop");
@@ -1591,7 +1595,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     return KVSTORE_READONLY;
   }
   
-  /* Find CF in metadata table */
+  /* Find CF in metadata table and get its table root */
   rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, keyCompare, NULL, &pCur);
   if( rc != SQLITE_OK ){
     if( autoTrans ) kvstore_rollback(pKV);
@@ -1605,6 +1609,24 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
   
+  /* Read the table root page number */
+  rc = sqlite3BtreeDataSize(pCur, &dataSize);
+  if( rc != SQLITE_OK || dataSize != 4 ){
+    sqlite3BtreeCloseCursor(pCur);
+    if( autoTrans ) kvstore_rollback(pKV);
+    return KVSTORE_CORRUPT;
+  }
+  
+  rc = sqlite3BtreeData(pCur, 0, 4, tableRootBytes);
+  if( rc != SQLITE_OK ){
+    sqlite3BtreeCloseCursor(pCur);
+    if( autoTrans ) kvstore_rollback(pKV);
+    return rc;
+  }
+  
+  iTable = (tableRootBytes[0] << 24) | (tableRootBytes[1] << 16) |
+           (tableRootBytes[2] << 8) | tableRootBytes[3];
+  
   /* Delete from metadata table */
   rc = sqlite3BtreeDelete(pCur);
   sqlite3BtreeCloseCursor(pCur);
@@ -1614,12 +1636,18 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     return rc;
   }
   
+  /* Drop the actual table */
+  rc = sqlite3BtreeDropTable(pKV->pBt, iTable, &iMoved);
+  if( rc != SQLITE_OK ){
+    if( autoTrans ) kvstore_rollback(pKV);
+    kvstoreSetError(pKV, "failed to drop table: error %d", rc);
+    return rc;
+  }
+  
   /* Update CF count */
   sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
   if( cfCount > 0 ) cfCount--;
   sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
-  
-  /* TODO: Drop the actual table - requires btree API support */
   
   if( autoTrans ){
     rc = kvstore_commit(pKV);
