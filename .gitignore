@@ -2,3 +2,4 @@
 snkv
 tests/test_columnfamily
 tests/test_prod
+tests/test_benchmark
