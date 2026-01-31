@@ -335,6 +335,14 @@ int main(void) {
     bench_exists_checks(kv);
     bench_mixed_workload(kv);
     
+    KVStoreStats stats;
+    kvstore_stats(kv, &stats);
+    printf("  Total operations:\n");
+    printf("    - Puts:    %llu\n", stats.nPuts);
+    printf("    - Gets:    %llu\n", stats.nGets);
+    printf("    - Deletes: %llu\n", stats.nDeletes);
+
+
     kvstore_close(kv);
     
     bench_bulk_insert();
@@ -349,16 +357,7 @@ int main(void) {
     printf(COLOR_RESET);
     printf("  Total benchmark time: " COLOR_GREEN "%.2f seconds" COLOR_RESET "\n", 
            total_end - total_start);
-    
-    KVStoreStats stats;
-    kvstore_open(DB_FILE, &kv, 0);
-    kvstore_stats(kv, &stats);
-    printf("  Total operations:\n");
-    printf("    - Puts:    %llu\n", stats.nPuts);
-    printf("    - Gets:    %llu\n", stats.nGets);
-    printf("    - Deletes: %llu\n", stats.nDeletes);
-    kvstore_close(kv);
-    
+        
     printf("\n" COLOR_GREEN "✓ Benchmark complete!" COLOR_RESET "\n\n");
     
     /* Cleanup */

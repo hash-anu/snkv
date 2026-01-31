@@ -185,6 +185,7 @@ static void test_cf_list(void) {
   KVColumnFamily *cf;
   char **names = NULL;
   int count, rc, i;
+  int found_logs = 0;
   
   remove(TEST_DB);
   
@@ -203,15 +204,41 @@ static void test_cf_list(void) {
   rc = kvstore_cf_list(kv, &names, &count);
   ASSERT_OK(rc, "Failed to list CFs");
   
-  printf("  Found %d column families:\n", count);
+  if( count != 4 ){
+    FAIL("Expected 4 CFs before drop");
+  }
+  
+  for(i = 0; i < count; i++){
+    sqliteFree(names[i]);
+  }
+  sqliteFree(names);
+  names = NULL;
+  
+  /* Drop one CF */
+  rc = kvstore_cf_drop(kv, "logs");
+  ASSERT_OK(rc, "Failed to drop CF 'logs'");
+  
+  /* List CFs again */
+  rc = kvstore_cf_list(kv, &names, &count);
+  ASSERT_OK(rc, "Failed to list CFs after drop");
+  
+  printf("  Found %d column families after drop:\n", count);
+  
   for(i = 0; i < count; i++){
     printf("    - %s\n", names[i]);
+    if( strcmp(names[i], "logs") == 0 ){
+      found_logs = 1;
+    }
     sqliteFree(names[i]);
   }
   sqliteFree(names);
   
-  if( count != 4 ){
-    FAIL("Expected 4 CFs");
+  if( count != 3 ){
+    FAIL("Expected 3 CFs after drop");
+  }
+  
+  if( found_logs ){
+    FAIL("Dropped CF 'logs' still present in list");
   }
   
   kvstore_close(kv);
@@ -219,6 +246,7 @@ static void test_cf_list(void) {
   
   PASS();
 }
+
 
 /*
 ** Test 4: Iterator per CF
