@@ -33,10 +33,10 @@ tests/test_acid: tests/test_acid.c src/kvstore_mutex.c src/kvstore.c src/os.c sr
 
 test_acid: tests/test_acid
 
-tests/test_mutex: tests/test_mutex.c src/kvstore_mutex.c src/kvstore.c src/os.c src/os_unix.c src/os_win.c src/util.c src/printf.c src/random.c src/hash.c src/pager.c   src/btree.c
+tests/test_mutex_journal: tests/test_mutex_journal.c src/kvstore_mutex.c src/kvstore.c src/os.c src/os_unix.c src/os_win.c src/util.c src/printf.c src/random.c src/hash.c src/pager.c   src/btree.c
 	$(CC) $(CFLAGS) -o $@ $^
 
-test_mutex: tests/test_mutex
+test_mutex_journal: tests/test_mutex_journal
 
 clean:
-	rm -f $(OBJ) $(TARGET) tests/test_columnfamily tests/test_prod tests/test_benchmark tests/test_acid
+	rm -f $(OBJ) $(TARGET) tests/test_columnfamily tests/test_prod tests/test_benchmark tests/test_acid tests/test_mutex_journal
