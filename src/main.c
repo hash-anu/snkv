@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "kvstore.h"
+#include "sqliteInt.h"
 
 /*
 ** Example 1: Simple key-value operations
@@ -131,8 +132,8 @@ void example_iteration(void) {
     }
     
     /* Iterate through all entries */
-    printf("Listing first 1000 entries:\n");
-    while (!kvstore_iterator_eof(it) && count < 1000) {
+    printf("Listing first 10 entries:\n");
+    while (!kvstore_iterator_eof(it) && count < 10) {
         rc = kvstore_iterator_key(it, &key, &key_len);
         if (rc != KVSTORE_OK) break;
         
@@ -185,11 +186,11 @@ void example_error_handling(void) {
     rc = kvstore_stats(kv, &stats);
     if (rc == KVSTORE_OK) {
         printf("\nDatabase Statistics:\n");
-        printf("  Total puts:    %llu\n", stats.nPuts);
-        printf("  Total gets:    %llu\n", stats.nGets);
-        printf("  Total deletes: %llu\n", stats.nDeletes);
-        printf("  Iterations:    %llu\n", stats.nIterations);
-        printf("  Errors:        %llu\n", stats.nErrors);
+        printf("  Total puts:    %llu\n", (unsigned long long)stats.nPuts);
+        printf("  Total gets:    %llu\n", (unsigned long long)stats.nGets);
+        printf("  Total deletes: %llu\n", (unsigned long long)stats.nDeletes);
+        printf("  Iterations:    %llu\n", (unsigned long long)stats.nIterations);
+        printf("  Errors:        %llu\n", (unsigned long long)stats.nErrors);
     }
     
     kvstore_close(kv);
@@ -274,6 +275,206 @@ void example_integrity_check(void) {
 }
 
 /*
+** Example 7: Duplicate key handling (updates)
+*/
+void example_duplicate_keys(void) {
+    KVStore *kv = NULL;
+    int rc;
+    void *value = NULL;
+    int value_len;
+    int i;
+    char update_value[32];
+    
+    printf("\n=== Example 7: Duplicate Key Handling ===\n");
+    
+    rc = kvstore_open("example.db", &kv, 0);
+    if (rc != KVSTORE_OK) return;
+    
+    /* Initial insert */
+    printf("Initial insert: key1 = value1\n");
+    rc = kvstore_put(kv, "key1", 4, "value1", 6);
+    if (rc != KVSTORE_OK) {
+        fprintf(stderr, "Initial put failed: %s\n", kvstore_errmsg(kv));
+        kvstore_close(kv);
+        return;
+    }
+    
+    /* Verify initial value */
+    rc = kvstore_get(kv, "key1", 4, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Retrieved: key1 = %.*s\n", value_len, (char*)value);
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    /* Update with duplicate key - should replace */
+    printf("\nUpdating: key1 = value2 (replacing value1)\n");
+    rc = kvstore_put(kv, "key1", 4, "value2", 6);
+    if (rc != KVSTORE_OK) {
+        fprintf(stderr, "Update put failed: %s\n", kvstore_errmsg(kv));
+        kvstore_close(kv);
+        return;
+    }
+    
+    /* Verify updated value */
+    rc = kvstore_get(kv, "key1", 4, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Retrieved: key1 = %.*s\n", value_len, (char*)value);
+        if (memcmp(value, "value2", 6) == 0) {
+            printf("✓ Key successfully updated (old value replaced)\n");
+        } else {
+            printf("✗ Unexpected value retrieved\n");
+        }
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    /* Multiple rapid updates */
+    printf("\nPerforming 5 rapid updates to same key...\n");
+    for (i = 1; i <= 5; i++) {
+        snprintf(update_value, sizeof(update_value), "update_%d", i);
+        rc = kvstore_put(kv, "key1", 4, update_value, strlen(update_value));
+        if (rc != KVSTORE_OK) {
+            fprintf(stderr, "Update %d failed\n", i);
+            break;
+        }
+        printf("  Update %d: key1 = %s\n", i, update_value);
+    }
+    value = NULL;
+    /* Verify final value */
+    rc = kvstore_get(kv, "key1", 4, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Final value: key1 = %.*s\n", value_len, (char*)value);
+        if (memcmp(value, "update_5", 8) == 0) {
+            printf("✓ All updates applied correctly\n");
+        }
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    /* Test duplicate keys in transaction */
+    printf("\nTesting duplicate keys in transaction...\n");
+    rc = kvstore_begin(kv, 1);
+    if (rc == KVSTORE_OK) {
+        /* Insert new key */
+        kvstore_put(kv, "txn_key", 7, "original", 8);
+        
+        /* Update same key in same transaction */
+        kvstore_put(kv, "txn_key", 7, "modified", 8);
+        
+        /* Update again */
+        kvstore_put(kv, "txn_key", 7, "final", 5);
+        
+        /* Commit */
+        rc = kvstore_commit(kv);
+        if (rc == KVSTORE_OK) {
+            printf("Transaction committed\n");
+            
+            /* Verify only final value persisted */
+            rc = kvstore_get(kv, "txn_key", 7, &value, &value_len);
+            if (rc == KVSTORE_OK) {
+                printf("After transaction: txn_key = %.*s\n", value_len, (char*)value);
+                if (memcmp(value, "final", 5) == 0) {
+                    printf("✓ Only final update in transaction persisted\n");
+                } else {
+                    printf("✗ Unexpected transaction result\n");
+                }
+                sqliteFree(value);
+                value = NULL;
+            }
+        }
+    }
+    
+    /* Test rollback of duplicate key update */
+    printf("\nTesting rollback of update...\n");
+    
+    /* Get current value */
+    rc = kvstore_get(kv, "txn_key", 7, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Before transaction: txn_key = %.*s\n", value_len, (char*)value);
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    /* Start transaction and update */
+    rc = kvstore_begin(kv, 1);
+    if (rc == KVSTORE_OK) {
+        kvstore_put(kv, "txn_key", 7, "should_rollback", 15);
+        
+        /* Rollback instead of commit */
+        kvstore_rollback(kv);
+        printf("Transaction rolled back\n");
+        
+        /* Verify old value is still there */
+        rc = kvstore_get(kv, "txn_key", 7, &value, &value_len);
+        if (rc == KVSTORE_OK) {
+            printf("After rollback: txn_key = %.*s\n", value_len, (char*)value);
+            if (memcmp(value, "final", 5) == 0) {
+                printf("✓ Rollback successful - original value preserved\n");
+            } else {
+                printf("✗ Rollback failed - value was modified\n");
+            }
+            sqliteFree(value);
+            value = NULL;
+        }
+    }
+    
+    /* Test size changes with duplicate keys */
+    printf("\nTesting updates with different value sizes...\n");
+    
+    /* Small value */
+    kvstore_put(kv, "size_test", 9, "tiny", 4);
+    rc = kvstore_get(kv, "size_test", 9, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Small value: size_test = %.*s (length: %d)\n", 
+               value_len, (char*)value, value_len);
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    /* Medium value */
+    char medium_value[256];
+    memset(medium_value, 'M', sizeof(medium_value));
+    kvstore_put(kv, "size_test", 9, medium_value, sizeof(medium_value));
+    rc = kvstore_get(kv, "size_test", 9, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Medium value: size_test = [%d bytes of data]\n", value_len);
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    /* Large value */
+    char *large_value = malloc(10000);
+    if (large_value) {
+        memset(large_value, 'L', 10000);
+        kvstore_put(kv, "size_test", 9, large_value, 10000);
+        rc = kvstore_get(kv, "size_test", 9, &value, &value_len);
+        if (rc == KVSTORE_OK) {
+            printf("Large value: size_test = [%d bytes of data]\n", value_len);
+            if (value_len == 10000) {
+                printf("✓ Large value update successful\n");
+            }
+            sqliteFree(value);
+            value = NULL;
+        }
+        free(large_value);
+    }
+    
+    /* Back to small value */
+    kvstore_put(kv, "size_test", 9, "small_again", 11);
+    rc = kvstore_get(kv, "size_test", 9, &value, &value_len);
+    if (rc == KVSTORE_OK) {
+        printf("Small again: size_test = %.*s (length: %d)\n", 
+               value_len, (char*)value, value_len);
+        printf("✓ Successfully handled varying value sizes\n");
+        sqliteFree(value);
+        value = NULL;
+    }
+    
+    kvstore_close(kv);
+}
+
+/*
 ** Main function
 */
 int main(void) {
@@ -291,6 +492,7 @@ int main(void) {
     example_error_handling();
     example_persistence();
     example_integrity_check();
+    example_duplicate_keys();
     
     /* Clean up */
     remove("example.db");
