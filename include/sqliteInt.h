@@ -1701,9 +1701,7 @@ void sqlite3utf16Substr(sqlite3_context *,int,sqlite3_value **);
 
 const void *sqlite3ValueText(sqlite3_value*, u8);
 int sqlite3ValueBytes(sqlite3_value*, u8);
-void sqlite3ValueSetStr(sqlite3_value*, int, const void *,u8, void(*)(void*));
 void sqlite3ValueFree(sqlite3_value*);
-sqlite3_value *sqlite3ValueNew(void);
 char *sqlite3utf16to8(const void*, int);
 int sqlite3ValueFromExpr(Expr *, u8, u8, sqlite3_value **);
 void sqlite3ValueApplyAffinity(sqlite3_value *, u8, u8);
