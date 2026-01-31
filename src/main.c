@@ -131,8 +131,8 @@ void example_iteration(void) {
     }
     
     /* Iterate through all entries */
-    printf("Listing first 10 entries:\n");
-    while (!kvstore_iterator_eof(it) && count < 10) {
+    printf("Listing first 1000 entries:\n");
+    while (!kvstore_iterator_eof(it) && count < 1000) {
         rc = kvstore_iterator_key(it, &key, &key_len);
         if (rc != KVSTORE_OK) break;
         
