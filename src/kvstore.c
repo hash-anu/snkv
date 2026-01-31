@@ -1347,7 +1347,6 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
   int nRoot;
   char *zErr;
   int hadTrans = 0;
-  int i;
   
   if( !pKV ){
     return KVSTORE_ERROR;
@@ -1470,7 +1469,6 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   int nCount = 0;
   int nAlloc = 8;
   void *pKey;
-  int nKey;
   
   if( !pKV || !pazNames || !pnCount ){
     return KVSTORE_ERROR;

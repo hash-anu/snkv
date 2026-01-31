@@ -703,42 +703,6 @@ void sqlite3SetString(char **pz, ...){
   va_end(ap);
 }
 
-/*
-** Set the most recent error code and error string for the sqlite
-** handle "db". The error code is set to "err_code".
-**
-** If it is not NULL, string zFormat specifies the format of the
-** error string in the style of the printf functions: The following
-** format characters are allowed:
-**
-**      %s      Insert a string
-**      %z      A string that should be freed after use
-**      %d      Insert an integer
-**      %T      Insert a token
-**      %S      Insert the first element of a SrcList
-**
-** zFormat and any string tokens that follow it are assumed to be
-** encoded in UTF-8.
-**
-** To clear the most recent error for sqlite handle "db", sqlite3Error
-** should be called with err_code set to SQLITE_OK and zFormat set
-** to NULL.
-*/
-void sqlite3Error(sqlite3 *db, int err_code, const char *zFormat, ...){
-  if( db && (db->pErr || (db->pErr = sqlite3ValueNew()))!=0 ){
-    db->errCode = err_code;
-    if( zFormat ){
-      char *z;
-      va_list ap;
-      va_start(ap, zFormat);
-      z = sqlite3VMPrintf(zFormat, ap);
-      va_end(ap);
-      sqlite3ValueSetStr(db->pErr, -1, z, SQLITE_UTF8, sqlite3FreeX);
-    }else{
-      sqlite3ValueSetStr(db->pErr, 0, 0, SQLITE_UTF8, SQLITE_STATIC);
-    }
-  }
-}
 
 /*
 ** Add an error message to pParse->zErrMsg and increment pParse->nErr.
