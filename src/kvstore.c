@@ -1,5 +1,4 @@
 /*
-** 2025 January 27
 **
 ** Key-Value Store Implementation - Production Ready with Column Families
 ** Built on top of SQLite v3.3.0 btree implementation
