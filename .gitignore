@@ -3,3 +3,5 @@ snkv
 tests/test_columnfamily
 tests/test_prod
 tests/test_benchmark
+tests/test_acid
+tests/test_mutex_journal

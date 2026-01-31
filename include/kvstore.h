@@ -14,6 +14,7 @@
 
 #include "sqliteInt.h"
 #include "btree.h"
+#include "kvstore_mutex.h"
 
 #ifdef __cplusplus
 extern "C" {
