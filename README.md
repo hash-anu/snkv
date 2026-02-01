@@ -2,7 +2,7 @@
 
 ## Overview
 
-**SNKV** is a lightweight, high‑performance **key–value store** built directly on top of the **SQLite B‑Tree layer**.
+**SNKV** is a lightweight, high‑performance **ACID compliant key–value store** built directly on top of the **SQLite B‑Tree layer**.
 
 Instead of using SQLite through SQL queries, SNKV **bypasses the entire SQL processing stack** and directly invokes SQLite’s **production‑ready B‑Tree APIs** to perform key–value operations.
 
