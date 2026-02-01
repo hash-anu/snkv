@@ -161,7 +161,7 @@ All numbers are **operations per second (ops/sec)**.
 
 ### Benchmark Code
 
-- SQLite benchmark source: [https://github.com/hash-anu/sqlite-benchmark-kv](https://github.com/hash-anu/sqlite-benchmark-kv)
+- SQLite benchmark source: [https://github.com/hash-anu/sqlite-benchmark-kv](https://github.com/hash-anu/sqllite-benchmark-kv)
 - SNKV benchmark source: `snkv/tests/test_benchmark.c`
 
 ## When to Use SNKV
