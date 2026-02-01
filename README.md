@@ -174,6 +174,7 @@ SNKV is ideal for:
 * Metadata databases
 * C/C++ applications needing fast KV access
 * Systems that do **not** need SQL
+* Many more
 
 If you need joins, ad‑hoc queries, or analytics — use SQLite.
 If you need **fast, reliable key–value storage** — use SNKV.
