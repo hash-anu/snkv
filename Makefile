@@ -38,5 +38,10 @@ tests/test_mutex_journal: tests/test_mutex_journal.c src/kvstore_mutex.c src/kvs
 
 test_mutex_journal: tests/test_mutex_journal
 
+tests/test_json: tests/test_json.c src/kvstore_mutex.c src/kvstore.c src/os.c src/os_unix.c src/os_win.c src/util.c src/printf.c src/random.c src/hash.c src/pager.c   src/btree.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+test_json: tests/test_json
+
 clean:
 	rm -f $(OBJ) $(TARGET) tests/test_columnfamily tests/test_prod tests/test_benchmark tests/test_acid tests/test_mutex_journal
