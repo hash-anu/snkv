@@ -1,9 +1,9 @@
 /*
 **
-** Key-Value Store Implementation - Production Ready with Column Families
+** Key-Value Store Implementation - Column Families
 ** Built on top of SQLite v3.3.0 btree implementation
 **
-** This implementation provides a robust, production-ready key-value store
+** This implementation provides a robust key-value store
 ** with column family support, proper error handling, logging, safety checks,
 ** and thread-safety via mutexes.
 ** 
