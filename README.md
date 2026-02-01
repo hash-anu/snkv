@@ -119,8 +119,32 @@ Typical gains:
 ---
 
 ## Comparison with Latest SQLite
+The following table shows the **average performance across 5 runs** for both **SQLite (SQL-based KV access)** and **SNKV (direct B-Tree KV access)** using identical workloads (50,000 records).
 
+All numbers are **operations per second (ops/sec)**.
 
+| Benchmark                    | SQLite (avg) | SNKV (avg) | Winner          |
+| ---------------------------- | ------------ | ---------- | --------------- |
+| Sequential Writes            | 68,503       | 70,888     | SNKV (+3.5%)    |
+| Random Reads                 | 48,206       | 36,210     | SQLite (+33%)   |
+| Sequential Scan              | 1,089,049    | 2,173,141  | SNKV (\~2×)     |
+| Random Updates               | 47,339       | 47,297     | Tie             |
+| Random Deletes               | 31,937       | 44,046     | SNKV (+38%)     |
+| Exists Checks                | 59,884       | 36,041     | SQLite (+66%)   |
+| Mixed Workload (70R/20W/10D) | 50,379       | 78,860     | **SNKV (+56%)** |
+| Bulk Insert (single txn)     | 104,526      | 133,566    | SNKV (+28%)     |
+
+### Key Observations
+
+- **SNKV dominates write-heavy and mixed workloads** due to zero SQL/VDBE overhead
+- **Sequential scans are \~2× faster** in SNKV due to direct cursor traversal
+- **SQLite wins point-lookups (reads / exists)** because of its highly optimized VDBE fast paths and statement caching
+- Update performance is effectively identical (same B-Tree + Pager path)
+
+### Benchmark Code
+
+- SQLite benchmark source: [https://github.com/hash-anu/sqlite-benchmark-kv](https://github.com/hash-anu/sqlite-benchmark-kv)
+- SNKV benchmark source: `snkv/tests/test_benchmark.c`
 
 ## When to Use SNKV
 
