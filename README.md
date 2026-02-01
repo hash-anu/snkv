@@ -20,6 +20,24 @@ SQLite is an excellent general‑purpose database, but for key–value workloads
 
 SNKV removes these layers entirely and keeps only what is essential for a KV store.
 
+## Usage
+
+SNKV exposes a simple C API for key–value operations without any SQL involvement.
+
+A minimal end-to-end usage example is provided in: snkv/main.c
+
+This file demonstrates:
+
+* Opening a database
+* Creating a column family
+* Put / Get / Delete operations
+* Transaction operations
+* Proper cleanup and shutdown
+
+## Tests
+
+All unit tests and benchmarks are located in the tests/ directory.
+
 ---
 
 ## Visual Architecture Comparison
