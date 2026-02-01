@@ -6,7 +6,7 @@
 
 Instead of using SQLite through SQL queries, SNKV **bypasses the entire SQL processing stack** and directly invokes SQLite’s **production‑ready B‑Tree APIs** to perform key–value operations.
 
-The result is a database that retains **SQLite’s proven reliability and durability**, while being **44% faster for mix KV workloads (70% read, 20% write, 10% delete operations)** due to dramatically reduced overhead.
+The result is a database that retains **SQLite’s proven reliability and durability**, while being **~50% faster for mix KV workloads (70% read, 20% write, 10% delete operations)** due to dramatically reduced overhead.
 
 ---
 
