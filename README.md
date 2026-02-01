@@ -1,4 +1,4 @@
-# SNKV — SQLite Without the SQL Layer
+# SNKV — SQLite with No query processor Key Value store
 
 ## Overview
 
