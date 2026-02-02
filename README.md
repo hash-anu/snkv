@@ -38,8 +38,6 @@ This file demonstrates:
 
 All unit tests and benchmarks are located in the tests/ directory.
 
----
-
 ## Visual Architecture Comparison
 
 ### The Stack We Removed
@@ -119,7 +117,71 @@ This means SNKV benefits from:
 * Page cache and efficient I/O
 * Real‑world tested
 
----
+## Clean Architecture Diagram
+
+
+                            ┌────────────────┐
+                            │  Application   │
+                            └────────┬───────┘
+                                     │
+                                     │ kvstore_put(key, value)
+                                     │ kvstore_get(key) → value
+                                     │ kvstore_delete(key)
+                                     │ kvstore_begin(), kvstore_commit(), kvstore_rollback(), ...
+                                     ▼
+                    ┌────────────────────────────────┐
+                    │        KVStore Layer           │
+                    │   (Thin Wrapper - ~1600 LOC)   │
+                    │                                │
+                    │  • Simple API                  │
+                    │  • Column Families             │
+                    │  • Thread Safety (Mutexes)     │
+                    │  • Validation                  │
+                    │  • Statistics                  │
+                    └────────────┬───────────────────┘
+                                 │
+                                 │ Direct calls (no SQL!)
+                                 │
+                                 ▼
+                    ┌────────────────────────────────┐
+                    │       B-Tree Engine            │
+                    │  (SQLite 3.3.0 - Proven Code)  │
+                    │                                │
+                    │  • Tree Operations             │
+                    │  • Key-Value Storage           │
+                    │  • Cursors & Navigation        │
+                    └────────────┬───────────────────┘
+                                 │
+                                 │
+                                 ▼
+                    ┌────────────────────────────────┐
+                    │       Pager Module             │
+                    │  (SQLite 3.3.0 - Proven Code)  │
+                    │                                │
+                    │  • Transaction Management      │
+                    │  • Rollback Journal            │
+                    │  • ACID Guarantees             │
+                    └────────────┬───────────────────┘
+                                 │
+                                 │
+                                 ▼
+                    ┌────────────────────────────────┐
+                    │       OS Interface             │
+                    │  (SQLite 3.3.0 - Proven Code)  │
+                    │                                │
+                    │  • File I/O                    │
+                    │  • File Locking                │
+                    │  • Crash Recovery              │
+                    └────────────┬───────────────────┘
+                                 │
+                                 │
+                                 ▼
+                         ┌──────────────┐
+                         │  Disk Files  │
+                         │              │
+                         │  • kvstore.db│
+                         │  • journal   │
+                         └──────────────┘
 
 ## Result
 
