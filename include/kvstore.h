@@ -1,5 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
-** 2025 January 26
 **
 ** Key-Value Store API Header
 ** Built on top of SQLite v3.3.0 btree implementation
