@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
 ** Mutex implementation for KVStore (SQLite v3.3.0 compatible)
 ** 
