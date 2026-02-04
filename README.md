@@ -33,7 +33,6 @@ This file demonstrates:
 * Put / Get / Delete operations
 * Transaction operations
 * Proper cleanup and shutdown
-
 * Checkout [Example](https://github.com/hash-anu/snkv/blob/master/kvstore_example.md) for more information about API usages
 
 ## Tests
