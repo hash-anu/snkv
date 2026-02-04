@@ -359,6 +359,15 @@ int main() {
     return 0;
 }
 ```
+**Output:**
+```
+
+Starting batch insert of 3 items...
+  Inserted: server.host = localhost
+  Inserted: server.port = 8080
+  Inserted: server.timeout = 30
+Transaction committed successfully!
+```
 
 ---
 
