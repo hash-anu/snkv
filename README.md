@@ -34,6 +34,8 @@ This file demonstrates:
 * Transaction operations
 * Proper cleanup and shutdown
 
+* Checkout [Example](https://github.com/hash-anu/snkv/blob/master/kvstore_example.md) for more information about API usages
+
 ## Tests
 
 All unit tests and benchmarks are located in the tests/ directory.
