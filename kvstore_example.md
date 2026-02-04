@@ -2,7 +2,32 @@
 
 A comprehensive collection of practical examples demonstrating how to use the KVStore library for various use cases.
 
----
+## Building and Running Examples
+
+To compile any example, you need to include the header files from the `include/` directory and link against all the required source files:
+
+```bash
+gcc -o example example.c \
+    -Iinclude \
+    src/kvstore_mutex.c \
+    src/kvstore.c \
+    src/os.c \
+    src/os_unix.c \
+    src/os_win.c \
+    src/util.c \
+    src/printf.c \
+    src/random.c \
+    src/hash.c \
+    src/pager.c \
+    src/btree.c
+
+./example
+```
+
+**Important:** 
+- The `-Iinclude` flag tells the compiler where to find the header files
+- All header files from the `include/` folder will be accessible
+- On Windows, you can omit `src/os_unix.c` and on Unix/Linux, you can omit `src/os_win.c`
 
 ## Getting Started
 
@@ -1759,32 +1784,6 @@ This guide demonstrates:
 
 ---
 
-## Building and Running Examples
-
-To compile any example, you need to include the header files from the `include/` directory and link against all the required source files:
-
-```bash
-gcc -o example example.c \
-    -Iinclude \
-    src/kvstore_mutex.c \
-    src/kvstore.c \
-    src/os.c \
-    src/os_unix.c \
-    src/os_win.c \
-    src/util.c \
-    src/printf.c \
-    src/random.c \
-    src/hash.c \
-    src/pager.c \
-    src/btree.c
-
-./example
-```
-
-**Important:** 
-- The `-Iinclude` flag tells the compiler where to find the header files
-- All header files from the `include/` folder will be accessible
-- On Windows, you can omit `src/os_unix.c` and on Unix/Linux, you can omit `src/os_win.c`
 
 ## Additional Resources
 
