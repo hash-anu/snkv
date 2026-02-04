@@ -27,7 +27,6 @@ gcc -o example example.c \
 **Important:** 
 - The `-Iinclude` flag tells the compiler where to find the header files
 - All header files from the `include/` folder will be accessible
-- On Windows, you can omit `src/os_unix.c` and on Unix/Linux, you can omit `src/os_win.c`
 
 ## Getting Started
 
