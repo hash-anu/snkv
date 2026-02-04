@@ -1,0 +1,53 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+    
+    - name: Build main target
+      run: make
+    
+    - name: Build all test executables
+      run: |
+        make tests/test_prod
+        make tests/test_columnfamily
+        make tests/test_benchmark
+        make tests/test_acid
+        make tests/test_mutex_journal
+        make tests/test_json
+    
+    - name: Run test_prod
+      run: ./tests/test_prod
+    
+    - name: Run test_columnfamily
+      run: ./tests/test_columnfamily
+    
+    - name: Run test_benchmark
+      run: ./tests/test_benchmark
+    
+    - name: Run test_acid
+      run: ./tests/test_acid
+    
+    - name: Run test_mutex_journal
+      run: ./tests/test_mutex_journal
+    
+    - name: Run test_json
+      run: ./tests/test_json
+    
+    - name: Clean up
+      if: always()
+      run: make clean
