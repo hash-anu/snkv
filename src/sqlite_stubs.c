@@ -3,7 +3,7 @@
 **
 ** SNKV uses only the btree -> pager -> os layers of SQLite.
 ** This file provides minimal implementations of functions from the
-** upper SQL/VDBE layers that the btree/pager/os code references.
+** upper SQL layer that the btree/pager/os code references.
 **
 ** Categories:
 **   1. Error-reporting functions (real implementations)
@@ -14,7 +14,6 @@
 **   6. Backup stubs (for pager.c -> backup.c dependency)
 */
 #include "sqliteInt.h"
-#include "vdbeInt.h"
 
 /* ===== 1. Error-reporting functions ===== */
 
@@ -211,8 +210,6 @@ int sqlite3IsMemdb(const sqlite3_vfs *pVfs){
 ** Global temp directory variable (used by os_unix.c).
 */
 SQLITE_API char *sqlite3_temp_directory = 0;
-SQLITE_API char *sqlite3_data_directory = 0;
-
 /*
 ** URI parameter helpers – return defaults.
 ** In a btree-only build, URI parameters are not used.
@@ -272,8 +269,6 @@ void sqlite3MemSetArrayInt64(sqlite3_value *aMem, int iIdx, i64 val){
 }
 
 void sqlite3VdbeDelete(Vdbe *p){ (void)p; }
-Vdbe *sqlite3VdbeCreate(Parse *pParse){ (void)pParse; return 0; }
-int sqlite3VdbeFinalize(Vdbe *p){ (void)p; return SQLITE_OK; }
 
 /* ===== 5. sqlite3_value / Mem accessors (for printf.c, util.c) ===== */
 
@@ -386,35 +381,7 @@ void sqlite3DeleteTrigger(sqlite3 *db, Trigger *pTrigger){
   (void)db; (void)pTrigger;
 }
 
-int sqlite3FindDbName(sqlite3 *db, const char *zName){
-  (void)db; (void)zName;
-  return 0;
-}
-
-void sqlite3ParseObjectInit(Parse *p, sqlite3 *db){
-  (void)p; (void)db;
-}
-
-void sqlite3ParseObjectReset(Parse *p){
-  (void)p;
-}
-
-int sqlite3OpenTempDatabase(Parse *p){
-  (void)p;
-  return SQLITE_OK;
-}
-
-void sqlite3ResetAllSchemasOfConnection(sqlite3 *db){
-  (void)db;
-}
-
-void sqlite3LeaveMutexAndCloseZombie(sqlite3 *db){
-  if( db && db->mutex ){
-    sqlite3_mutex_leave(db->mutex);
-  }
-}
-
-/* ===== 9. Backup stubs (pager.c calls these) ===== */
+/* ===== 8. Backup stubs (pager.c calls these) ===== */
 
 void sqlite3BackupUpdate(sqlite3_backup *p, Pgno iPage, const u8 *aData){
   (void)p; (void)iPage; (void)aData;

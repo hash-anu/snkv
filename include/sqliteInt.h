@@ -1422,14 +1422,106 @@ typedef struct With With;
 typedef int VList;
 
 /*
-** Defer sourcing vdbe.h and btree.h until after the "u8" and
-** "BusyHandler" typedefs. vdbe.h also requires a few of the opaque
-** pointer types (i.e. FuncDef) defined above.
+** Defer sourcing btree.h and VDBE type definitions until after the "u8"
+** and "BusyHandler" typedefs.  The VDBE types also require a few of the
+** opaque pointer types (i.e. FuncDef) defined above.
 */
 #include "os.h"
 #include "pager.h"
 #include "btree.h"
-#include "vdbe.h"
+
+/* ===== VDBE type definitions (inlined, no separate vdbe.h) =====
+**
+** SNKV uses only the btree -> pager -> os layers of SQLite.
+** These are the forward declarations, struct definitions, and macros
+** that the btree/pager/os code expects from the VDBE layer.
+*/
+
+/* Forward declarations – used as pointer types throughout sqliteInt.h
+** and btree.h. The actual struct bodies are defined at the bottom of
+** this file (see "VDBE internal struct definitions"). */
+typedef struct Vdbe Vdbe;
+typedef struct sqlite3_value Mem;  /* Mem and sqlite3_value are the same type */
+typedef struct SubProgram SubProgram;
+
+/*
+** VdbeOp – referenced by sqliteInt.h (e.g. in struct Parse).
+*/
+typedef struct VdbeOp VdbeOp;
+struct VdbeOp {
+  u8  opcode;
+  signed char p4type;
+  u16 p5;
+  int p1;
+  int p2;
+  int p3;
+  union p4union {
+    int i;
+    void *p;
+    char *z;
+    i64 *pI64;
+    double *pReal;
+    FuncDef *pFunc;
+    sqlite3_context *pCtx;
+    CollSeq *pColl;
+    Mem *pMem;
+    int *ai;
+    SubProgram *pProgram;
+    Table *pTab;
+    KeyInfo *pKeyInfo;
+  } p4;
+#ifdef SQLITE_ENABLE_EXPLAIN_COMMENTS
+  char *zComment;
+#endif
+#ifdef VDBE_PROFILE
+  u32 cnt;
+  u64 cycles;
+#endif
+#ifdef SQLITE_VDBE_COVERAGE
+  u32 iSrcLine;
+#endif
+};
+
+typedef struct VdbeOpList VdbeOpList;
+struct VdbeOpList {
+  u8 opcode;
+  signed char p1;
+  signed char p2;
+  signed char p3;
+};
+
+#include "opcodes.h"
+
+/*
+** RecordCompare – function pointer type used by btree.c for index
+** record comparisons.
+*/
+typedef int (*RecordCompare)(int,const void*,UnpackedRecord*);
+
+/* VDBE function prototypes used by the btree/pager/os layer */
+void sqlite3VdbeDelete(Vdbe*);
+UnpackedRecord *sqlite3VdbeAllocUnpackedRecord(KeyInfo*);
+void sqlite3VdbeRecordUnpack(int,const void*,UnpackedRecord*);
+RecordCompare sqlite3VdbeFindCompare(UnpackedRecord*);
+int sqlite3VdbeRecordCompare(int,const void*,UnpackedRecord*);
+void sqlite3MemSetArrayInt64(sqlite3_value*,int,i64);
+
+#ifdef SQLITE_DEBUG
+  void sqlite3VdbeComment(Vdbe*, const char*, ...);
+  void sqlite3VdbeNoopComment(Vdbe*, const char*, ...);
+# define VdbeComment(X)      sqlite3VdbeComment X
+# define VdbeNoopComment(X)  sqlite3VdbeNoopComment X
+# define VdbeModuleComment(X)
+#else
+# define VdbeComment(X)
+# define VdbeNoopComment(X)
+# define VdbeModuleComment(X)
+#endif
+
+#define ADDR(X) (-1-(X))
+
+/* ===== End VDBE type definitions ===== */
+
 #include "pcache.h"
 #include "mutex.h"
 
@@ -5895,5 +5987,44 @@ sqlite3_uint64 sqlite3Hwtime(void);
 #else
 # define IS_STMT_SCANSTATUS(db) 0
 #endif
+
+/* ===== VDBE internal struct definitions =====
+**
+** Struct bodies for Vdbe and sqlite3_value (Mem).  These are placed at the
+** bottom so every type they reference (sqlite3*, i64, u16, FuncDef, etc.)
+** is already defined.  Only the fields actually accessed by the
+** btree/pager/status layer are declared.
+*/
+struct Vdbe {
+  sqlite3 *db;
+  Vdbe *pVNext;
+  Vdbe *pVPrev;
+};
+
+struct sqlite3_value {
+  union MemValue {
+    double r;
+    i64 i;
+    int nZero;
+    const char *zPType;
+    FuncDef *pDef;
+  } u;
+  u16 flags;
+  u8  enc;
+  u8  eSubtype;
+  int n;
+  char *z;
+  char *zMalloc;
+  int szMalloc;
+  u32 uTemp;
+  sqlite3 *db;
+  void (*xDel)(void*);
+};
+
+#define MEM_Null      0x0001
+#define MEM_Str       0x0002
+#define MEM_Int       0x0004
+#define MEM_Real      0x0008
+#define MEM_Blob      0x0010
 
 #endif /* SQLITEINT_H */

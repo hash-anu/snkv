@@ -107,13 +107,6 @@ static void *kvstoreEncodeData(
   return pOut;
 }
 
-/* Extract key length from encoded data.  Returns -1 on error. */
-static int kvstoreDecodeKeyLen(const void *pData, int nData){
-  const unsigned char *d = (const unsigned char *)pData;
-  if( nData < 4 ) return -1;
-  return (d[0]<<24) | (d[1]<<16) | (d[2]<<8) | d[3];
-}
-
 /* ======================================================================
 ** Internal cursor helpers – wraps the new callerallocs cursor model
 ** ====================================================================== */

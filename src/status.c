@@ -14,7 +14,6 @@
 ** functionality.
 */
 #include "sqliteInt.h"
-#include "vdbeInt.h"
 
 /*
 ** Variables in which to record status information.

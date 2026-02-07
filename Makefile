@@ -42,7 +42,7 @@ SQLITE_CORE = src/btree.c src/btmutex.c \
               src/hash.c src/util.c src/printf.c src/random.c \
               src/threads.c \
               src/fault.c src/mem1.c src/rowset.c \
-              src/vdbe_stubs.c
+              src/sqlite_stubs.c
 
 # Library objects (everything except main.c)
 LIB_SRC = src/kvstore.c src/kvstore_mutex.c $(SQLITE_CORE)
