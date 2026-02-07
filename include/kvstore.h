@@ -2,7 +2,7 @@
 /*
 **
 ** Key-Value Store API Header
-** Built on top of SQLite v3.3.0 btree implementation
+** Built on top of SQLite v3.51.200 btree implementation
 **
 ** This header provides a simple key-value store interface using
 ** the underlying btree structure from SQLite, with support for
@@ -15,6 +15,16 @@
 #include "sqliteInt.h"
 #include "btree.h"
 #include "kvstore_mutex.h"
+
+/*
+** Compatibility macros: map old SQLite 3.3.0 memory function names
+** to their SQLite 3.51.200 equivalents so tests and examples compile
+** without changes.
+*/
+#define sqliteMalloc(n)     sqlite3MallocZero((n))
+#define sqliteFree(p)       sqlite3_free((p))
+#define sqliteRealloc(p,n)  sqlite3Realloc((p),(u64)(n))
+#define sqliteStrDup(s)     sqlite3_mprintf("%s",(s))
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,12 +57,19 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_MAX_COLUMN_FAMILIES 64
 
 /*
+** Journal modes for kvstore_open
+*/
+#define KVSTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
+#define KVSTORE_JOURNAL_WAL    1   /* Write-Ahead Logging mode */
+
+/*
 ** Open a key-value store database file.
 **
 ** Parameters:
-**   zFilename - Path to the database file (NULL for in-memory)
-**   ppKV      - Output pointer to KVStore handle
-**   flags     - Same flags as sqlite3BtreeOpen (BTREE_OMIT_JOURNAL, etc.)
+**   zFilename   - Path to the database file (NULL for in-memory)
+**   ppKV        - Output pointer to KVStore handle
+**   flags       - Same flags as sqlite3BtreeOpen (BTREE_OMIT_JOURNAL, etc.)
+**   journalMode - KVSTORE_JOURNAL_DELETE or KVSTORE_JOURNAL_WAL
 **
 ** Returns:
 **   KVSTORE_OK on success, error code otherwise
@@ -60,7 +77,8 @@ typedef struct KVColumnFamily KVColumnFamily;
 int kvstore_open(
   const char *zFilename,
   KVStore **ppKV,
-  int flags
+  int flags,
+  int journalMode
 );
 
 /*

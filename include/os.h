@@ -13,49 +13,44 @@
 ** This header file (together with is companion C source-code file
 ** "os.c") attempt to abstract the underlying operating system so that
 ** the SQLite library will work on both POSIX and windows systems.
+**
+** This header file is #include-ed by sqliteInt.h and thus ends up
+** being included by every source file.
 */
 #ifndef _SQLITE_OS_H_
 #define _SQLITE_OS_H_
 
 /*
-** Figure out if we are dealing with Unix, Windows, or some other
-** operating system.
+** Attempt to automatically detect the operating system and setup the
+** necessary pre-processor macros for it.
 */
-#if !defined(OS_UNIX) && !defined(OS_OTHER)
-# define OS_OTHER 0
-# ifndef OS_WIN
-#   if defined(_WIN32) || defined(WIN32) || defined(__CYGWIN__) || defined(__MINGW32__) || defined(__BORLANDC__)
-#     define OS_WIN 1
-#     define OS_UNIX 0
-#   else
-#     define OS_WIN 0
-#     define OS_UNIX 1
-#  endif
-# else
-#  define OS_UNIX 0
-# endif
-#else
-# ifndef OS_WIN
-#  define OS_WIN 0
-# endif
-#endif
-
-
-/*
-** Define the maximum size of a temporary filename
-*/
-#if OS_WIN
-# include <windows.h>
-# define SQLITE_TEMPNAME_SIZE (MAX_PATH+50)
-#else
-# define SQLITE_TEMPNAME_SIZE 200
-#endif
+#include "os_setup.h"
 
 /* If the SET_FULLSYNC macro is not defined above, then make it
 ** a no-op
 */
 #ifndef SET_FULLSYNC
 # define SET_FULLSYNC(x,y)
+#endif
+
+/* Maximum pathname length.  Note: FILENAME_MAX defined by stdio.h
+*/
+#ifndef SQLITE_MAX_PATHLEN
+# define SQLITE_MAX_PATHLEN FILENAME_MAX
+#endif
+
+/* Maximum number of symlinks that will be resolved while trying to
+** expand a filename in xFullPathname() in the VFS.
+*/
+#ifndef SQLITE_MAX_SYMLINK
+# define SQLITE_MAX_SYMLINK 200
+#endif
+
+/*
+** The default size of a disk sector
+*/
+#ifndef SQLITE_DEFAULT_SECTOR_SIZE
+# define SQLITE_DEFAULT_SECTOR_SIZE 4096
 #endif
 
 /*
@@ -65,109 +60,23 @@
 ** If sqlite is being embedded in another program, you may wish to change the
 ** prefix to reflect your program's name, so that if your program exits
 ** prematurely, old temporary files can be easily identified. This can be done
-** using -DTEMP_FILE_PREFIX=myprefix_ on the compiler command line.
+** using -DSQLITE_TEMP_FILE_PREFIX=myprefix_ on the compiler command line.
+**
+** 2006-10-31:  The default prefix used to be "sqlite_".  But then
+** Mcafee started using SQLite in their anti-virus product and it
+** started putting files with the "sqlite" name in the c:/temp folder.
+** This annoyed many windows users.  Those users would then do a 
+** Google search for "sqlite", find the telephone numbers of the
+** developers and call to wake them up at night and complain.
+** For this reason, the default name prefix is changed to be "sqlite" 
+** spelled backwards.  So the temp files are still identified, but
+** anybody smart enough to figure out the code is also likely smart
+** enough to know that calling the developer will not help get rid
+** of the file.
 */
-#ifndef TEMP_FILE_PREFIX
-# define TEMP_FILE_PREFIX "sqlite_"
+#ifndef SQLITE_TEMP_FILE_PREFIX
+# define SQLITE_TEMP_FILE_PREFIX "etilqs_"
 #endif
-
-/*
-** Define the interfaces for Unix and for Windows.
-*/
-#if OS_UNIX
-#define sqlite3OsOpenReadWrite      sqlite3UnixOpenReadWrite
-#define sqlite3OsOpenExclusive      sqlite3UnixOpenExclusive
-#define sqlite3OsOpenReadOnly       sqlite3UnixOpenReadOnly
-#define sqlite3OsDelete             sqlite3UnixDelete
-#define sqlite3OsFileExists         sqlite3UnixFileExists
-#define sqlite3OsFullPathname       sqlite3UnixFullPathname
-#define sqlite3OsIsDirWritable      sqlite3UnixIsDirWritable
-#define sqlite3OsSyncDirectory      sqlite3UnixSyncDirectory
-#define sqlite3OsTempFileName       sqlite3UnixTempFileName
-#define sqlite3OsRandomSeed         sqlite3UnixRandomSeed
-#define sqlite3OsSleep              sqlite3UnixSleep
-#define sqlite3OsCurrentTime        sqlite3UnixCurrentTime
-#define sqlite3OsEnterMutex         sqlite3UnixEnterMutex
-#define sqlite3OsLeaveMutex         sqlite3UnixLeaveMutex
-#define sqlite3OsInMutex            sqlite3UnixInMutex
-#define sqlite3OsThreadSpecificData sqlite3UnixThreadSpecificData
-#define sqlite3OsMalloc             sqlite3GenericMalloc
-#define sqlite3OsRealloc            sqlite3GenericRealloc
-#define sqlite3OsFree               sqlite3GenericFree
-#define sqlite3OsAllocationSize     sqlite3GenericAllocationSize
-#endif
-#if OS_WIN
-#define sqlite3OsOpenReadWrite      sqlite3WinOpenReadWrite
-#define sqlite3OsOpenExclusive      sqlite3WinOpenExclusive
-#define sqlite3OsOpenReadOnly       sqlite3WinOpenReadOnly
-#define sqlite3OsDelete             sqlite3WinDelete
-#define sqlite3OsFileExists         sqlite3WinFileExists
-#define sqlite3OsFullPathname       sqlite3WinFullPathname
-#define sqlite3OsIsDirWritable      sqlite3WinIsDirWritable
-#define sqlite3OsSyncDirectory      sqlite3WinSyncDirectory
-#define sqlite3OsTempFileName       sqlite3WinTempFileName
-#define sqlite3OsRandomSeed         sqlite3WinRandomSeed
-#define sqlite3OsSleep              sqlite3WinSleep
-#define sqlite3OsCurrentTime        sqlite3WinCurrentTime
-#define sqlite3OsEnterMutex         sqlite3WinEnterMutex
-#define sqlite3OsLeaveMutex         sqlite3WinLeaveMutex
-#define sqlite3OsInMutex            sqlite3WinInMutex
-#define sqlite3OsThreadSpecificData sqlite3WinThreadSpecificData
-#define sqlite3OsMalloc             sqlite3GenericMalloc
-#define sqlite3OsRealloc            sqlite3GenericRealloc
-#define sqlite3OsFree               sqlite3GenericFree
-#define sqlite3OsAllocationSize     sqlite3GenericAllocationSize
-#endif
-
-/*
-** If using an alternative OS interface, then we must have an "os_other.h"
-** header file available for that interface.  Presumably the "os_other.h"
-** header file contains #defines similar to those above.
-*/
-#if OS_OTHER
-# include "os_other.h"
-#endif
-
-
-
-/*
-** Forward declarations
-*/
-typedef struct OsFile OsFile;
-typedef struct IoMethod IoMethod;
-
-/*
-** An instance of the following structure contains pointers to all
-** methods on an OsFile object.
-*/
-struct IoMethod {
-  int (*xClose)(OsFile**);
-  int (*xOpenDirectory)(OsFile*, const char*);
-  int (*xRead)(OsFile*, void*, int amt);
-  int (*xWrite)(OsFile*, const void*, int amt);
-  int (*xSeek)(OsFile*, i64 offset);
-  int (*xTruncate)(OsFile*, i64 size);
-  int (*xSync)(OsFile*, int);
-  void (*xSetFullSync)(OsFile *id, int setting);
-  int (*xFileHandle)(OsFile *id);
-  int (*xFileSize)(OsFile*, i64 *pSize);
-  int (*xLock)(OsFile*, int);
-  int (*xUnlock)(OsFile*, int);
-  int (*xLockState)(OsFile *id);
-  int (*xCheckReservedLock)(OsFile *id);
-};
-
-/*
-** The OsFile object describes an open disk file in an OS-dependent way.
-** The version of OsFile defined here is a generic version.  Each OS
-** implementation defines its own subclass of this structure that contains
-** additional information needed to handle file I/O.  But the pMethod
-** entry (pointing to the virtual function table) always occurs first
-** so that we can always find the appropriate methods.
-*/
-struct OsFile {
-  IoMethod const *pMethod;
-};
 
 /*
 ** The following values may be passed as the second argument to
@@ -223,10 +132,8 @@ struct OsFile {
 ** a random byte is selected for a shared lock.  The pool of bytes for
 ** shared locks begins at SHARED_FIRST. 
 **
-** These #defines are available in sqlite_aux.h so that adaptors for
-** connecting SQLite to other operating systems can use the same byte
-** ranges for locking.  In particular, the same locking strategy and
-** byte ranges are used for Unix.  This leaves open the possiblity of having
+** The same locking strategy and
+** byte ranges are used for Unix.  This leaves open the possibility of having
 ** clients on win95, winNT, and unix all talking to the same shared file
 ** and all locking correctly.  To do so would require that samba (or whatever
 ** tool is being used for file sharing) implements locks correctly between
@@ -249,192 +156,70 @@ struct OsFile {
 ** 1GB boundary.
 **
 */
-#ifndef SQLITE_TEST
-#define PENDING_BYTE      0x40000000  /* First byte past the 1GB boundary */
+#ifdef SQLITE_OMIT_WSD
+# define PENDING_BYTE     (0x40000000)
 #else
-extern unsigned int sqlite3_pending_byte;
-#define PENDING_BYTE sqlite3_pending_byte
+# define PENDING_BYTE      sqlite3PendingByte
 #endif
-
 #define RESERVED_BYTE     (PENDING_BYTE+1)
 #define SHARED_FIRST      (PENDING_BYTE+2)
 #define SHARED_SIZE       510
 
 /*
-** Prototypes for operating system interface routines.
+** Wrapper around OS specific sqlite3_os_init() function.
 */
-int sqlite3OsClose(OsFile**);
-int sqlite3OsOpenDirectory(OsFile*, const char*);
-int sqlite3OsRead(OsFile*, void*, int amt);
-int sqlite3OsWrite(OsFile*, const void*, int amt);
-int sqlite3OsSeek(OsFile*, i64 offset);
-int sqlite3OsTruncate(OsFile*, i64 size);
-int sqlite3OsSync(OsFile*, int);
-void sqlite3OsSetFullSync(OsFile *id, int setting);
-int sqlite3OsFileHandle(OsFile *id);
-int sqlite3OsFileSize(OsFile*, i64 *pSize);
-int sqlite3OsLock(OsFile*, int);
-int sqlite3OsUnlock(OsFile*, int);
-int sqlite3OsLockState(OsFile *id);
-int sqlite3OsCheckReservedLock(OsFile *id);
-int sqlite3OsOpenReadWrite(const char*, OsFile**, int*);
-int sqlite3OsOpenExclusive(const char*, OsFile**, int);
-int sqlite3OsOpenReadOnly(const char*, OsFile**);
-int sqlite3OsDelete(const char*);
-int sqlite3OsFileExists(const char*);
-char *sqlite3OsFullPathname(const char*);
-int sqlite3OsIsDirWritable(char*);
-int sqlite3OsSyncDirectory(const char*);
-int sqlite3OsTempFileName(char*);
-int sqlite3OsRandomSeed(char*);
-int sqlite3OsSleep(int ms);
-int sqlite3OsCurrentTime(double*);
-void sqlite3OsEnterMutex(void);
-void sqlite3OsLeaveMutex(void);
-int sqlite3OsInMutex(void);
-void *sqlite3OsThreadSpecificData(int);
-void *sqlite3OsMalloc(int);
-void *sqlite3OsRealloc(void *, int);
-void sqlite3OsFree(void *);
-int sqlite3OsAllocationSize(void *);
+int sqlite3OsInit(void);
+
+/* 
+** Functions for accessing sqlite3_file methods 
+*/
+void sqlite3OsClose(sqlite3_file*);
+int sqlite3OsRead(sqlite3_file*, void*, int amt, i64 offset);
+int sqlite3OsWrite(sqlite3_file*, const void*, int amt, i64 offset);
+int sqlite3OsTruncate(sqlite3_file*, i64 size);
+int sqlite3OsSync(sqlite3_file*, int);
+int sqlite3OsFileSize(sqlite3_file*, i64 *pSize);
+int sqlite3OsLock(sqlite3_file*, int);
+int sqlite3OsUnlock(sqlite3_file*, int);
+int sqlite3OsCheckReservedLock(sqlite3_file *id, int *pResOut);
+int sqlite3OsFileControl(sqlite3_file*,int,void*);
+void sqlite3OsFileControlHint(sqlite3_file*,int,void*);
+#define SQLITE_FCNTL_DB_UNCHANGED 0xca093fa0
+int sqlite3OsSectorSize(sqlite3_file *id);
+int sqlite3OsDeviceCharacteristics(sqlite3_file *id);
+#ifndef SQLITE_OMIT_WAL
+int sqlite3OsShmMap(sqlite3_file *,int,int,int,void volatile **);
+int sqlite3OsShmLock(sqlite3_file *id, int, int, int);
+void sqlite3OsShmBarrier(sqlite3_file *id);
+int sqlite3OsShmUnmap(sqlite3_file *id, int);
+#endif /* SQLITE_OMIT_WAL */
+int sqlite3OsFetch(sqlite3_file *id, i64, int, void **);
+int sqlite3OsUnfetch(sqlite3_file *, i64, void *);
+
+
+/* 
+** Functions for accessing sqlite3_vfs methods 
+*/
+int sqlite3OsOpen(sqlite3_vfs *, const char *, sqlite3_file*, int, int *);
+int sqlite3OsDelete(sqlite3_vfs *, const char *, int);
+int sqlite3OsAccess(sqlite3_vfs *, const char *, int, int *pResOut);
+int sqlite3OsFullPathname(sqlite3_vfs *, const char *, int, char *);
+#ifndef SQLITE_OMIT_LOAD_EXTENSION
+void *sqlite3OsDlOpen(sqlite3_vfs *, const char *);
+void sqlite3OsDlError(sqlite3_vfs *, int, char *);
+void (*sqlite3OsDlSym(sqlite3_vfs *, void *, const char *))(void);
+void sqlite3OsDlClose(sqlite3_vfs *, void *);
+#endif /* SQLITE_OMIT_LOAD_EXTENSION */
+int sqlite3OsRandomness(sqlite3_vfs *, int, char *);
+int sqlite3OsSleep(sqlite3_vfs *, int);
+int sqlite3OsGetLastError(sqlite3_vfs*);
+int sqlite3OsCurrentTimeInt64(sqlite3_vfs *, sqlite3_int64*);
 
 /*
-** If the SQLITE_ENABLE_REDEF_IO macro is defined, then the OS-layer
-** interface routines are not called directly but are invoked using
-** pointers to functions.  This allows the implementation of various
-** OS-layer interface routines to be modified at run-time.  There are
-** obscure but legitimate reasons for wanting to do this.  But for
-** most users, a direct call to the underlying interface is preferable
-** so the the redefinable I/O interface is turned off by default.
+** Convenience functions for opening and closing files using 
+** sqlite3_malloc() to obtain space for the file-handle structure.
 */
-#ifdef SQLITE_ENABLE_REDEF_IO
-
-/*
-** When redefinable I/O is enabled, a single global instance of the
-** following structure holds pointers to the routines that SQLite 
-** uses to talk with the underlying operating system.  Modify this
-** structure (before using any SQLite API!) to accomodate perculiar
-** operating system interfaces or behaviors.
-*/
-struct sqlite3OsVtbl {
-  int (*xOpenReadWrite)(const char*, OsFile**, int*);
-  int (*xOpenExclusive)(const char*, OsFile**, int);
-  int (*xOpenReadOnly)(const char*, OsFile**);
-
-  int (*xDelete)(const char*);
-  int (*xFileExists)(const char*);
-  char *(*xFullPathname)(const char*);
-  int (*xIsDirWritable)(char*);
-  int (*xSyncDirectory)(const char*);
-  int (*xTempFileName)(char*);
-
-  int (*xRandomSeed)(char*);
-  int (*xSleep)(int ms);
-  int (*xCurrentTime)(double*);
-
-  void (*xEnterMutex)(void);
-  void (*xLeaveMutex)(void);
-  int (*xInMutex)(void);
-  void *(*xThreadSpecificData)(int);
-
-  void *(*xMalloc)(int);
-  void *(*xRealloc)(void *, int);
-  void (*xFree)(void *);
-  int (*xAllocationSize)(void *);
-};
-
-/* Macro used to comment out routines that do not exists when there is
-** no disk I/O 
-*/
-#ifdef SQLITE_OMIT_DISKIO
-# define IF_DISKIO(X)  0
-#else
-# define IF_DISKIO(X)  X
-#endif
-
-#ifdef _SQLITE_OS_C_
-  /*
-  ** The os.c file implements the global virtual function table.
-  */
-  struct sqlite3OsVtbl sqlite3Os = {
-    IF_DISKIO( sqlite3OsOpenReadWrite ),
-    IF_DISKIO( sqlite3OsOpenExclusive ),
-    IF_DISKIO( sqlite3OsOpenReadOnly ),
-    IF_DISKIO( sqlite3OsDelete ),
-    IF_DISKIO( sqlite3OsFileExists ),
-    IF_DISKIO( sqlite3OsFullPathname ),
-    IF_DISKIO( sqlite3OsIsDirWritable ),
-    IF_DISKIO( sqlite3OsSyncDirectory ),
-    IF_DISKIO( sqlite3OsTempFileName ),
-    sqlite3OsRandomSeed,
-    sqlite3OsSleep,
-    sqlite3OsCurrentTime,
-    sqlite3OsEnterMutex,
-    sqlite3OsLeaveMutex,
-    sqlite3OsInMutex,
-    sqlite3OsThreadSpecificData,
-    sqlite3OsMalloc,
-    sqlite3OsRealloc,
-    sqlite3OsFree,
-    sqlite3OsAllocationSize
-  };
-#else
-  /*
-  ** Files other than os.c just reference the global virtual function table. 
-  */
-  extern struct sqlite3OsVtbl sqlite3Os;
-#endif /* _SQLITE_OS_C_ */
-
-
-/* This additional API routine is available with redefinable I/O */
-struct sqlite3OsVtbl *sqlite3_os_switch(void);
-
-
-/*
-** Redefine the OS interface to go through the virtual function table
-** rather than calling routines directly.
-*/
-#undef sqlite3OsOpenReadWrite
-#undef sqlite3OsOpenExclusive
-#undef sqlite3OsOpenReadOnly
-#undef sqlite3OsDelete
-#undef sqlite3OsFileExists
-#undef sqlite3OsFullPathname
-#undef sqlite3OsIsDirWritable
-#undef sqlite3OsSyncDirectory
-#undef sqlite3OsTempFileName
-#undef sqlite3OsRandomSeed
-#undef sqlite3OsSleep
-#undef sqlite3OsCurrentTime
-#undef sqlite3OsEnterMutex
-#undef sqlite3OsLeaveMutex
-#undef sqlite3OsInMutex
-#undef sqlite3OsThreadSpecificData
-#undef sqlite3OsMalloc
-#undef sqlite3OsRealloc
-#undef sqlite3OsFree
-#undef sqlite3OsAllocationSize
-#define sqlite3OsOpenReadWrite      sqlite3Os.xOpenReadWrite
-#define sqlite3OsOpenExclusive      sqlite3Os.xOpenExclusive
-#define sqlite3OsOpenReadOnly       sqlite3Os.xOpenReadOnly
-#define sqlite3OsDelete             sqlite3Os.xDelete
-#define sqlite3OsFileExists         sqlite3Os.xFileExists
-#define sqlite3OsFullPathname       sqlite3Os.xFullPathname
-#define sqlite3OsIsDirWritable      sqlite3Os.xIsDirWritable
-#define sqlite3OsSyncDirectory      sqlite3Os.xSyncDirectory
-#define sqlite3OsTempFileName       sqlite3Os.xTempFileName
-#define sqlite3OsRandomSeed         sqlite3Os.xRandomSeed
-#define sqlite3OsSleep              sqlite3Os.xSleep
-#define sqlite3OsCurrentTime        sqlite3Os.xCurrentTime
-#define sqlite3OsEnterMutex         sqlite3Os.xEnterMutex
-#define sqlite3OsLeaveMutex         sqlite3Os.xLeaveMutex
-#define sqlite3OsInMutex            sqlite3Os.xInMutex
-#define sqlite3OsThreadSpecificData sqlite3Os.xThreadSpecificData
-#define sqlite3OsMalloc             sqlite3Os.xMalloc
-#define sqlite3OsRealloc            sqlite3Os.xRealloc
-#define sqlite3OsFree               sqlite3Os.xFree
-#define sqlite3OsAllocationSize     sqlite3Os.xAllocationSize
-
-#endif /* SQLITE_ENABLE_REDEF_IO */
+int sqlite3OsOpenMalloc(sqlite3_vfs *, const char *, sqlite3_file **, int,int*);
+void sqlite3OsCloseFree(sqlite3_file *);
 
 #endif /* _SQLITE_OS_H_ */

@@ -172,7 +172,7 @@ int example1_basic_json_operations(void) {
     printf("\n=== EXAMPLE 1: Basic JSON Operations ===\n");
     
     /* Open kvstore */
-    rc = kvstore_open("example1.db", &pKV, 0);
+    rc = kvstore_open("example1.db", &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
@@ -261,7 +261,7 @@ int example2_multiple_json_documents(void) {
     
     printf("\n=== EXAMPLE 2: Multiple JSON Documents ===\n");
     
-    rc = kvstore_open("example2.db", &pKV, 0);
+    rc = kvstore_open("example2.db", &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
@@ -345,7 +345,7 @@ int example3_column_families_json(void) {
     
     printf("\n=== EXAMPLE 3: Column Families for JSON ===\n");
     
-    rc = kvstore_open("example3.db", &pKV, 0);
+    rc = kvstore_open("example3.db", &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
@@ -495,7 +495,7 @@ int example4_nested_json(void) {
     
     printf("\n=== EXAMPLE 4: Nested JSON Structures ===\n");
     
-    rc = kvstore_open("example4.db", &pKV, 0);
+    rc = kvstore_open("example4.db", &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
@@ -568,7 +568,7 @@ int example5_batch_json_operations(void) {
     
     printf("\n=== EXAMPLE 5: Batch JSON Operations ===\n");
     
-    rc = kvstore_open("example5.db", &pKV, 0);
+    rc = kvstore_open("example5.db", &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
@@ -687,7 +687,7 @@ int example6_very_large_json(void) {
     
     printf("\n=== EXAMPLE 6: Very Large JSON (Multi-MB) ===\n");
     
-    rc = kvstore_open("example6.db", &pKV, 0);
+    rc = kvstore_open("example6.db", &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;

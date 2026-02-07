@@ -1,131 +1,121 @@
 /*
-** 2001 September 15
+** Minimal vdbe.h stub for SNKV
 **
-** The author disclaims copyright to this source code.  In place of
-** a legal notice, here is a blessing:
-**
-**    May you do good and not evil.
-**    May you find forgiveness for yourself and forgive others.
-**    May you share freely, never taking more than you give.
-**
-*************************************************************************
-** Header file for the Virtual DataBase Engine (VDBE)
-**
-** This header defines the interface to the virtual database engine
-** or VDBE.  The VDBE implements an abstract machine that runs a
-** simple program to access and modify the underlying database.
-**
-** $Id: vdbe.h,v 1.99 2005/09/20 17:42:23 drh Exp $
+** SNKV uses only the btree -> pager -> os layers of SQLite.
+** This stub provides the forward declarations and type definitions
+** that sqliteInt.h (from SQLite 3.51.200) expects from vdbe.h,
+** without pulling in any actual VDBE implementation.
 */
-#ifndef _SQLITE_VDBE_H_
-#define _SQLITE_VDBE_H_
-#include <stdio.h>
+#ifndef SQLITE_VDBE_H
+#define SQLITE_VDBE_H
 
-/*
-** A single VDBE is an opaque structure named "Vdbe".  Only routines
-** in the source file sqliteVdbe.c are allowed to see the insides
-** of this structure.
-*/
+/* Forward declarations – these are used as pointer types throughout
+** sqliteInt.h and btree.h.  The actual struct bodies are never needed
+** by the btree/pager/os layer. */
 typedef struct Vdbe Vdbe;
+typedef struct sqlite3_value Mem;  /* Mem and sqlite3_value are the same type */
+typedef struct SubProgram SubProgram;
 
 /*
-** A single instruction of the virtual machine has an opcode
-** and as many as three operands.  The instruction is recorded
-** as an instance of the following structure:
+** VdbeOp – referenced by sqliteInt.h (e.g. in struct Parse).
+** Provide a minimal definition so sizeof(VdbeOp) compiles.
 */
+typedef struct VdbeOp VdbeOp;
 struct VdbeOp {
-  u8 opcode;          /* What operation to perform */
-  int p1;             /* First operand */
-  int p2;             /* Second parameter (often the jump destination) */
-  char *p3;           /* Third parameter */
-  int p3type;         /* One of the P3_xxx constants defined below */
+  u8  opcode;
+  signed char p4type;
+  u16 p5;
+  int p1;
+  int p2;
+  int p3;
+  union p4union {
+    int i;
+    void *p;
+    char *z;
+    i64 *pI64;
+    double *pReal;
+    FuncDef *pFunc;
+    sqlite3_context *pCtx;
+    CollSeq *pColl;
+    Mem *pMem;
+    int *ai;
+    SubProgram *pProgram;
+    Table *pTab;
+    KeyInfo *pKeyInfo;
+  } p4;
+#ifdef SQLITE_ENABLE_EXPLAIN_COMMENTS
+  char *zComment;
+#endif
 #ifdef VDBE_PROFILE
-  int cnt;            /* Number of times this instruction was executed */
-  long long cycles;   /* Total time spend executing this instruction */
+  u32 cnt;
+  u64 cycles;
+#endif
+#ifdef SQLITE_VDBE_COVERAGE
+  u32 iSrcLine;
 #endif
 };
-typedef struct VdbeOp VdbeOp;
 
 /*
-** A smaller version of VdbeOp used for the VdbeAddOpList() function because
-** it takes up less space.
+** VdbeOpList – compact op list used by VdbeAddOpList().
 */
-struct VdbeOpList {
-  u8 opcode;          /* What operation to perform */
-  signed char p1;     /* First operand */
-  short int p2;       /* Second parameter (often the jump destination) */
-  char *p3;           /* Third parameter */
-};
 typedef struct VdbeOpList VdbeOpList;
+struct VdbeOpList {
+  u8 opcode;
+  signed char p1;
+  signed char p2;
+  signed char p3;
+};
 
 /*
-** Allowed values of VdbeOp.p3type
-*/
-#define P3_NOTUSED    0   /* The P3 parameter is not used */
-#define P3_DYNAMIC  (-1)  /* Pointer to a string obtained from sqliteMalloc() */
-#define P3_STATIC   (-2)  /* Pointer to a static string */
-#define P3_COLLSEQ  (-4)  /* P3 is a pointer to a CollSeq structure */
-#define P3_FUNCDEF  (-5)  /* P3 is a pointer to a FuncDef structure */
-#define P3_KEYINFO  (-6)  /* P3 is a pointer to a KeyInfo structure */
-#define P3_VDBEFUNC (-7)  /* P3 is a pointer to a VdbeFunc structure */
-#define P3_MEM      (-8)  /* P3 is a pointer to a Mem*    structure */
-
-/* When adding a P3 argument using P3_KEYINFO, a copy of the KeyInfo structure
-** is made.  That copy is freed when the Vdbe is finalized.  But if the
-** argument is P3_KEYINFO_HANDOFF, the passed in pointer is used.  It still
-** gets freed when the Vdbe is finalized so it still should be obtained
-** from a single sqliteMalloc().  But no copy is made and the calling
-** function should *not* try to free the KeyInfo.
-*/
-#define P3_KEYINFO_HANDOFF (-9)
-
-/*
-** The following macro converts a relative address in the p2 field
-** of a VdbeOp structure into a negative number so that 
-** sqlite3VdbeAddOpList() knows that the address is relative.  Calling
-** the macro again restores the address.
-*/
-#define ADDR(X)  (-1-(X))
-
-/*
-** The makefile scans the vdbe.c source file and creates the "opcodes.h"
-** header file that defines a number for each opcode used by the VDBE.
+** Opcode definitions from the opcodes header generated by the
+** SQLite build process.
 */
 #include "opcodes.h"
 
 /*
-** Prototypes for the VDBE interface.  See comments on the implementation
-** for a description of what each of these routines does.
+** RecordCompare – function pointer type used by btree.c for index
+** record comparisons (sqlite3BtreeIndexMoveto).
 */
-Vdbe *sqlite3VdbeCreate(sqlite3*);
-void sqlite3VdbeCreateCallback(Vdbe*, int*);
-int sqlite3VdbeAddOp(Vdbe*,int,int,int);
-int sqlite3VdbeOp3(Vdbe*,int,int,int,const char *zP3,int);
-int sqlite3VdbeAddOpList(Vdbe*, int nOp, VdbeOpList const *aOp);
-void sqlite3VdbeChangeP1(Vdbe*, int addr, int P1);
-void sqlite3VdbeChangeP2(Vdbe*, int addr, int P2);
-void sqlite3VdbeJumpHere(Vdbe*, int addr);
-void sqlite3VdbeChangeP3(Vdbe*, int addr, const char *zP1, int N);
-VdbeOp *sqlite3VdbeGetOp(Vdbe*, int);
-int sqlite3VdbeMakeLabel(Vdbe*);
-void sqlite3VdbeDelete(Vdbe*);
-void sqlite3VdbeMakeReady(Vdbe*,int,int,int,int);
-int sqlite3VdbeFinalize(Vdbe*);
-void sqlite3VdbeResolveLabel(Vdbe*, int);
-int sqlite3VdbeCurrentAddr(Vdbe*);
-void sqlite3VdbeTrace(Vdbe*,FILE*);
-int sqlite3VdbeReset(Vdbe*);
-int sqliteVdbeSetVariables(Vdbe*,int,const char**);
-void sqlite3VdbeSetNumCols(Vdbe*,int);
-int sqlite3VdbeSetColName(Vdbe*, int, const char *, int);
-void sqlite3VdbeCountChanges(Vdbe*);
-sqlite3 *sqlite3VdbeDb(Vdbe*);
+typedef int (*RecordCompare)(int,const void*,UnpackedRecord*);
 
-#ifndef NDEBUG
+/*
+** Stub prototypes for functions declared in sqliteInt.h that take
+** or return Vdbe*.  These will never be called in a btree-only build
+** but must exist so the header compiles.
+*/
+void sqlite3VdbeDelete(Vdbe*);
+Vdbe *sqlite3VdbeCreate(Parse*);
+int  sqlite3VdbeFinalize(Vdbe*);
+
+/*
+** VDBE record-comparison functions used by btree.c for index operations.
+** Stub implementations are provided in src/vdbe_stubs.c.
+*/
+UnpackedRecord *sqlite3VdbeAllocUnpackedRecord(KeyInfo*);
+void sqlite3VdbeRecordUnpack(int,const void*,UnpackedRecord*);
+RecordCompare sqlite3VdbeFindCompare(UnpackedRecord*);
+int sqlite3VdbeRecordCompare(int,const void*,UnpackedRecord*);
+void sqlite3MemSetArrayInt64(sqlite3_value*,int,i64);
+
+/*
+** VdbeComment macro – normally prints debug comments on opcodes.
+** No-op in this stub.
+*/
+#ifdef SQLITE_DEBUG
   void sqlite3VdbeComment(Vdbe*, const char*, ...);
-# define VdbeComment(X)  sqlite3VdbeComment X
+  void sqlite3VdbeNoopComment(Vdbe*, const char*, ...);
+# define VdbeComment(X)      sqlite3VdbeComment X
+# define VdbeNoopComment(X)  sqlite3VdbeNoopComment X
+# define VdbeModuleComment(X)
 #else
 # define VdbeComment(X)
+# define VdbeNoopComment(X)
+# define VdbeModuleComment(X)
 #endif
 
-#endif
+/*
+** ADDR macro – converts relative to negative offset for VdbeAddOpList.
+*/
+#define ADDR(X) (-1-(X))
+
+#endif /* SQLITE_VDBE_H */

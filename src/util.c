@@ -14,729 +14,268 @@
 ** This file contains functions for allocating memory, comparing
 ** strings, and stuff like that.
 **
-** $Id: util.c,v 1.166 2006/01/10 15:18:28 drh Exp $
 */
 #include "sqliteInt.h"
-#include "os.h"
 #include <stdarg.h>
-#include <ctype.h>
+#ifndef SQLITE_OMIT_FLOATING_POINT
+#include <math.h>
+#endif
 
 /*
-** MALLOC WRAPPER ARCHITECTURE
+** Calls to sqlite3FaultSim() are used to simulate a failure during testing,
+** or to bypass normal error detection during testing in order to let
+** execute proceed further downstream.
 **
-** The sqlite code accesses dynamic memory allocation/deallocation by invoking
-** the following four APIs (which may be implemented as macros).
+** In deployment, sqlite3FaultSim() *always* return SQLITE_OK (0).  The
+** sqlite3FaultSim() function only returns non-zero during testing.
 **
-**     sqlite3Malloc()
-**     sqlite3MallocRaw()
-**     sqlite3Realloc()
-**     sqlite3ReallocOrFree()
-**     sqlite3Free()
-**     sqlite3AllocSize()
+** During testing, if the test harness has set a fault-sim callback using
+** a call to sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL), then
+** each call to sqlite3FaultSim() is relayed to that application-supplied
+** callback and the integer return value form the application-supplied
+** callback is returned by sqlite3FaultSim().
 **
-** The function sqlite3FreeX performs the same task as sqlite3Free and is
-** guaranteed to be a real function. The same holds for sqlite3MallocX
-**
-** The above APIs are implemented in terms of the functions provided at the Os
-** level (not in this file). The Os level interface is never accessed directly
-** by code outside of this file.
-**
-**     sqlite3OsMalloc()
-**     sqlite3OsRealloc()
-**     sqlite3OsFree()
-**     sqlite3OsAllocationSize()
-**
-** Functions sqlite3MallocRaw() and sqlite3Realloc() may invoke 
-** sqlite3_release_memory() if a call to sqlite3OsMalloc() or
-** sqlite3OsRealloc() fails (or if the soft-heap-limit for the thread is
-** exceeded). Function sqlite3Malloc() usually invokes
-** sqlite3MallocRaw().
-**
-** MALLOC TEST WRAPPER ARCHITECTURE
-**
-** The test wrapper provides extra test facilities to ensure the library 
-** does not leak memory and handles the failure of the underlying (Os level)
-** allocation system correctly. It is only present if the library is 
-** compiled with the SQLITE_MEMDEBUG macro set.
-**
-**     * Guardposts to detect overwrites.
-**     * Ability to cause a specific Malloc() or Realloc() to fail.
-**     * Audit outstanding memory allocations (i.e check for leaks).
+** The integer argument to sqlite3FaultSim() is a code to identify which
+** sqlite3FaultSim() instance is being invoked. Each call to sqlite3FaultSim()
+** should have a unique code.  To prevent legacy testing applications from
+** breaking, the codes should not be changed or reused.
 */
-
-#define MAX(x,y) ((x)>(y)?(x):(y))
-
-#if !defined(SQLITE_OMIT_MEMORY_MANAGEMENT) && !defined(SQLITE_OMIT_DISKIO)
-/*
-** Set the soft heap-size limit for the current thread. Passing a negative
-** value indicates no limit.
-*/
-void sqlite3_soft_heap_limit(int n){
-  sqlite3ThreadData()->nSoftHeapLimit = n;
+#ifndef SQLITE_UNTESTABLE
+int sqlite3FaultSim(int iTest){
+  int (*xCallback)(int) = sqlite3GlobalConfig.xTestCallback;
+  return xCallback ? xCallback(iTest) : SQLITE_OK;
 }
+#endif
 
+#ifndef SQLITE_OMIT_FLOATING_POINT
 /*
-** Release memory held by SQLite instances created by the current thread.
+** Return true if the floating point value is Not a Number (NaN).
+**
+** Use the math library isnan() function if compiled with SQLITE_HAVE_ISNAN.
+** Otherwise, we have our own implementation that works on most systems.
 */
-int sqlite3_release_memory(int n){
-  return sqlite3pager_release_memory(n);
-}
+int sqlite3IsNaN(double x){
+  int rc;   /* The value return */
+#if !SQLITE_HAVE_ISNAN && !HAVE_ISNAN
+  u64 y;
+  memcpy(&y,&x,sizeof(y));
+  rc = IsNaN(y);
 #else
-/* If SQLITE_OMIT_MEMORY_MANAGEMENT is defined, then define a version
-** of sqlite3_release_memory() to be used by other code in this file.
-** This is done for no better reason than to reduce the number of 
-** pre-processor #ifndef statements.
-*/
-#define sqlite3_release_memory(x) 0    /* 0 == no memory freed */
-#endif
+  rc = isnan(x);
+#endif /* HAVE_ISNAN */
+  testcase( rc );
+  return rc;
+}
+#endif /* SQLITE_OMIT_FLOATING_POINT */
 
-#ifdef SQLITE_MEMDEBUG
-/*--------------------------------------------------------------------------
-** Begin code for memory allocation system test layer.
+#ifndef SQLITE_OMIT_FLOATING_POINT
+/*
+** Return true if the floating point value is NaN or +Inf or -Inf.
+*/
+int sqlite3IsOverflow(double x){
+  int rc;   /* The value return */
+  u64 y;
+  memcpy(&y,&x,sizeof(y));
+  rc = IsOvfl(y);
+  return rc;
+}
+#endif /* SQLITE_OMIT_FLOATING_POINT */
+
+/*
+** Compute a string length that is limited to what can be stored in
+** lower 30 bits of a 32-bit signed integer.
 **
-** Memory debugging is turned on by defining the SQLITE_MEMDEBUG macro.
-**
-** SQLITE_MEMDEBUG==1    -> Fence-posting only (thread safe) 
-** SQLITE_MEMDEBUG==2    -> Fence-posting + linked list of allocations (not ts)
-** SQLITE_MEMDEBUG==3    -> Above + backtraces (not thread safe, req. glibc)
+** The value returned will never be negative.  Nor will it ever be greater
+** than the actual length of the string.  For very long strings (greater
+** than 1GiB) the value returned might be less than the true string length.
 */
-
-/* Figure out whether or not to store backtrace() information for each malloc.
-** The backtrace() function is only used if SQLITE_MEMDEBUG is set to 2 or 
-** greater and glibc is in use. If we don't want to use backtrace(), then just
-** define it as an empty macro and set the amount of space reserved to 0.
-*/
-#if defined(__GLIBC__) && SQLITE_MEMDEBUG>2
-  extern int backtrace(void **, int);
-  #define TESTALLOC_STACKSIZE 128
-  #define TESTALLOC_STACKFRAMES ((TESTALLOC_STACKSIZE-8)/sizeof(void*))
-#else
-  #define backtrace(x, y)
-  #define TESTALLOC_STACKSIZE 0
-  #define TESTALLOC_STACKFRAMES 0
-#endif
-
-/*
-** Number of 32-bit guard words.  This should probably be a multiple of
-** 2 since on 64-bit machines we want the value returned by sqliteMalloc()
-** to be 8-byte aligned.
-*/
-#define TESTALLOC_NGUARD 2
-
-/*
-** Size reserved for storing file-name along with each malloc()ed blob.
-*/
-#define TESTALLOC_FILESIZE 64
-
-/*
-** Size reserved for storing the user string. Each time a Malloc() or Realloc()
-** call succeeds, up to TESTALLOC_USERSIZE bytes of the string pointed to by
-** sqlite3_malloc_id are stored along with the other test system metadata.
-*/
-#define TESTALLOC_USERSIZE 64
-const char *sqlite3_malloc_id = 0;
-
-/*
-** Blocks used by the test layer have the following format:
-**
-**        <sizeof(void *) pNext pointer>
-**        <sizeof(void *) pPrev pointer>
-**        <TESTALLOC_NGUARD 32-bit guard words>
-**            <The application level allocation>
-**        <TESTALLOC_NGUARD 32-bit guard words>
-**        <32-bit line number>
-**        <TESTALLOC_FILESIZE bytes containing null-terminated file name>
-**        <TESTALLOC_STACKSIZE bytes of backtrace() output>
-*/ 
-
-#define TESTALLOC_OFFSET_GUARD1(p)    (sizeof(void *) * 2)
-#define TESTALLOC_OFFSET_DATA(p) ( \
-  TESTALLOC_OFFSET_GUARD1(p) + sizeof(u32) * TESTALLOC_NGUARD \
-)
-#define TESTALLOC_OFFSET_GUARD2(p) ( \
-  TESTALLOC_OFFSET_DATA(p) + sqlite3OsAllocationSize(p) - TESTALLOC_OVERHEAD \
-)
-#define TESTALLOC_OFFSET_LINENUMBER(p) ( \
-  TESTALLOC_OFFSET_GUARD2(p) + sizeof(u32) * TESTALLOC_NGUARD \
-)
-#define TESTALLOC_OFFSET_FILENAME(p) ( \
-  TESTALLOC_OFFSET_LINENUMBER(p) + sizeof(u32) \
-)
-#define TESTALLOC_OFFSET_USER(p) ( \
-  TESTALLOC_OFFSET_FILENAME(p) + TESTALLOC_FILESIZE \
-)
-#define TESTALLOC_OFFSET_STACK(p) ( \
-  TESTALLOC_OFFSET_USER(p) + TESTALLOC_USERSIZE + 8 - \
-  (TESTALLOC_OFFSET_USER(p) % 8) \
-)
-
-#define TESTALLOC_OVERHEAD ( \
-  sizeof(void *)*2 +                   /* pPrev and pNext pointers */   \
-  TESTALLOC_NGUARD*sizeof(u32)*2 +              /* Guard words */       \
-  sizeof(u32) + TESTALLOC_FILESIZE +   /* File and line number */       \
-  TESTALLOC_USERSIZE +                 /* User string */                \
-  TESTALLOC_STACKSIZE                  /* backtrace() stack */          \
-)
-
-
-/*
-** For keeping track of the number of mallocs and frees.   This
-** is used to check for memory leaks.  The iMallocFail and iMallocReset
-** values are used to simulate malloc() failures during testing in 
-** order to verify that the library correctly handles an out-of-memory
-** condition.
-*/
-int sqlite3_nMalloc;         /* Number of sqliteMalloc() calls */
-int sqlite3_nFree;           /* Number of sqliteFree() calls */
-int sqlite3_memUsed;         /* TODO Total memory obtained from malloc */
-int sqlite3_memMax;          /* TODO Mem usage high-water mark */
-int sqlite3_iMallocFail;     /* Fail sqliteMalloc() after this many calls */
-int sqlite3_iMallocReset = -1; /* When iMallocFail reaches 0, set to this */
-
-/*
-** Check for a simulated memory allocation failure.  Return true if
-** the failure should be simulated.  Return false to proceed as normal.
-*/
-static int failMalloc(){
-  ThreadData *pTsd = sqlite3ThreadData();
-  if( pTsd->isFail ){
-    return 1;
-  }
-  if( sqlite3_iMallocFail>=0 ){
-    sqlite3_iMallocFail--;
-    if( sqlite3_iMallocFail==0 ){
-      sqlite3_iMallocFail = sqlite3_iMallocReset;
-      pTsd->isFail = 1;
-      return 1;
-    }
-  }
-  return 0;
-}
-
-/*
-** The argument is a pointer returned by sqlite3OsMalloc() or xRealloc().
-** assert() that the first and last (TESTALLOC_NGUARD*4) bytes are set to the
-** values set by the applyGuards() function.
-*/
-static void checkGuards(u32 *p)
-{
-  int i;
-  char *zAlloc = (char *)p;
-  char *z;
-
-  /* First set of guard words */
-  z = &zAlloc[TESTALLOC_OFFSET_GUARD1(p)];
-  for(i=0; i<TESTALLOC_NGUARD; i++){
-    assert(((u32 *)z)[i]==0xdead1122);
-  }
-
-  /* Second set of guard words */
-  z = &zAlloc[TESTALLOC_OFFSET_GUARD2(p)];
-  for(i=0; i<TESTALLOC_NGUARD; i++){
-    u32 guard = 0;
-    memcpy(&guard, &z[i*sizeof(u32)], sizeof(u32));
-    assert(guard==0xdead3344);
-  }
-}
-
-/*
-** The argument is a pointer returned by sqlite3OsMalloc() or Realloc(). The
-** first and last (TESTALLOC_NGUARD*4) bytes are set to known values for use as 
-** guard-posts.
-*/
-static void applyGuards(u32 *p)
-{
-  int i;
-  char *z;
-  char *zAlloc = (char *)p;
-
-  /* First set of guard words */
-  z = &zAlloc[TESTALLOC_OFFSET_GUARD1(p)];
-  for(i=0; i<TESTALLOC_NGUARD; i++){
-    ((u32 *)z)[i] = 0xdead1122;
-  }
-
-  /* Second set of guard words */
-  z = &zAlloc[TESTALLOC_OFFSET_GUARD2(p)];
-  for(i=0; i<TESTALLOC_NGUARD; i++){
-    static const int guard = 0xdead3344;
-    memcpy(&z[i*sizeof(u32)], &guard, sizeof(u32));
-  }
-
-  /* Line number */
-  z = &((char *)z)[TESTALLOC_NGUARD*sizeof(u32)];             /* Guard words */
-  z = &zAlloc[TESTALLOC_OFFSET_LINENUMBER(p)];
-  memcpy(z, &sqlite3ThreadData()->iLine, sizeof(u32));
-
-  /* File name */
-  z = &zAlloc[TESTALLOC_OFFSET_FILENAME(p)];
-  strncpy(z, sqlite3ThreadData()->zFile, TESTALLOC_FILESIZE);
-  z[TESTALLOC_FILESIZE - 1] = '\0';
-
-  /* User string */
-  z = &zAlloc[TESTALLOC_OFFSET_USER(p)];
-  z[0] = 0;
-  if( sqlite3_malloc_id ){
-    strncpy(z, sqlite3_malloc_id, TESTALLOC_USERSIZE);
-    z[TESTALLOC_USERSIZE-1] = 0;
-  }
-
-  /* backtrace() stack */
-  z = &zAlloc[TESTALLOC_OFFSET_STACK(p)];
-  backtrace((void **)z, TESTALLOC_STACKFRAMES);
-
-  /* Sanity check to make sure checkGuards() is working */
-  checkGuards(p);
-}
-
-/*
-** The argument is a malloc()ed pointer as returned by the test-wrapper.
-** Return a pointer to the Os level allocation.
-*/
-static void *getOsPointer(void *p)
-{
-  char *z = (char *)p;
-  return (void *)(&z[-1 * TESTALLOC_OFFSET_DATA(p)]);
-}
-
-
-#if SQLITE_MEMDEBUG>1
-/*
-** The argument points to an Os level allocation. Link it into the threads list
-** of allocations.
-*/
-static void linkAlloc(void *p){
-  ThreadData *pTsd = sqlite3ThreadData();
-  void **pp = (void **)p;
-  pp[0] = 0;
-  pp[1] = pTsd->pFirst;
-  if( pTsd->pFirst ){
-    ((void **)pTsd->pFirst)[0] = p;
-  }
-  pTsd->pFirst = p;
-}
-
-/*
-** The argument points to an Os level allocation. Unlinke it from the threads
-** list of allocations.
-*/
-static void unlinkAlloc(void *p)
-{
-  ThreadData *pTsd = sqlite3ThreadData();
-  void **pp = (void **)p;
-  if( p==pTsd->pFirst ){
-    assert(!pp[0]);
-    assert(!pp[1] || ((void **)(pp[1]))[0]==p);
-    pTsd->pFirst = pp[1];
-    if( pTsd->pFirst ){
-      ((void **)pTsd->pFirst)[0] = 0;
-    }
-  }else{
-    void **pprev = pp[0];
-    void **pnext = pp[1];
-    assert(pprev);
-    assert(pprev[1]==p);
-    pprev[1] = (void *)pnext;
-    if( pnext ){
-      assert(pnext[0]==p);
-      pnext[0] = (void *)pprev;
-    }
-  }
-}
-
-/*
-** Pointer p is a pointer to an OS level allocation that has just been
-** realloc()ed. Set the list pointers that point to this entry to it's new
-** location.
-*/
-static void relinkAlloc(void *p)
-{
-  void **pp = (void **)p;
-  if( pp[0] ){
-    ((void **)(pp[0]))[1] = p;
-  }else{
-    ThreadData *pTsd = sqlite3ThreadData();
-    pTsd->pFirst = p;
-  }
-  if( pp[1] ){
-    ((void **)(pp[1]))[0] = p;
-  }
-}
-#else
-#define linkAlloc(x)
-#define relinkAlloc(x)
-#define unlinkAlloc(x)
-#endif
-
-/*
-** This function sets the result of the Tcl interpreter passed as an argument
-** to a list containing an entry for each currently outstanding call made to 
-** sqliteMalloc and friends by the current thread. Each list entry is itself a
-** list, consisting of the following (in order):
-**
-**     * The number of bytes allocated
-**     * The __FILE__ macro at the time of the sqliteMalloc() call.
-**     * The __LINE__ macro ...
-**     * The value of the sqlite3_malloc_id variable ...
-**     * The output of backtrace() (if available) ...
-**
-** Todo: We could have a version of this function that outputs to stdout, 
-** to debug memory leaks when Tcl is not available.
-*/
-#ifdef TCLSH
-#include <tcl.h>
-int sqlite3OutstandingMallocs(Tcl_Interp *interp){
-  void *p;
-  ThreadData *pTsd = sqlite3ThreadData();
-  Tcl_Obj *pRes = Tcl_NewObj();
-  Tcl_IncrRefCount(pRes);
-
-  for(p=pTsd->pFirst; p; p=((void **)p)[1]){
-    Tcl_Obj *pEntry = Tcl_NewObj();
-    Tcl_Obj *pStack = Tcl_NewObj();
-    char *z;
-    u32 iLine;
-    int nBytes = sqlite3OsAllocationSize(p) - TESTALLOC_OVERHEAD;
-    char *zAlloc = (char *)p;
-    int i;
-
-    Tcl_ListObjAppendElement(0, pEntry, Tcl_NewIntObj(nBytes));
-
-    z = &zAlloc[TESTALLOC_OFFSET_FILENAME(p)];
-    Tcl_ListObjAppendElement(0, pEntry, Tcl_NewStringObj(z, -1));
-
-    z = &zAlloc[TESTALLOC_OFFSET_LINENUMBER(p)];
-    memcpy(&iLine, z, sizeof(u32));
-    Tcl_ListObjAppendElement(0, pEntry, Tcl_NewIntObj(iLine));
-
-    z = &zAlloc[TESTALLOC_OFFSET_USER(p)];
-    Tcl_ListObjAppendElement(0, pEntry, Tcl_NewStringObj(z, -1));
-
-    z = &zAlloc[TESTALLOC_OFFSET_STACK(p)];
-    for(i=0; i<TESTALLOC_STACKFRAMES; i++){
-      char zHex[128];
-      sprintf(zHex, "%p", ((void **)z)[i]);
-      Tcl_ListObjAppendElement(0, pStack, Tcl_NewStringObj(zHex, -1));
-    }
-
-    Tcl_ListObjAppendElement(0, pEntry, pStack);
-    Tcl_ListObjAppendElement(0, pRes, pEntry);
-  }
-
-  Tcl_ResetResult(interp);
-  Tcl_SetObjResult(interp, pRes);
-  Tcl_DecrRefCount(pRes);
-  return TCL_OK;
-}
-#endif
-
-/*
-** This is the test layer's wrapper around sqlite3OsMalloc().
-*/
-static void * OSMALLOC(int n){
-#ifndef SQLITE_OMIT_MEMORY_MANAGEMENT
-  ThreadData *pTsd = sqlite3ThreadData();
-  pTsd->nMaxAlloc = MAX(pTsd->nMaxAlloc, pTsd->nAlloc);
-#endif
-  if( !failMalloc() ){
-    u32 *p;
-    p = (u32 *)sqlite3OsMalloc(n + TESTALLOC_OVERHEAD);
-    assert(p);
-    sqlite3_nMalloc++;
-    applyGuards(p);
-    linkAlloc(p);
-    return (void *)(&p[TESTALLOC_NGUARD + 2*sizeof(void *)/sizeof(u32)]);
-  }
-  return 0;
-}
-
-static int OSSIZEOF(void *p){
-  if( p ){
-    u32 *pOs = (u32 *)getOsPointer(p);
-    return sqlite3OsAllocationSize(pOs) - TESTALLOC_OVERHEAD;
-  }
-  return 0;
-}
-
-/*
-** This is the test layer's wrapper around sqlite3OsFree(). The argument is a
-** pointer to the space allocated for the application to use.
-*/
-static void OSFREE(void *pFree){
-  u32 *p = (u32 *)getOsPointer(pFree);   /* p points to Os level allocation */
-  checkGuards(p);
-  unlinkAlloc(p);
-  memset(pFree, 0x55, OSSIZEOF(pFree));
-  sqlite3OsFree(p);
-  sqlite3_nFree++;
-}
-
-/*
-** This is the test layer's wrapper around sqlite3OsRealloc().
-*/
-static void * OSREALLOC(void *pRealloc, int n){
-#ifndef SQLITE_OMIT_MEMORY_MANAGEMENT
-  ThreadData *pTsd = sqlite3ThreadData();
-  pTsd->nMaxAlloc = MAX(pTsd->nMaxAlloc, pTsd->nAlloc);
-#endif
-  if( !failMalloc() ){
-    u32 *p = (u32 *)getOsPointer(pRealloc);
-    checkGuards(p);
-    p = sqlite3OsRealloc(p, n + TESTALLOC_OVERHEAD);
-    applyGuards(p);
-    relinkAlloc(p);
-    return (void *)(&p[TESTALLOC_NGUARD + 2*sizeof(void *)/sizeof(u32)]);
-  }
-  return 0;
-}
-
-static void OSMALLOC_FAILED(){
-  sqlite3ThreadData()->isFail = 0;
-}
-
-#else
-/* Define macros to call the sqlite3OsXXX interface directly if 
-** the SQLITE_MEMDEBUG macro is not defined.
-*/
-#define OSMALLOC(x)        sqlite3OsMalloc(x)
-#define OSREALLOC(x,y)     sqlite3OsRealloc(x,y)
-#define OSFREE(x)          sqlite3OsFree(x)
-#define OSSIZEOF(x)        sqlite3OsAllocationSize(x)
-#define OSMALLOC_FAILED()
-
-#endif
-/*
-** End code for memory allocation system test layer.
-**--------------------------------------------------------------------------*/
-
-/*
-** The handleSoftLimit() function is called before each call to 
-** sqlite3OsMalloc() or xRealloc(). The parameter 'n' is the number of
-** extra bytes about to be allocated (for Realloc() this means the size of the
-** new allocation less the size of the old allocation). If the extra allocation
-** means that the total memory allocated to SQLite in this thread would exceed
-** the limit set by sqlite3_soft_heap_limit(), then sqlite3_release_memory() is
-** called to try to avoid this. No indication of whether or not this is
-** successful is returned to the caller.
-**
-** If SQLITE_OMIT_MEMORY_MANAGEMENT is defined, this function is a no-op.
-*/
-#ifndef SQLITE_OMIT_MEMORY_MANAGEMENT
-static void handleSoftLimit(int n){
-  ThreadData *pTsd = sqlite3ThreadData();
-  pTsd->nAlloc += n;
-  if( n>0 && pTsd->nSoftHeapLimit>0 ){
-    while( pTsd->nAlloc>pTsd->nSoftHeapLimit && sqlite3_release_memory(n) );
-  }
-}
-#else
-#define handleSoftLimit(x)
-#endif
-
-/*
-** Allocate and return N bytes of uninitialised memory by calling
-** sqlite3OsMalloc(). If the Malloc() call fails, attempt to free memory 
-** by calling sqlite3_release_memory().
-*/
-void *sqlite3MallocRaw(int n){
-  ThreadData *pTsd = sqlite3ThreadData();
-  void *p = 0;
-  if( n>0 && !pTsd->mallocFailed ){
-    handleSoftLimit(n);
-    while( !(p = OSMALLOC(n)) && sqlite3_release_memory(n) );
-    if( !p ){
-      /* If the allocation failed, call handleSoftLimit() again, this time
-      ** with the additive inverse of the argument passed to 
-      ** handleSoftLimit() above. This is so the ThreadData.nAlloc variable is
-      ** still correct after a malloc() failure. 
-      */
-      handleSoftLimit(n * -1);
-      sqlite3ThreadData()->mallocFailed = 1;
-      OSMALLOC_FAILED();
-    }
-  }
-  return p;
-}
-
-/*
-** Resize the allocation at p to n bytes by calling sqlite3OsRealloc(). The
-** pointer to the new allocation is returned.  If the Realloc() call fails,
-** attempt to free memory by calling sqlite3_release_memory().
-*/
-void *sqlite3Realloc(void *p, int n){
-  ThreadData *pTsd = sqlite3ThreadData();
-  if( pTsd->mallocFailed ){
-    return 0;
-  }
-
-  if( !p ){
-    return sqlite3Malloc(n);
-  }else{
-    void *np = 0;
-    handleSoftLimit(n - OSSIZEOF(p));
-    while( !(np = OSREALLOC(p, n)) && sqlite3_release_memory(n) );
-    if( !np ){
-      /* If the allocation failed, call handleSoftLimit() again, this time
-      ** with the additive inverse of the argument passed to 
-      ** handleSoftLimit() above. This is so the ThreadData.nAlloc variable is
-      ** still correct after a malloc() failure. 
-      */
-      handleSoftLimit(OSSIZEOF(p) - n);
-      pTsd->mallocFailed = 1;
-      OSMALLOC_FAILED();
-    }
-    return np;
-  }
-}
-
-/*
-** Free the memory pointed to by p. p must be either a NULL pointer or a 
-** value returned by a previous call to sqlite3Malloc() or sqlite3Realloc().
-*/
-void sqlite3FreeX(void *p){
-  handleSoftLimit(0 - OSSIZEOF(p));
-  if( p ){
-    OSFREE(p);
-  }
-}
-
-/*
-** A version of sqliteMalloc() that is always a function, not a macro.
-** Currently, this is used only to alloc to allocate the parser engine.
-*/
-void *sqlite3MallocX(int n){
-  return sqliteMalloc(n);
-}
-
-/*
-** sqlite3Malloc
-** sqlite3ReallocOrFree
-**
-** These two are implemented as wrappers around sqlite3MallocRaw(), 
-** sqlite3Realloc() and sqlite3Free().
-*/ 
-void *sqlite3Malloc(int n){
-  void *p = sqlite3MallocRaw(n);
-  if( p ){
-    memset(p, 0, n);
-  }
-  return p;
-}
-void sqlite3ReallocOrFree(void **pp, int n){
-  void *p = sqlite3Realloc(*pp, n);
-  if( !p ){
-    sqlite3FreeX(*pp);
-  }
-  *pp = p;
-}
-
-/*
-** Return the number of bytes allocated at location p. p must be either 
-** a NULL pointer (in which case 0 is returned) or a pointer returned by 
-** sqlite3Malloc(), sqlite3Realloc() or sqlite3ReallocOrFree().
-**
-** The number of bytes allocated does not include any overhead inserted by 
-** any malloc() wrapper functions that may be called. So the value returned
-** is the number of bytes that were available to SQLite using pointer p, 
-** regardless of how much memory was actually allocated.
-*/
-int sqlite3AllocSize(void *p){
-  return OSSIZEOF(p);
-}
-
-/*
-** Make a copy of a string in memory obtained from sqliteMalloc(). These 
-** functions call sqlite3MallocRaw() directly instead of sqliteMalloc(). This
-** is because when memory debugging is turned on, these two functions are 
-** called via macros that record the current file and line number in the
-** ThreadData structure.
-*/
-char *sqlite3StrDup(const char *z){
-  char *zNew;
+int sqlite3Strlen30(const char *z){
   if( z==0 ) return 0;
-  zNew = sqlite3MallocRaw(strlen(z)+1);
-  if( zNew ) strcpy(zNew, z);
-  return zNew;
-}
-char *sqlite3StrNDup(const char *z, int n){
-  char *zNew;
-  if( z==0 ) return 0;
-  zNew = sqlite3MallocRaw(n+1);
-  if( zNew ){
-    memcpy(zNew, z, n);
-    zNew[n] = 0;
-  }
-  return zNew;
+  return 0x3fffffff & (int)strlen(z);
 }
 
 /*
-** Create a string from the 2nd and subsequent arguments (up to the
-** first NULL argument), store the string in memory obtained from
-** sqliteMalloc() and make the pointer indicated by the 1st argument
-** point to that string.  The 1st argument must either be NULL or 
-** point to memory obtained from sqliteMalloc().
+** Return the declared type of a column.  Or return zDflt if the column
+** has no declared type.
+**
+** The column type is an extra string stored after the zero-terminator on
+** the column name if and only if the COLFLAG_HASTYPE flag is set.
 */
-void sqlite3SetString(char **pz, ...){
-  va_list ap;
-  int nByte;
-  const char *z;
-  char *zResult;
-
-  if( pz==0 ) return;
-  nByte = 1;
-  va_start(ap, pz);
-  while( (z = va_arg(ap, const char*))!=0 ){
-    nByte += strlen(z);
+char *sqlite3ColumnType(Column *pCol, char *zDflt){
+  if( pCol->colFlags & COLFLAG_HASTYPE ){
+    return pCol->zCnName + strlen(pCol->zCnName) + 1;
+  }else if( pCol->eCType ){
+    assert( pCol->eCType<=SQLITE_N_STDTYPE );
+    return (char*)sqlite3StdType[pCol->eCType-1];
+  }else{
+    return zDflt;
   }
-  va_end(ap);
-  sqliteFree(*pz);
-  *pz = zResult = sqliteMallocRaw( nByte );
-  if( zResult==0 ){
+}
+
+/*
+** Helper function for sqlite3Error() - called rarely.  Broken out into
+** a separate routine to avoid unnecessary register saves on entry to
+** sqlite3Error().
+*/
+static SQLITE_NOINLINE void  sqlite3ErrorFinish(sqlite3 *db, int err_code){
+  if( db->pErr ) sqlite3ValueSetNull(db->pErr);
+  sqlite3SystemError(db, err_code);
+}
+
+/*
+** Set the current error code to err_code and clear any prior error message.
+** Also set iSysErrno (by calling sqlite3System) if the err_code indicates
+** that would be appropriate.
+*/
+void sqlite3Error(sqlite3 *db, int err_code){
+  assert( db!=0 );
+  db->errCode = err_code;
+  if( err_code || db->pErr ){
+    sqlite3ErrorFinish(db, err_code);
+  }else{
+    db->errByteOffset = -1;
+  }
+}
+
+/*
+** The equivalent of sqlite3Error(db, SQLITE_OK).  Clear the error state
+** and error message.
+*/
+void sqlite3ErrorClear(sqlite3 *db){
+  assert( db!=0 );
+  db->errCode = SQLITE_OK;
+  db->errByteOffset = -1;
+  if( db->pErr ) sqlite3ValueSetNull(db->pErr);
+}
+
+/*
+** Load the sqlite3.iSysErrno field if that is an appropriate thing
+** to do based on the SQLite error code in rc.
+*/
+void sqlite3SystemError(sqlite3 *db, int rc){
+  if( rc==SQLITE_IOERR_NOMEM ) return;
+#if defined(SQLITE_USE_SEH) && !defined(SQLITE_OMIT_WAL)
+  if( rc==SQLITE_IOERR_IN_PAGE ){
+    int ii;
+    int iErr;
+    sqlite3BtreeEnterAll(db);
+    for(ii=0; ii<db->nDb; ii++){
+      if( db->aDb[ii].pBt ){
+        iErr = sqlite3PagerWalSystemErrno(sqlite3BtreePager(db->aDb[ii].pBt));
+        if( iErr ){
+          db->iSysErrno = iErr;
+        }
+      }
+    }
+    sqlite3BtreeLeaveAll(db);
     return;
   }
-  *zResult = 0;
-  va_start(ap, pz);
-  while( (z = va_arg(ap, const char*))!=0 ){
-    strcpy(zResult, z);
-    zResult += strlen(zResult);
+#endif
+  rc &= 0xff;
+  if( rc==SQLITE_CANTOPEN || rc==SQLITE_IOERR ){
+    db->iSysErrno = sqlite3OsGetLastError(db->pVfs);
   }
-  va_end(ap);
 }
 
+/*
+** Set the most recent error code and error string for the sqlite
+** handle "db". The error code is set to "err_code".
+**
+** If it is not NULL, string zFormat specifies the format of the
+** error string.  zFormat and any string tokens that follow it are
+** assumed to be encoded in UTF-8.
+**
+** To clear the most recent error for sqlite handle "db", sqlite3Error
+** should be called with err_code set to SQLITE_OK and zFormat set
+** to NULL.
+*/
+void sqlite3ErrorWithMsg(sqlite3 *db, int err_code, const char *zFormat, ...){
+  assert( db!=0 );
+  db->errCode = err_code;
+  sqlite3SystemError(db, err_code);
+  if( zFormat==0 ){
+    sqlite3Error(db, err_code);
+  }else if( db->pErr || (db->pErr = sqlite3ValueNew(db))!=0 ){
+    char *z;
+    va_list ap;
+    va_start(ap, zFormat);
+    z = sqlite3VMPrintf(db, zFormat, ap);
+    va_end(ap);
+    sqlite3ValueSetStr(db->pErr, -1, z, SQLITE_UTF8, SQLITE_DYNAMIC);
+  }
+}
+
+/*
+** Check for interrupts and invoke progress callback.
+*/
+void sqlite3ProgressCheck(Parse *p){
+  sqlite3 *db = p->db;
+  if( AtomicLoad(&db->u1.isInterrupted) ){
+    p->nErr++;
+    p->rc = SQLITE_INTERRUPT;
+  }
+#ifndef SQLITE_OMIT_PROGRESS_CALLBACK
+  if( db->xProgress ){
+    if( p->rc==SQLITE_INTERRUPT ){
+      p->nProgressSteps = 0;
+    }else if( (++p->nProgressSteps)>=db->nProgressOps ){
+      if( db->xProgress(db->pProgressArg) ){
+        p->nErr++;
+        p->rc = SQLITE_INTERRUPT;
+      }
+      p->nProgressSteps = 0;
+    }
+  }
+#endif
+}
 
 /*
 ** Add an error message to pParse->zErrMsg and increment pParse->nErr.
-** The following formatting characters are allowed:
 **
-**      %s      Insert a string
-**      %z      A string that should be freed after use
-**      %d      Insert an integer
-**      %T      Insert a token
-**      %S      Insert the first element of a SrcList
-**
-** This function should be used to report any error that occurs whilst
+** This function should be used to report any error that occurs while
 ** compiling an SQL statement (i.e. within sqlite3_prepare()). The
 ** last thing the sqlite3_prepare() function does is copy the error
 ** stored by this function into the database handle using sqlite3Error().
-** Function sqlite3Error() should be used during statement execution
-** (sqlite3_step() etc.).
+** Functions sqlite3Error() or sqlite3ErrorWithMsg() should be used
+** during statement execution (sqlite3_step() etc.).
 */
 void sqlite3ErrorMsg(Parse *pParse, const char *zFormat, ...){
+  char *zMsg;
   va_list ap;
-  pParse->nErr++;
-  sqliteFree(pParse->zErrMsg);
+  sqlite3 *db = pParse->db;
+  assert( db!=0 );
+  assert( db->pParse==pParse || db->pParse->pToplevel==pParse );
+  db->errByteOffset = -2;
   va_start(ap, zFormat);
-  pParse->zErrMsg = sqlite3VMPrintf(zFormat, ap);
+  zMsg = sqlite3VMPrintf(db, zFormat, ap);
   va_end(ap);
+  if( db->errByteOffset<-1 ) db->errByteOffset = -1;
+  if( db->suppressErr ){
+    sqlite3DbFree(db, zMsg);
+    if( db->mallocFailed ){
+      pParse->nErr++;
+      pParse->rc = SQLITE_NOMEM;
+    }
+  }else{
+    pParse->nErr++;
+    sqlite3DbFree(db, pParse->zErrMsg);
+    pParse->zErrMsg = zMsg;
+    pParse->rc = SQLITE_ERROR;
+    pParse->pWith = 0;
+  }
 }
 
 /*
-** Clear the error message in pParse, if any
+** If database connection db is currently parsing SQL, then transfer
+** error code errCode to that parser if the parser has not already
+** encountered some other kind of error.
 */
-void sqlite3ErrorClear(Parse *pParse){
-  sqliteFree(pParse->zErrMsg);
-  pParse->zErrMsg = 0;
-  pParse->nErr = 0;
+int sqlite3ErrorToParser(sqlite3 *db, int errCode){
+  Parse *pParse;
+  if( db==0 || (pParse = db->pParse)==0 ) return errCode;
+  pParse->rc = errCode;
+  pParse->nErr++;
+  return errCode;
 }
 
 /*
@@ -745,72 +284,161 @@ void sqlite3ErrorClear(Parse *pParse){
 ** input does not begin with a quote character, then this routine
 ** is a no-op.
 **
-** 2002-Feb-14: This routine is extended to remove MS-Access style
-** brackets from around identifers.  For example:  "[a-b-c]" becomes
+** The input string must be zero-terminated.  A new zero-terminator
+** is added to the dequoted string.
+**
+** The return value is -1 if no dequoting occurs or the length of the
+** dequoted string, exclusive of the zero terminator, if dequoting does
+** occur.
+**
+** 2002-02-14: This routine is extended to remove MS-Access style
+** brackets from around identifiers.  For example:  "[a-b-c]" becomes
 ** "a-b-c".
 */
 void sqlite3Dequote(char *z){
-  int quote;
+  char quote;
   int i, j;
   if( z==0 ) return;
   quote = z[0];
-  switch( quote ){
-    case '\'':  break;
-    case '"':   break;
-    case '`':   break;                /* For MySQL compatibility */
-    case '[':   quote = ']';  break;  /* For MS SqlServer compatibility */
-    default:    return;
-  }
-  for(i=1, j=0; z[i]; i++){
+  if( !sqlite3Isquote(quote) ) return;
+  if( quote=='[' ) quote = ']';
+  for(i=1, j=0;; i++){
+    assert( z[i] );
     if( z[i]==quote ){
       if( z[i+1]==quote ){
         z[j++] = quote;
         i++;
       }else{
-        z[j++] = 0;
         break;
       }
     }else{
       z[j++] = z[i];
     }
   }
+  z[j] = 0;
+}
+void sqlite3DequoteExpr(Expr *p){
+  assert( !ExprHasProperty(p, EP_IntValue) );
+  assert( sqlite3Isquote(p->u.zToken[0]) );
+  p->flags |= p->u.zToken[0]=='"' ? EP_Quoted|EP_DblQuoted : EP_Quoted;
+  sqlite3Dequote(p->u.zToken);
 }
 
-/* An array to map all upper-case characters into their corresponding
-** lower-case character. 
+/*
+** Expression p is a QNUMBER (quoted number). Dequote the value in p->u.zToken
+** and set the type to INTEGER or FLOAT. "Quoted" integers or floats are those
+** that contain '_' characters that must be removed before further processing.
 */
-const unsigned char sqlite3UpperToLower[] = {
-      0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
-     18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
-     36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,
-     54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 97, 98, 99,100,101,102,103,
-    104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,
-    122, 91, 92, 93, 94, 95, 96, 97, 98, 99,100,101,102,103,104,105,106,107,
-    108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,
-    126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,
-    144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,
-    162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,
-    180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,
-    198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,
-    216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,
-    234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,
-    252,253,254,255
-};
+void sqlite3DequoteNumber(Parse *pParse, Expr *p){
+  assert( p!=0 || pParse->db->mallocFailed );
+  if( p ){
+    const char *pIn = p->u.zToken;
+    char *pOut = p->u.zToken;
+    int bHex = (pIn[0]=='0' && (pIn[1]=='x' || pIn[1]=='X'));
+    int iValue;
+    assert( p->op==TK_QNUMBER );
+    p->op = TK_INTEGER;
+    do {
+      if( *pIn!=SQLITE_DIGIT_SEPARATOR ){
+        *pOut++ = *pIn;
+        if( *pIn=='e' || *pIn=='E' || *pIn=='.' ) p->op = TK_FLOAT;
+      }else{
+        if( (bHex==0 && (!sqlite3Isdigit(pIn[-1]) || !sqlite3Isdigit(pIn[1])))
+         || (bHex==1 && (!sqlite3Isxdigit(pIn[-1]) || !sqlite3Isxdigit(pIn[1])))
+        ){
+          sqlite3ErrorMsg(pParse, "unrecognized token: \"%s\"", p->u.zToken);
+        }
+      }
+    }while( *pIn++ );
+    if( bHex ) p->op = TK_INTEGER;
+
+    /* tag-20240227-a: If after dequoting, the number is an integer that
+    ** fits in 32 bits, then it must be converted into EP_IntValue.  Other
+    ** parts of the code expect this.  See also tag-20240227-b. */
+    if( p->op==TK_INTEGER && sqlite3GetInt32(p->u.zToken, &iValue) ){
+      p->u.iValue = iValue;
+      p->flags |= EP_IntValue;
+    }
+  }
+}
+
+/*
+** If the input token p is quoted, try to adjust the token to remove
+** the quotes.  This is not always possible:
+**
+**     "abc"     ->   abc
+**     "ab""cd"  ->   (not possible because of the interior "")
+**
+** Remove the quotes if possible.  This is a optimization.  The overall
+** system should still return the correct answer even if this routine
+** is always a no-op.
+*/
+void sqlite3DequoteToken(Token *p){
+  unsigned int i;
+  if( p->n<2 ) return;
+  if( !sqlite3Isquote(p->z[0]) ) return;
+  for(i=1; i<p->n-1; i++){
+    if( sqlite3Isquote(p->z[i]) ) return;
+  }
+  p->n -= 2;
+  p->z++;
+}
+
+/*
+** Generate a Token object from a string
+*/
+void sqlite3TokenInit(Token *p, char *z){
+  p->z = z;
+  p->n = sqlite3Strlen30(z);
+}
+
+/* Convenient short-hand */
 #define UpperToLower sqlite3UpperToLower
 
 /*
 ** Some systems have stricmp().  Others have strcasecmp().  Because
 ** there is no consistency, we will define our own.
+**
+** IMPLEMENTATION-OF: R-30243-02494 The sqlite3_stricmp() and
+** sqlite3_strnicmp() APIs allow applications and extensions to compare
+** the contents of two buffers containing UTF-8 strings in a
+** case-independent fashion, using the same definition of "case
+** independence" that SQLite uses internally when comparing identifiers.
 */
+int sqlite3_stricmp(const char *zLeft, const char *zRight){
+  if( zLeft==0 ){
+    return zRight ? -1 : 0;
+  }else if( zRight==0 ){
+    return 1;
+  }
+  return sqlite3StrICmp(zLeft, zRight);
+}
 int sqlite3StrICmp(const char *zLeft, const char *zRight){
-  register unsigned char *a, *b;
+  unsigned char *a, *b;
+  int c, x;
   a = (unsigned char *)zLeft;
   b = (unsigned char *)zRight;
-  while( *a!=0 && UpperToLower[*a]==UpperToLower[*b]){ a++; b++; }
-  return UpperToLower[*a] - UpperToLower[*b];
+  for(;;){
+    c = *a;
+    x = *b;
+    if( c==x ){
+      if( c==0 ) break;
+    }else{
+      c = (int)UpperToLower[c] - (int)UpperToLower[x];
+      if( c ) break;
+    }
+    a++;
+    b++;
+  }
+  return c;
 }
-int sqlite3StrNICmp(const char *zLeft, const char *zRight, int N){
+int sqlite3_strnicmp(const char *zLeft, const char *zRight, int N){
   register unsigned char *a, *b;
+  if( zLeft==0 ){
+    return zRight ? -1 : 0;
+  }else if( zRight==0 ){
+    return 1;
+  }
   a = (unsigned char *)zLeft;
   b = (unsigned char *)zRight;
   while( N-- > 0 && *a!=0 && UpperToLower[*a]==UpperToLower[*b]){ a++; b++; }
@@ -818,251 +446,713 @@ int sqlite3StrNICmp(const char *zLeft, const char *zRight, int N){
 }
 
 /*
-** Return TRUE if z is a pure numeric string.  Return FALSE if the
-** string contains any character which is not part of a number. If
-** the string is numeric and contains the '.' character, set *realnum
-** to TRUE (otherwise FALSE).
-**
-** An empty string is considered non-numeric.
+** Compute an 8-bit hash on a string that is insensitive to case differences
 */
-int sqlite3IsNumber(const char *z, int *realnum, u8 enc){
-  int incr = (enc==SQLITE_UTF8?1:2);
-  if( enc==SQLITE_UTF16BE ) z++;
-  if( *z=='-' || *z=='+' ) z += incr;
-  if( !isdigit(*(u8*)z) ){
-    return 0;
+u8 sqlite3StrIHash(const char *z){
+  u8 h = 0;
+  if( z==0 ) return 0;
+  while( z[0] ){
+    h += UpperToLower[(unsigned char)z[0]];
+    z++;
   }
-  z += incr;
-  if( realnum ) *realnum = 0;
-  while( isdigit(*(u8*)z) ){ z += incr; }
-  if( *z=='.' ){
-    z += incr;
-    if( !isdigit(*(u8*)z) ) return 0;
-    while( isdigit(*(u8*)z) ){ z += incr; }
-    if( realnum ) *realnum = 1;
-  }
-  if( *z=='e' || *z=='E' ){
-    z += incr;
-    if( *z=='+' || *z=='-' ) z += incr;
-    if( !isdigit(*(u8*)z) ) return 0;
-    while( isdigit(*(u8*)z) ){ z += incr; }
-    if( realnum ) *realnum = 1;
-  }
-  return *z==0;
+  return h;
+}
+
+/* Double-Double multiplication.  (x[0],x[1]) *= (y,yy)
+**
+** Reference:
+**   T. J. Dekker, "A Floating-Point Technique for Extending the
+**   Available Precision".  1971-07-26.
+*/
+static void dekkerMul2(volatile double *x, double y, double yy){
+  /*
+  ** The "volatile" keywords on parameter x[] and on local variables
+  ** below are needed force intermediate results to be truncated to
+  ** binary64 rather than be carried around in an extended-precision
+  ** format.  The truncation is necessary for the Dekker algorithm to
+  ** work.  Intel x86 floating point might omit the truncation without
+  ** the use of volatile. 
+  */
+  volatile double tx, ty, p, q, c, cc;
+  double hx, hy;
+  u64 m;
+  memcpy(&m, (void*)&x[0], 8);
+  m &= 0xfffffffffc000000LL;
+  memcpy(&hx, &m, 8);
+  tx = x[0] - hx;
+  memcpy(&m, &y, 8);
+  m &= 0xfffffffffc000000LL;
+  memcpy(&hy, &m, 8);
+  ty = y - hy;
+  p = hx*hy;
+  q = hx*ty + tx*hy;
+  c = p+q;
+  cc = p - c + q + tx*ty;
+  cc = x[0]*yy + x[1]*y + cc;
+  x[0] = c + cc;
+  x[1] = c - x[0];
+  x[1] += cc;
 }
 
 /*
-** The string z[] is an ascii representation of a real number.
-** Convert this string to a double.
+** The string z[] is an text representation of a real number.
+** Convert this string to a double and write it into *pResult.
 **
-** This routine assumes that z[] really is a valid number.  If it
-** is not, the result is undefined.
+** The string z[] is length bytes in length (bytes, not characters) and
+** uses the encoding enc.  The string is not necessarily zero-terminated.
 **
-** This routine is used instead of the library atof() function because
-** the library atof() might want to use "," as the decimal point instead
-** of "." depending on how locale is set.  But that would cause problems
-** for SQL.  So this routine always uses "." regardless of locale.
+** Return TRUE if the result is a valid real number (or integer) and FALSE
+** if the string is empty or contains extraneous text.  More specifically
+** return
+**      1          =>  The input string is a pure integer
+**      2 or more  =>  The input has a decimal point or eNNN clause
+**      0 or less  =>  The input string is not a valid number
+**     -1          =>  Not a valid number, but has a valid prefix which
+**                     includes a decimal point and/or an eNNN clause
+**
+** Valid numbers are in one of these formats:
+**
+**    [+-]digits[E[+-]digits]
+**    [+-]digits.[digits][E[+-]digits]
+**    [+-].digits[E[+-]digits]
+**
+** Leading and trailing whitespace is ignored for the purpose of determining
+** validity.
+**
+** If some prefix of the input string is a valid number, this routine
+** returns FALSE but it still converts the prefix and writes the result
+** into *pResult.
 */
-int sqlite3AtoF(const char *z, double *pResult){
+#if defined(_MSC_VER)
+#pragma warning(disable : 4756)
+#endif
+int sqlite3AtoF(const char *z, double *pResult, int length, u8 enc){
 #ifndef SQLITE_OMIT_FLOATING_POINT
-  int sign = 1;
-  const char *zBegin = z;
-  LONGDOUBLE_TYPE v1 = 0.0;
+  int incr;
+  const char *zEnd;
+  /* sign * significand * (10 ^ (esign * exponent)) */
+  int sign = 1;    /* sign of significand */
+  u64 s = 0;       /* significand */
+  int d = 0;       /* adjust exponent for shifting decimal point */
+  int esign = 1;   /* sign of exponent */
+  int e = 0;       /* exponent */
+  int eValid = 1;  /* True exponent is either not used or is well-formed */
+  int nDigit = 0;  /* Number of digits processed */
+  int eType = 1;   /* 1: pure integer,  2+: fractional  -1 or less: bad UTF16 */
+  u64 s2;          /* round-tripped significand */
+  double rr[2];
+
+  assert( enc==SQLITE_UTF8 || enc==SQLITE_UTF16LE || enc==SQLITE_UTF16BE );
+  *pResult = 0.0;   /* Default return value, in case of an error */
+  if( length==0 ) return 0;
+
+  if( enc==SQLITE_UTF8 ){
+    incr = 1;
+    zEnd = z + length;
+  }else{
+    int i;
+    incr = 2;
+    length &= ~1;
+    assert( SQLITE_UTF16LE==2 && SQLITE_UTF16BE==3 );
+    testcase( enc==SQLITE_UTF16LE );
+    testcase( enc==SQLITE_UTF16BE );
+    for(i=3-enc; i<length && z[i]==0; i+=2){}
+    if( i<length ) eType = -100;
+    zEnd = &z[i^1];
+    z += (enc&1);
+  }
+
+  /* skip leading spaces */
+  while( z<zEnd && sqlite3Isspace(*z) ) z+=incr;
+  if( z>=zEnd ) return 0;
+
+  /* get sign of significand */
   if( *z=='-' ){
     sign = -1;
-    z++;
+    z+=incr;
   }else if( *z=='+' ){
-    z++;
+    z+=incr;
   }
-  while( isdigit(*(u8*)z) ){
-    v1 = v1*10.0 + (*z - '0');
-    z++;
-  }
-  if( *z=='.' ){
-    LONGDOUBLE_TYPE divisor = 1.0;
-    z++;
-    while( isdigit(*(u8*)z) ){
-      v1 = v1*10.0 + (*z - '0');
-      divisor *= 10.0;
-      z++;
+
+  /* copy max significant digits to significand */
+  while( z<zEnd && sqlite3Isdigit(*z) ){
+    s = s*10 + (*z - '0');
+    z+=incr; nDigit++;
+    if( s>=((LARGEST_UINT64-9)/10) ){
+      /* skip non-significant significand digits
+      ** (increase exponent by d to shift decimal left) */
+      while( z<zEnd && sqlite3Isdigit(*z) ){ z+=incr; d++; }
     }
-    v1 /= divisor;
   }
+  if( z>=zEnd ) goto do_atof_calc;
+
+  /* if decimal point is present */
+  if( *z=='.' ){
+    z+=incr;
+    eType++;
+    /* copy digits from after decimal to significand
+    ** (decrease exponent by d to shift decimal right) */
+    while( z<zEnd && sqlite3Isdigit(*z) ){
+      if( s<((LARGEST_UINT64-9)/10) ){
+        s = s*10 + (*z - '0');
+        d--;
+        nDigit++;
+      }
+      z+=incr;
+    }
+  }
+  if( z>=zEnd ) goto do_atof_calc;
+
+  /* if exponent is present */
   if( *z=='e' || *z=='E' ){
-    int esign = 1;
-    int eval = 0;
-    LONGDOUBLE_TYPE scale = 1.0;
-    z++;
+    z+=incr;
+    eValid = 0;
+    eType++;
+
+    /* This branch is needed to avoid a (harmless) buffer overread.  The
+    ** special comment alerts the mutation tester that the correct answer
+    ** is obtained even if the branch is omitted */
+    if( z>=zEnd ) goto do_atof_calc;              /*PREVENTS-HARMLESS-OVERREAD*/
+
+    /* get sign of exponent */
     if( *z=='-' ){
       esign = -1;
-      z++;
+      z+=incr;
     }else if( *z=='+' ){
-      z++;
+      z+=incr;
     }
-    while( isdigit(*(u8*)z) ){
-      eval = eval*10 + *z - '0';
-      z++;
-    }
-    while( eval>=64 ){ scale *= 1.0e+64; eval -= 64; }
-    while( eval>=16 ){ scale *= 1.0e+16; eval -= 16; }
-    while( eval>=4 ){ scale *= 1.0e+4; eval -= 4; }
-    while( eval>=1 ){ scale *= 1.0e+1; eval -= 1; }
-    if( esign<0 ){
-      v1 /= scale;
-    }else{
-      v1 *= scale;
+    /* copy digits to exponent */
+    while( z<zEnd && sqlite3Isdigit(*z) ){
+      e = e<10000 ? (e*10 + (*z - '0')) : 10000;
+      z+=incr;
+      eValid = 1;
     }
   }
-  *pResult = sign<0 ? -v1 : v1;
-  return z - zBegin;
+
+  /* skip trailing spaces */
+  while( z<zEnd && sqlite3Isspace(*z) ) z+=incr;
+
+do_atof_calc:
+  /* Zero is a special case */
+  if( s==0 ){
+    *pResult = sign<0 ? -0.0 : +0.0;
+    goto atof_return;
+  }
+
+  /* adjust exponent by d, and update sign */
+  e = (e*esign) + d;
+
+  /* Try to adjust the exponent to make it smaller */
+  while( e>0 && s<((LARGEST_UINT64-0x7ff)/10) ){
+    s *= 10;
+    e--;
+  }
+  while( e<0 && (s%10)==0 ){
+    s /= 10;
+    e++;
+  }
+
+  rr[0] = (double)s;
+  assert( sizeof(s2)==sizeof(rr[0]) );
+#ifdef SQLITE_DEBUG
+  rr[1] = 18446744073709549568.0;
+  memcpy(&s2, &rr[1], sizeof(s2));
+  assert( s2==0x43efffffffffffffLL );
+#endif
+  /* Largest double that can be safely converted to u64
+  **         vvvvvvvvvvvvvvvvvvvvvv   */
+  if( rr[0]<=18446744073709549568.0 ){
+    s2 = (u64)rr[0];
+    rr[1] = s>=s2 ? (double)(s - s2) : -(double)(s2 - s);
+  }else{
+    rr[1] = 0.0;
+  }
+  assert( rr[1]<=1.0e-10*rr[0] );  /* Equal only when rr[0]==0.0 */
+  
+  if( e>0 ){
+    while( e>=100  ){
+      e -= 100;
+      dekkerMul2(rr, 1.0e+100, -1.5902891109759918046e+83);
+    }
+    while( e>=10   ){
+      e -= 10;
+      dekkerMul2(rr, 1.0e+10, 0.0);
+    }
+    while( e>=1    ){
+      e -= 1;
+      dekkerMul2(rr, 1.0e+01, 0.0);
+    }
+  }else{
+    while( e<=-100 ){
+      e += 100;
+      dekkerMul2(rr, 1.0e-100, -1.99918998026028836196e-117);
+    }
+    while( e<=-10  ){
+      e += 10;
+      dekkerMul2(rr, 1.0e-10, -3.6432197315497741579e-27);
+    }
+    while( e<=-1   ){
+      e += 1;
+      dekkerMul2(rr, 1.0e-01, -5.5511151231257827021e-18);
+    }
+  }
+  *pResult = rr[0]+rr[1];
+  if( sqlite3IsNaN(*pResult) ) *pResult = 1e300*1e300;
+  if( sign<0 ) *pResult = -*pResult;
+  assert( !sqlite3IsNaN(*pResult) );
+
+atof_return:
+  /* return true if number and no extra non-whitespace characters after */
+  if( z==zEnd && nDigit>0 && eValid && eType>0 ){
+    return eType;
+  }else if( eType>=2 && (eType==3 || eValid) && nDigit>0 ){
+    return -1;
+  }else{
+    return 0;
+  }
 #else
-  return sqlite3atoi64(z, pResult);
+  return !sqlite3Atoi64(z, pResult, length, enc);
 #endif /* SQLITE_OMIT_FLOATING_POINT */
 }
+#if defined(_MSC_VER)
+#pragma warning(default : 4756)
+#endif
 
 /*
-** Return TRUE if zNum is a 64-bit signed integer and write
-** the value of the integer into *pNum.  If zNum is not an integer
-** or is an integer that is too large to be expressed with 64 bits,
-** then return false.  If n>0 and the integer is string is not
-** exactly n bytes long, return false.
+** Render an signed 64-bit integer as text.  Store the result in zOut[] and
+** return the length of the string that was stored, in bytes.  The value
+** returned does not include the zero terminator at the end of the output
+** string.
 **
-** When this routine was originally written it dealt with only
-** 32-bit numbers.  At that time, it was much faster than the
-** atoi() library routine in RedHat 7.2.
+** The caller must ensure that zOut[] is at least 21 bytes in size.
 */
-int sqlite3atoi64(const char *zNum, i64 *pNum){
-  i64 v = 0;
-  int neg;
-  int i, c;
-  if( *zNum=='-' ){
-    neg = 1;
-    zNum++;
-  }else if( *zNum=='+' ){
-    neg = 0;
-    zNum++;
+int sqlite3Int64ToText(i64 v, char *zOut){
+  int i;
+  u64 x;
+  char zTemp[22];
+  if( v<0 ){
+    x = (v==SMALLEST_INT64) ? ((u64)1)<<63 : (u64)-v;
   }else{
-    neg = 0;
+    x = v;
   }
-  for(i=0; (c=zNum[i])>='0' && c<='9'; i++){
-    v = v*10 + c - '0';
-  }
-  *pNum = neg ? -v : v;
-  return c==0 && i>0 && 
-      (i<19 || (i==19 && memcmp(zNum,"9223372036854775807",19)<=0));
+  i = sizeof(zTemp)-2;
+  zTemp[sizeof(zTemp)-1] = 0;
+  while( 1 /*exit-by-break*/ ){
+    zTemp[i] = (x%10) + '0';
+    x = x/10;
+    if( x==0 ) break;
+    i--;
+  };
+  if( v<0 ) zTemp[--i] = '-';
+  memcpy(zOut, &zTemp[i], sizeof(zTemp)-i);
+  return sizeof(zTemp)-1-i;
 }
 
 /*
-** The string zNum represents an integer.  There might be some other
-** information following the integer too, but that part is ignored.
-** If the integer that the prefix of zNum represents will fit in a
-** 32-bit signed integer, return TRUE.  Otherwise return FALSE.
+** Compare the 19-character string zNum against the text representation
+** value 2^63:  9223372036854775808.  Return negative, zero, or positive
+** if zNum is less than, equal to, or greater than the string.
+** Note that zNum must contain exactly 19 characters.
 **
-** This routine returns FALSE for the string -2147483648 even that
-** that number will in fact fit in a 32-bit integer.  But positive
-** 2147483648 will not fit in 32 bits.  So it seems safer to return
-** false.
+** Unlike memcmp() this routine is guaranteed to return the difference
+** in the values of the last digit if the only difference is in the
+** last digit.  So, for example,
+**
+**      compare2pow63("9223372036854775800", 1)
+**
+** will return -8.
 */
-static int sqlite3FitsIn32Bits(const char *zNum){
-  int i, c;
-  if( *zNum=='-' || *zNum=='+' ) zNum++;
-  for(i=0; (c=zNum[i])>='0' && c<='9'; i++){}
-  return i<10 || (i==10 && memcmp(zNum,"2147483647",10)<=0);
+static int compare2pow63(const char *zNum, int incr){
+  int c = 0;
+  int i;
+                    /* 012345678901234567 */
+  const char *pow63 = "922337203685477580";
+  for(i=0; c==0 && i<18; i++){
+    c = (zNum[i*incr]-pow63[i])*10;
+  }
+  if( c==0 ){
+    c = zNum[18*incr] - '8';
+    testcase( c==(-1) );
+    testcase( c==0 );
+    testcase( c==(+1) );
+  }
+  return c;
+}
+
+/*
+** Convert zNum to a 64-bit signed integer.  zNum must be decimal. This
+** routine does *not* accept hexadecimal notation.
+**
+** Returns:
+**
+**    -1    Not even a prefix of the input text looks like an integer
+**     0    Successful transformation.  Fits in a 64-bit signed integer.
+**     1    Excess non-space text after the integer value
+**     2    Integer too large for a 64-bit signed integer or is malformed
+**     3    Special case of 9223372036854775808
+**
+** length is the number of bytes in the string (bytes, not characters).
+** The string is not necessarily zero-terminated.  The encoding is
+** given by enc.
+*/
+int sqlite3Atoi64(const char *zNum, i64 *pNum, int length, u8 enc){
+  int incr;
+  u64 u = 0;
+  int neg = 0; /* assume positive */
+  int i;
+  int c = 0;
+  int nonNum = 0;  /* True if input contains UTF16 with high byte non-zero */
+  int rc;          /* Baseline return code */
+  const char *zStart;
+  const char *zEnd = zNum + length;
+  assert( enc==SQLITE_UTF8 || enc==SQLITE_UTF16LE || enc==SQLITE_UTF16BE );
+  if( enc==SQLITE_UTF8 ){
+    incr = 1;
+  }else{
+    incr = 2;
+    length &= ~1;
+    assert( SQLITE_UTF16LE==2 && SQLITE_UTF16BE==3 );
+    for(i=3-enc; i<length && zNum[i]==0; i+=2){}
+    nonNum = i<length;
+    zEnd = &zNum[i^1];
+    zNum += (enc&1);
+  }
+  while( zNum<zEnd && sqlite3Isspace(*zNum) ) zNum+=incr;
+  if( zNum<zEnd ){
+    if( *zNum=='-' ){
+      neg = 1;
+      zNum+=incr;
+    }else if( *zNum=='+' ){
+      zNum+=incr;
+    }
+  }
+  zStart = zNum;
+  while( zNum<zEnd && zNum[0]=='0' ){ zNum+=incr; } /* Skip leading zeros. */
+  for(i=0; &zNum[i]<zEnd && (c=zNum[i])>='0' && c<='9'; i+=incr){
+    u = u*10 + c - '0';
+  }
+  testcase( i==18*incr );
+  testcase( i==19*incr );
+  testcase( i==20*incr );
+  if( u>LARGEST_INT64 ){
+    /* This test and assignment is needed only to suppress UB warnings
+    ** from clang and -fsanitize=undefined.  This test and assignment make
+    ** the code a little larger and slower, and no harm comes from omitting
+    ** them, but we must appease the undefined-behavior pharisees. */
+    *pNum = neg ? SMALLEST_INT64 : LARGEST_INT64;
+  }else if( neg ){
+    *pNum = -(i64)u;
+  }else{
+    *pNum = (i64)u;
+  }
+  rc = 0;
+  if( i==0 && zStart==zNum ){    /* No digits */
+    rc = -1;
+  }else if( nonNum ){            /* UTF16 with high-order bytes non-zero */
+    rc = 1;
+  }else if( &zNum[i]<zEnd ){     /* Extra bytes at the end */
+    int jj = i;
+    do{
+      if( !sqlite3Isspace(zNum[jj]) ){
+        rc = 1;          /* Extra non-space text after the integer */
+        break;
+      }
+      jj += incr;
+    }while( &zNum[jj]<zEnd );
+  }
+  if( i<19*incr ){
+    /* Less than 19 digits, so we know that it fits in 64 bits */
+    assert( u<=LARGEST_INT64 );
+    return rc;
+  }else{
+    /* zNum is a 19-digit numbers.  Compare it against 9223372036854775808. */
+    c = i>19*incr ? 1 : compare2pow63(zNum, incr);
+    if( c<0 ){
+      /* zNum is less than 9223372036854775808 so it fits */
+      assert( u<=LARGEST_INT64 );
+      return rc;
+    }else{
+      *pNum = neg ? SMALLEST_INT64 : LARGEST_INT64;
+      if( c>0 ){
+        /* zNum is greater than 9223372036854775808 so it overflows */
+        return 2;
+      }else{
+        /* zNum is exactly 9223372036854775808.  Fits if negative.  The
+        ** special case 2 overflow if positive */
+        assert( u-1==LARGEST_INT64 );
+        return neg ? rc : 3;
+      }
+    }
+  }
+}
+
+/*
+** Transform a UTF-8 integer literal, in either decimal or hexadecimal,
+** into a 64-bit signed integer.  This routine accepts hexadecimal literals,
+** whereas sqlite3Atoi64() does not.
+**
+** Returns:
+**
+**     0    Successful transformation.  Fits in a 64-bit signed integer.
+**     1    Excess text after the integer value
+**     2    Integer too large for a 64-bit signed integer or is malformed
+**     3    Special case of 9223372036854775808
+*/
+int sqlite3DecOrHexToI64(const char *z, i64 *pOut){
+#ifndef SQLITE_OMIT_HEX_INTEGER
+  if( z[0]=='0'
+   && (z[1]=='x' || z[1]=='X')
+  ){
+    u64 u = 0;
+    int i, k;
+    for(i=2; z[i]=='0'; i++){}
+    for(k=i; sqlite3Isxdigit(z[k]); k++){
+      u = u*16 + sqlite3HexToInt(z[k]);
+    }
+    memcpy(pOut, &u, 8);
+    if( k-i>16 ) return 2;
+    if( z[k]!=0 ) return 1;
+    return 0;
+  }else
+#endif /* SQLITE_OMIT_HEX_INTEGER */
+  {
+    int n = (int)(0x3fffffff&strspn(z,"+- \n\t0123456789"));
+    if( z[n] ) n++;
+    return sqlite3Atoi64(z, pOut, n, SQLITE_UTF8);
+  }
 }
 
 /*
 ** If zNum represents an integer that will fit in 32-bits, then set
 ** *pValue to that integer and return true.  Otherwise return false.
+**
+** This routine accepts both decimal and hexadecimal notation for integers.
+**
+** Any non-numeric characters that following zNum are ignored.
+** This is different from sqlite3Atoi64() which requires the
+** input number to be zero-terminated.
 */
 int sqlite3GetInt32(const char *zNum, int *pValue){
-  if( sqlite3FitsIn32Bits(zNum) ){
-    *pValue = atoi(zNum);
-    return 1;
-  }
-  return 0;
-}
-
-/*
-** The string zNum represents an integer.  There might be some other
-** information following the integer too, but that part is ignored.
-** If the integer that the prefix of zNum represents will fit in a
-** 64-bit signed integer, return TRUE.  Otherwise return FALSE.
-**
-** This routine returns FALSE for the string -9223372036854775808 even that
-** that number will, in theory fit in a 64-bit integer.  Positive
-** 9223373036854775808 will not fit in 64 bits.  So it seems safer to return
-** false.
-*/
-int sqlite3FitsIn64Bits(const char *zNum){
+  sqlite_int64 v = 0;
   int i, c;
-  if( *zNum=='-' || *zNum=='+' ) zNum++;
-  for(i=0; (c=zNum[i])>='0' && c<='9'; i++){}
-  return i<19 || (i==19 && memcmp(zNum,"9223372036854775807",19)<=0);
-}
-
-
-/*
-** Change the sqlite.magic from SQLITE_MAGIC_OPEN to SQLITE_MAGIC_BUSY.
-** Return an error (non-zero) if the magic was not SQLITE_MAGIC_OPEN
-** when this routine is called.
-**
-** This routine is a attempt to detect if two threads use the
-** same sqlite* pointer at the same time.  There is a race 
-** condition so it is possible that the error is not detected.
-** But usually the problem will be seen.  The result will be an
-** error which can be used to debug the application that is
-** using SQLite incorrectly.
-**
-** Ticket #202:  If db->magic is not a valid open value, take care not
-** to modify the db structure at all.  It could be that db is a stale
-** pointer.  In other words, it could be that there has been a prior
-** call to sqlite3_close(db) and db has been deallocated.  And we do
-** not want to write into deallocated memory.
-*/
-int sqlite3SafetyOn(sqlite3 *db){
-  if( db->magic==SQLITE_MAGIC_OPEN ){
-    db->magic = SQLITE_MAGIC_BUSY;
-    return 0;
-  }else if( db->magic==SQLITE_MAGIC_BUSY ){
-    db->magic = SQLITE_MAGIC_ERROR;
-    db->flags |= SQLITE_Interrupt;
+  int neg = 0;
+  if( zNum[0]=='-' ){
+    neg = 1;
+    zNum++;
+  }else if( zNum[0]=='+' ){
+    zNum++;
   }
+#ifndef SQLITE_OMIT_HEX_INTEGER
+  else if( zNum[0]=='0'
+        && (zNum[1]=='x' || zNum[1]=='X')
+        && sqlite3Isxdigit(zNum[2])
+  ){
+    u32 u = 0;
+    zNum += 2;
+    while( zNum[0]=='0' ) zNum++;
+    for(i=0; i<8 && sqlite3Isxdigit(zNum[i]); i++){
+      u = u*16 + sqlite3HexToInt(zNum[i]);
+    }
+    if( (u&0x80000000)==0 && sqlite3Isxdigit(zNum[i])==0 ){
+      memcpy(pValue, &u, 4);
+      return 1;
+    }else{
+      return 0;
+    }
+  }
+#endif
+  if( !sqlite3Isdigit(zNum[0]) ) return 0;
+  while( zNum[0]=='0' ) zNum++;
+  for(i=0; i<11 && (c = zNum[i] - '0')>=0 && c<=9; i++){
+    v = v*10 + c;
+  }
+
+  /* The longest decimal representation of a 32 bit integer is 10 digits:
+  **
+  **             1234567890
+  **     2^31 -> 2147483648
+  */
+  testcase( i==10 );
+  if( i>10 ){
+    return 0;
+  }
+  testcase( v-neg==2147483647 );
+  if( v-neg>2147483647 ){
+    return 0;
+  }
+  if( neg ){
+    v = -v;
+  }
+  *pValue = (int)v;
   return 1;
 }
 
 /*
-** Change the magic from SQLITE_MAGIC_BUSY to SQLITE_MAGIC_OPEN.
-** Return an error (non-zero) if the magic was not SQLITE_MAGIC_BUSY
-** when this routine is called.
+** Return a 32-bit integer value extracted from a string.  If the
+** string is not an integer, just return 0.
 */
-int sqlite3SafetyOff(sqlite3 *db){
-  if( db->magic==SQLITE_MAGIC_BUSY ){
-    db->magic = SQLITE_MAGIC_OPEN;
-    return 0;
-  }else if( db->magic==SQLITE_MAGIC_OPEN ){
-    db->magic = SQLITE_MAGIC_ERROR;
-    db->flags |= SQLITE_Interrupt;
-  }
-  return 1;
+int sqlite3Atoi(const char *z){
+  int x = 0;
+  sqlite3GetInt32(z, &x);
+  return x;
 }
 
 /*
-** Check to make sure we have a valid db pointer.  This test is not
-** foolproof but it does provide some measure of protection against
-** misuse of the interface such as passing in db pointers that are
-** NULL or which have been previously closed.  If this routine returns
-** TRUE it means that the db pointer is invalid and should not be
-** dereferenced for any reason.  The calling function should invoke
-** SQLITE_MISUSE immediately.
+** Decode a floating-point value into an approximate decimal
+** representation.
+**
+** If iRound<=0 then round to -iRound significant digits to the
+** the left of the decimal point, or to a maximum of mxRound total
+** significant digits.
+**
+** If iRound>0 round to min(iRound,mxRound) significant digits total.
+**
+** mxRound must be positive.
+**
+** The significant digits of the decimal representation are
+** stored in p->z[] which is a often (but not always) a pointer
+** into the middle of p->zBuf[].  There are p->n significant digits.
+** The p->z[] array is *not* zero-terminated.
 */
-int sqlite3SafetyCheck(sqlite3 *db){
-  int magic;
-  if( db==0 ) return 1;
-  magic = db->magic;
-  if( magic!=SQLITE_MAGIC_CLOSED &&
-         magic!=SQLITE_MAGIC_OPEN &&
-         magic!=SQLITE_MAGIC_BUSY ) return 1;
-  return 0;
+void sqlite3FpDecode(FpDecode *p, double r, int iRound, int mxRound){
+  int i;
+  u64 v;
+  int e, exp = 0;
+  double rr[2];
+
+  p->isSpecial = 0;
+  p->z = p->zBuf;
+  assert( mxRound>0 );
+
+  /* Convert negative numbers to positive.  Deal with Infinity, 0.0, and
+  ** NaN. */
+  if( r<0.0 ){
+    p->sign = '-';
+    r = -r;
+  }else if( r==0.0 ){
+    p->sign = '+';
+    p->n = 1;
+    p->iDP = 1;
+    p->z = "0";
+    return;
+  }else{
+    p->sign = '+';
+  }
+  memcpy(&v,&r,8);
+  e = v>>52;
+  if( (e&0x7ff)==0x7ff ){
+    p->isSpecial = 1 + (v!=0x7ff0000000000000LL);
+    p->n = 0;
+    p->iDP = 0;
+    return;
+  }
+
+  /* Multiply r by powers of ten until it lands somewhere in between
+  ** 1.0e+19 and 1.0e+17.
+  **
+  ** Use Dekker-style double-double computation to increase the
+  ** precision.
+  **
+  ** The error terms on constants like 1.0e+100 computed using the
+  ** decimal extension, for example as follows:
+  **
+  **   SELECT decimal_exp(decimal_sub('1.0e+100',decimal(1.0e+100)));
+  */
+  rr[0] = r;
+  rr[1] = 0.0;
+  if( rr[0]>9.223372036854774784e+18 ){
+    while( rr[0]>9.223372036854774784e+118 ){
+      exp += 100;
+      dekkerMul2(rr, 1.0e-100, -1.99918998026028836196e-117);
+    }
+    while( rr[0]>9.223372036854774784e+28 ){
+      exp += 10;
+      dekkerMul2(rr, 1.0e-10, -3.6432197315497741579e-27);
+    }
+    while( rr[0]>9.223372036854774784e+18 ){
+      exp += 1;
+      dekkerMul2(rr, 1.0e-01, -5.5511151231257827021e-18);
+    }
+  }else{
+    while( rr[0]<9.223372036854774784e-83  ){
+      exp -= 100;
+      dekkerMul2(rr, 1.0e+100, -1.5902891109759918046e+83);
+    }
+    while( rr[0]<9.223372036854774784e+07  ){
+      exp -= 10;
+      dekkerMul2(rr, 1.0e+10, 0.0);
+    }
+    while( rr[0]<9.22337203685477478e+17  ){
+      exp -= 1;
+      dekkerMul2(rr, 1.0e+01, 0.0);
+    }
+  }
+  v = rr[1]<0.0 ? (u64)rr[0]-(u64)(-rr[1]) : (u64)rr[0]+(u64)rr[1];
+
+  /* Extract significant digits. */
+  i = sizeof(p->zBuf)-1;
+  assert( v>0 );
+  while( v ){  p->zBuf[i--] = (v%10) + '0'; v /= 10; }
+  assert( i>=0 && i<sizeof(p->zBuf)-1 );
+  p->n = sizeof(p->zBuf) - 1 - i;
+  assert( p->n>0 );
+  assert( p->n<sizeof(p->zBuf) );
+  p->iDP = p->n + exp;
+  if( iRound<=0 ){
+    iRound = p->iDP - iRound;
+    if( iRound==0 && p->zBuf[i+1]>='5' ){
+      iRound = 1;
+      p->zBuf[i--] = '0';
+      p->n++;
+      p->iDP++;
+    }
+  }
+  if( iRound>0 && (iRound<p->n || p->n>mxRound) ){
+    char *z = &p->zBuf[i+1];
+    if( iRound>mxRound ) iRound = mxRound;
+    p->n = iRound;
+    if( z[iRound]>='5' ){
+      int j = iRound-1;
+      while( 1 /*exit-by-break*/ ){
+        z[j]++;
+        if( z[j]<='9' ) break;
+        z[j] = '0';
+        if( j==0 ){
+          p->z[i--] = '1';
+          p->n++;
+          p->iDP++;
+          break;
+        }else{
+          j--;
+        }
+      }
+    }
+  }
+  p->z = &p->zBuf[i+1];
+  assert( i+p->n < sizeof(p->zBuf) );
+  assert( p->n>0 );
+  while( p->z[p->n-1]=='0' ){
+    p->n--;
+    assert( p->n>0 );
+  }
+}
+
+/*
+** Try to convert z into an unsigned 32-bit integer.  Return true on
+** success and false if there is an error.
+**
+** Only decimal notation is accepted.
+*/
+int sqlite3GetUInt32(const char *z, u32 *pI){
+  u64 v = 0;
+  int i;
+  for(i=0; sqlite3Isdigit(z[i]); i++){
+    v = v*10 + z[i] - '0';
+    if( v>4294967296LL ){ *pI = 0; return 0; }
+  }
+  if( i==0 || z[i]!=0 ){ *pI = 0; return 0; }
+  *pI = (u32)v;
+  return 1;
 }
 
 /*
@@ -1094,21 +1184,21 @@ int sqlite3SafetyCheck(sqlite3 *db){
 ** bit clear.  Except, if we get to the 9th byte, it stores the full
 ** 8 bits and is the last byte.
 */
-int sqlite3PutVarint(unsigned char *p, u64 v){
+static int SQLITE_NOINLINE putVarint64(unsigned char *p, u64 v){
   int i, j, n;
   u8 buf[10];
   if( v & (((u64)0xff000000)<<32) ){
-    p[8] = v;
+    p[8] = (u8)v;
     v >>= 8;
     for(i=7; i>=0; i--){
-      p[i] = (v & 0x7f) | 0x80;
+      p[i] = (u8)((v & 0x7f) | 0x80);
       v >>= 7;
     }
     return 9;
-  }    
+  }   
   n = 0;
   do{
-    buf[n++] = (v & 0x7f) | 0x80;
+    buf[n++] = (u8)((v & 0x7f) | 0x80);
     v >>= 7;
   }while( v!=0 );
   buf[0] &= 0x7f;
@@ -1118,72 +1208,223 @@ int sqlite3PutVarint(unsigned char *p, u64 v){
   }
   return n;
 }
+int sqlite3PutVarint(unsigned char *p, u64 v){
+  if( v<=0x7f ){
+    p[0] = v&0x7f;
+    return 1;
+  }
+  if( v<=0x3fff ){
+    p[0] = ((v>>7)&0x7f)|0x80;
+    p[1] = v&0x7f;
+    return 2;
+  }
+  return putVarint64(p,v);
+}
+
+/*
+** Bitmasks used by sqlite3GetVarint().  These precomputed constants
+** are defined here rather than simply putting the constant expressions
+** inline in order to work around bugs in the RVT compiler.
+**
+** SLOT_2_0     A mask for  (0x7f<<14) | 0x7f
+**
+** SLOT_4_2_0   A mask for  (0x7f<<28) | SLOT_2_0
+*/
+#define SLOT_2_0     0x001fc07f
+#define SLOT_4_2_0   0xf01fc07f
+
 
 /*
 ** Read a 64-bit variable-length integer from memory starting at p[0].
 ** Return the number of bytes read.  The value is stored in *v.
 */
-int sqlite3GetVarint(const unsigned char *p, u64 *v){
-  u32 x;
-  u64 x64;
-  int n;
-  unsigned char c;
-  if( ((c = p[0]) & 0x80)==0 ){
-    *v = c;
+u8 sqlite3GetVarint(const unsigned char *p, u64 *v){
+  u32 a,b,s;
+
+  if( ((signed char*)p)[0]>=0 ){
+    *v = *p;
     return 1;
   }
-  x = c & 0x7f;
-  if( ((c = p[1]) & 0x80)==0 ){
-    *v = (x<<7) | c;
+  if( ((signed char*)p)[1]>=0 ){
+    *v = ((u32)(p[0]&0x7f)<<7) | p[1];
     return 2;
   }
-  x = (x<<7) | (c&0x7f);
-  if( ((c = p[2]) & 0x80)==0 ){
-    *v = (x<<7) | c;
+
+  /* Verify that constants are precomputed correctly */
+  assert( SLOT_2_0 == ((0x7f<<14) | (0x7f)) );
+  assert( SLOT_4_2_0 == ((0xfU<<28) | (0x7f<<14) | (0x7f)) );
+
+  a = ((u32)p[0])<<14;
+  b = p[1];
+  p += 2;
+  a |= *p;
+  /* a: p0<<14 | p2 (unmasked) */
+  if (!(a&0x80))
+  {
+    a &= SLOT_2_0;
+    b &= 0x7f;
+    b = b<<7;
+    a |= b;
+    *v = a;
     return 3;
   }
-  x = (x<<7) | (c&0x7f);
-  if( ((c = p[3]) & 0x80)==0 ){
-    *v = (x<<7) | c;
+
+  /* CSE1 from below */
+  a &= SLOT_2_0;
+  p++;
+  b = b<<14;
+  b |= *p;
+  /* b: p1<<14 | p3 (unmasked) */
+  if (!(b&0x80))
+  {
+    b &= SLOT_2_0;
+    /* moved CSE1 up */
+    /* a &= (0x7f<<14)|(0x7f); */
+    a = a<<7;
+    a |= b;
+    *v = a;
     return 4;
   }
-  x64 = (x<<7) | (c&0x7f);
-  n = 4;
-  do{
-    c = p[n++];
-    if( n==9 ){
-      x64 = (x64<<8) | c;
-      break;
-    }
-    x64 = (x64<<7) | (c&0x7f);
-  }while( (c & 0x80)!=0 );
-  *v = x64;
-  return n;
+
+  /* a: p0<<14 | p2 (masked) */
+  /* b: p1<<14 | p3 (unmasked) */
+  /* 1:save off p0<<21 | p1<<14 | p2<<7 | p3 (masked) */
+  /* moved CSE1 up */
+  /* a &= (0x7f<<14)|(0x7f); */
+  b &= SLOT_2_0;
+  s = a;
+  /* s: p0<<14 | p2 (masked) */
+
+  p++;
+  a = a<<14;
+  a |= *p;
+  /* a: p0<<28 | p2<<14 | p4 (unmasked) */
+  if (!(a&0x80))
+  {
+    /* we can skip these cause they were (effectively) done above
+    ** while calculating s */
+    /* a &= (0x7f<<28)|(0x7f<<14)|(0x7f); */
+    /* b &= (0x7f<<14)|(0x7f); */
+    b = b<<7;
+    a |= b;
+    s = s>>18;
+    *v = ((u64)s)<<32 | a;
+    return 5;
+  }
+
+  /* 2:save off p0<<21 | p1<<14 | p2<<7 | p3 (masked) */
+  s = s<<7;
+  s |= b;
+  /* s: p0<<21 | p1<<14 | p2<<7 | p3 (masked) */
+
+  p++;
+  b = b<<14;
+  b |= *p;
+  /* b: p1<<28 | p3<<14 | p5 (unmasked) */
+  if (!(b&0x80))
+  {
+    /* we can skip this cause it was (effectively) done above in calc'ing s */
+    /* b &= (0x7f<<28)|(0x7f<<14)|(0x7f); */
+    a &= SLOT_2_0;
+    a = a<<7;
+    a |= b;
+    s = s>>18;
+    *v = ((u64)s)<<32 | a;
+    return 6;
+  }
+
+  p++;
+  a = a<<14;
+  a |= *p;
+  /* a: p2<<28 | p4<<14 | p6 (unmasked) */
+  if (!(a&0x80))
+  {
+    a &= SLOT_4_2_0;
+    b &= SLOT_2_0;
+    b = b<<7;
+    a |= b;
+    s = s>>11;
+    *v = ((u64)s)<<32 | a;
+    return 7;
+  }
+
+  /* CSE2 from below */
+  a &= SLOT_2_0;
+  p++;
+  b = b<<14;
+  b |= *p;
+  /* b: p3<<28 | p5<<14 | p7 (unmasked) */
+  if (!(b&0x80))
+  {
+    b &= SLOT_4_2_0;
+    /* moved CSE2 up */
+    /* a &= (0x7f<<14)|(0x7f); */
+    a = a<<7;
+    a |= b;
+    s = s>>4;
+    *v = ((u64)s)<<32 | a;
+    return 8;
+  }
+
+  p++;
+  a = a<<15;
+  a |= *p;
+  /* a: p4<<29 | p6<<15 | p8 (unmasked) */
+
+  /* moved CSE2 up */
+  /* a &= (0x7f<<29)|(0x7f<<15)|(0xff); */
+  b &= SLOT_2_0;
+  b = b<<8;
+  a |= b;
+
+  s = s<<4;
+  b = p[-4];
+  b &= 0x7f;
+  b = b>>3;
+  s |= b;
+
+  *v = ((u64)s)<<32 | a;
+
+  return 9;
 }
 
 /*
 ** Read a 32-bit variable-length integer from memory starting at p[0].
 ** Return the number of bytes read.  The value is stored in *v.
+**
+** If the varint stored in p[0] is larger than can fit in a 32-bit unsigned
+** integer, then set *v to 0xffffffff.
+**
+** A MACRO version, getVarint32, is provided which inlines the
+** single-byte case.  All code should use the MACRO version as
+** this function assumes the single-byte case has already been handled.
 */
-int sqlite3GetVarint32(const unsigned char *p, u32 *v){
-  u32 x;
-  int n;
-  unsigned char c;
-  if( ((signed char*)p)[0]>=0 ){
-    *v = p[0];
-    return 1;
-  }
-  x = p[0] & 0x7f;
-  if( ((signed char*)p)[1]>=0 ){
-    *v = (x<<7) | p[1];
+u8 sqlite3GetVarint32(const unsigned char *p, u32 *v){
+  u64 v64;
+  u8 n;
+
+  /* Assume that the single-byte case has already been handled by
+  ** the getVarint32() macro */
+  assert( (p[0] & 0x80)!=0 );
+
+  if( (p[1] & 0x80)==0 ){
+    /* This is the two-byte case */
+    *v = ((p[0]&0x7f)<<7) | p[1];
     return 2;
   }
-  x = (x<<7) | (p[1] & 0x7f);
-  n = 2;
-  do{
-    x = (x<<7) | ((c = p[n++])&0x7f);
-  }while( (c & 0x80)!=0 && n<9 );
-  *v = x;
+  if( (p[2] & 0x80)==0 ){
+    /* This is the three-byte case */
+    *v = ((p[0]&0x7f)<<14) | ((p[1]&0x7f)<<7) | p[2];
+    return 3;
+  }
+  /* four or more bytes */
+  n = sqlite3GetVarint(p, &v64);
+  assert( n>3 && n<=9 );
+  if( (v64 & SQLITE_MAX_U32)!=v64 ){
+    *v = 0xffffffff;
+  }else{
+    *v = (u32)v64;
+  }
   return n;
 }
 
@@ -1192,141 +1433,431 @@ int sqlite3GetVarint32(const unsigned char *p, u32 *v){
 ** 64-bit integer.
 */
 int sqlite3VarintLen(u64 v){
-  int i = 0;
-  do{
-    i++;
-    v >>= 7;
-  }while( v!=0 && i<9 );
+  int i;
+  for(i=1; (v >>= 7)!=0; i++){ assert( i<10 ); }
   return i;
 }
 
-#if !defined(SQLITE_OMIT_BLOB_LITERAL) || defined(SQLITE_HAS_CODEC) \
-    || defined(SQLITE_TEST)
+
+/*
+** Read or write a four-byte big-endian integer value.
+*/
+u32 sqlite3Get4byte(const u8 *p){
+#if SQLITE_BYTEORDER==4321
+  u32 x;
+  memcpy(&x,p,4);
+  return x;
+#elif SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
+  u32 x;
+  memcpy(&x,p,4);
+  return __builtin_bswap32(x);
+#elif SQLITE_BYTEORDER==1234 && MSVC_VERSION>=1300
+  u32 x;
+  memcpy(&x,p,4);
+  return _byteswap_ulong(x);
+#else
+  testcase( p[0]&0x80 );
+  return ((unsigned)p[0]<<24) | (p[1]<<16) | (p[2]<<8) | p[3];
+#endif
+}
+void sqlite3Put4byte(unsigned char *p, u32 v){
+#if SQLITE_BYTEORDER==4321
+  memcpy(p,&v,4);
+#elif SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
+  u32 x = __builtin_bswap32(v);
+  memcpy(p,&x,4);
+#elif SQLITE_BYTEORDER==1234 && MSVC_VERSION>=1300
+  u32 x = _byteswap_ulong(v);
+  memcpy(p,&x,4);
+#else
+  p[0] = (u8)(v>>24);
+  p[1] = (u8)(v>>16);
+  p[2] = (u8)(v>>8);
+  p[3] = (u8)v;
+#endif
+}
+
+
+
 /*
 ** Translate a single byte of Hex into an integer.
+** This routine only works if h really is a valid hexadecimal
+** character:  0..9a..fA..F
 */
-static int hexToInt(int h){
-  if( h>='0' && h<='9' ){
-    return h - '0';
-  }else if( h>='a' && h<='f' ){
-    return h - 'a' + 10;
-  }else{
-    assert( h>='A' && h<='F' );
-    return h - 'A' + 10;
-  }
+u8 sqlite3HexToInt(int h){
+  assert( (h>='0' && h<='9') ||  (h>='a' && h<='f') ||  (h>='A' && h<='F') );
+#ifdef SQLITE_ASCII
+  h += 9*(1&(h>>6));
+#endif
+#ifdef SQLITE_EBCDIC
+  h += 9*(1&~(h>>4));
+#endif
+  return (u8)(h & 0xf);
 }
-#endif /* !SQLITE_OMIT_BLOB_LITERAL || SQLITE_HAS_CODEC || SQLITE_TEST */
 
-#if !defined(SQLITE_OMIT_BLOB_LITERAL) || defined(SQLITE_HAS_CODEC)
+#if !defined(SQLITE_OMIT_BLOB_LITERAL)
 /*
 ** Convert a BLOB literal of the form "x'hhhhhh'" into its binary
 ** value.  Return a pointer to its binary value.  Space to hold the
 ** binary value has been obtained from malloc and must be freed by
 ** the calling routine.
 */
-void *sqlite3HexToBlob(const char *z){
+void *sqlite3HexToBlob(sqlite3 *db, const char *z, int n){
   char *zBlob;
   int i;
-  int n = strlen(z);
-  if( n%2 ) return 0;
 
-  zBlob = (char *)sqliteMalloc(n/2);
-  for(i=0; i<n; i+=2){
-    zBlob[i/2] = (hexToInt(z[i])<<4) | hexToInt(z[i+1]);
+  zBlob = (char *)sqlite3DbMallocRawNN(db, n/2 + 1);
+  n--;
+  if( zBlob ){
+    for(i=0; i<n; i+=2){
+      zBlob[i/2] = (sqlite3HexToInt(z[i])<<4) | sqlite3HexToInt(z[i+1]);
+    }
+    zBlob[i/2] = 0;
   }
   return zBlob;
 }
-#endif /* !SQLITE_OMIT_BLOB_LITERAL || SQLITE_HAS_CODEC */
+#endif /* !SQLITE_OMIT_BLOB_LITERAL */
 
-#if defined(SQLITE_TEST)
 /*
-** Convert text generated by the "%p" conversion format back into
-** a pointer.
+** Log an error that is an API call on a connection pointer that should
+** not have been used.  The "type" of connection pointer is given as the
+** argument.  The zType is a word like "NULL" or "closed" or "invalid".
 */
-void *sqlite3TextToPtr(const char *z){
-  void *p;
-  u64 v;
-  u32 v2;
-  if( z[0]=='0' && z[1]=='x' ){
-    z += 2;
+static void logBadConnection(const char *zType){
+  sqlite3_log(SQLITE_MISUSE,
+     "API call with %s database connection pointer",
+     zType
+  );
+}
+
+/*
+** Check to make sure we have a valid db pointer.  This test is not
+** foolproof but it does provide some measure of protection against
+** misuse of the interface such as passing in db pointers that are
+** NULL or which have been previously closed.  If this routine returns
+** 1 it means that the db pointer is valid and 0 if it should not be
+** dereferenced for any reason.  The calling function should invoke
+** SQLITE_MISUSE immediately.
+**
+** sqlite3SafetyCheckOk() requires that the db pointer be valid for
+** use.  sqlite3SafetyCheckSickOrOk() allows a db pointer that failed to
+** open properly and is not fit for general use but which can be
+** used as an argument to sqlite3_errmsg() or sqlite3_close().
+*/
+int sqlite3SafetyCheckOk(sqlite3 *db){
+  u8 eOpenState;
+  if( db==0 ){
+    logBadConnection("NULL");
+    return 0;
   }
-  v = 0;
-  while( *z ){
-    v = (v<<4) + hexToInt(*z);
-    z++;
-  }
-  if( sizeof(p)==sizeof(v) ){
-    p = *(void**)&v;
+  eOpenState = db->eOpenState;
+  if( eOpenState!=SQLITE_STATE_OPEN ){
+    if( sqlite3SafetyCheckSickOrOk(db) ){
+      testcase( sqlite3GlobalConfig.xLog!=0 );
+      logBadConnection("unopened");
+    }
+    return 0;
   }else{
-    assert( sizeof(p)==sizeof(v2) );
-    v2 = (u32)v;
-    p = *(void**)&v2;
+    return 1;
   }
-  return p;
 }
-#endif
-
-/*
-** Return a pointer to the ThreadData associated with the calling thread.
-*/
-ThreadData *sqlite3ThreadData(){
-  ThreadData *pTsd = sqlite3OsThreadSpecificData(sizeof(ThreadData));
-  if( pTsd && !pTsd->isInit ){
-#ifndef SQLITE_OMIT_MEMORY_MANAGEMENT
-    pTsd->nSoftHeapLimit = -1;
-#endif
-#ifndef NDEBUG
-    pTsd->mallocAllowed = 1;
-#endif
-    pTsd->isInit = 1;
+int sqlite3SafetyCheckSickOrOk(sqlite3 *db){
+  u8 eOpenState;
+  eOpenState = db->eOpenState;
+  if( eOpenState!=SQLITE_STATE_SICK &&
+      eOpenState!=SQLITE_STATE_OPEN &&
+      eOpenState!=SQLITE_STATE_BUSY ){
+    testcase( sqlite3GlobalConfig.xLog!=0 );
+    logBadConnection("invalid");
+    return 0;
+  }else{
+    return 1;
   }
-  return pTsd;
 }
 
 /*
-** Clear the "mallocFailed" flag. This should be invoked before exiting any
-** entry points that may have called sqliteMalloc().
+** Attempt to add, subtract, or multiply the 64-bit signed value iB against
+** the other 64-bit signed integer at *pA and store the result in *pA.
+** Return 0 on success.  Or if the operation would have resulted in an
+** overflow, leave *pA unchanged and return 1.
 */
-void sqlite3MallocClearFailed(){
-  sqlite3ThreadData()->mallocFailed = 0;
-}
-
-#ifndef SQLITE_OMIT_MEMORY_MANAGEMENT
-/*
-** Enable the shared pager and schema features.
-*/
-int sqlite3_enable_memory_management(int enable){
-  ThreadData *pTsd = sqlite3ThreadData();
-
-  /* It is only legal to call sqlite3_enable_memory_management() when there
-  ** are no currently open connections that were opened by the calling 
-  ** thread. This condition is only easy to detect if the feature were
-  ** previously enabled (and is being disabled). 
-  */
-  if( pTsd->pPager && !enable ){
-    return SQLITE_MISUSE;
+int sqlite3AddInt64(i64 *pA, i64 iB){
+#if GCC_VERSION>=5004000 && !defined(__INTEL_COMPILER)
+  return __builtin_add_overflow(*pA, iB, pA);
+#else
+  i64 iA = *pA;
+  testcase( iA==0 ); testcase( iA==1 );
+  testcase( iB==-1 ); testcase( iB==0 );
+  if( iB>=0 ){
+    testcase( iA>0 && LARGEST_INT64 - iA == iB );
+    testcase( iA>0 && LARGEST_INT64 - iA == iB - 1 );
+    if( iA>0 && LARGEST_INT64 - iA < iB ) return 1;
+  }else{
+    testcase( iA<0 && -(iA + LARGEST_INT64) == iB + 1 );
+    testcase( iA<0 && -(iA + LARGEST_INT64) == iB + 2 );
+    if( iA<0 && -(iA + LARGEST_INT64) > iB + 1 ) return 1;
   }
-  pTsd->useMemoryManagement = enable;
-  return SQLITE_OK;
+  *pA += iB;
+  return 0;
+#endif
+}
+int sqlite3SubInt64(i64 *pA, i64 iB){
+#if GCC_VERSION>=5004000 && !defined(__INTEL_COMPILER)
+  return __builtin_sub_overflow(*pA, iB, pA);
+#else
+  testcase( iB==SMALLEST_INT64+1 );
+  if( iB==SMALLEST_INT64 ){
+    testcase( (*pA)==(-1) ); testcase( (*pA)==0 );
+    if( (*pA)>=0 ) return 1;
+    *pA -= iB;
+    return 0;
+  }else{
+    return sqlite3AddInt64(pA, -iB);
+  }
+#endif
+}
+int sqlite3MulInt64(i64 *pA, i64 iB){
+#if GCC_VERSION>=5004000 && !defined(__INTEL_COMPILER)
+  return __builtin_mul_overflow(*pA, iB, pA);
+#else
+  i64 iA = *pA;
+  if( iB>0 ){
+    if( iA>LARGEST_INT64/iB ) return 1;
+    if( iA<SMALLEST_INT64/iB ) return 1;
+  }else if( iB<0 ){
+    if( iA>0 ){
+      if( iB<SMALLEST_INT64/iA ) return 1;
+    }else if( iA<0 ){
+      if( iB==SMALLEST_INT64 ) return 1;
+      if( iA==SMALLEST_INT64 ) return 1;
+      if( -iA>LARGEST_INT64/-iB ) return 1;
+    }
+  }
+  *pA = iA*iB;
+  return 0;
+#endif
+}
+
+/*
+** Compute the absolute value of a 32-bit signed integer, if possible.  Or
+** if the integer has a value of -2147483648, return +2147483647
+*/
+int sqlite3AbsInt32(int x){
+  if( x>=0 ) return x;
+  if( x==(int)0x80000000 ) return 0x7fffffff;
+  return -x;
+}
+
+#ifdef SQLITE_ENABLE_8_3_NAMES
+/*
+** If SQLITE_ENABLE_8_3_NAMES is set at compile-time and if the database
+** filename in zBaseFilename is a URI with the "8_3_names=1" parameter and
+** if filename in z[] has a suffix (a.k.a. "extension") that is longer than
+** three characters, then shorten the suffix on z[] to be the last three
+** characters of the original suffix.
+**
+** If SQLITE_ENABLE_8_3_NAMES is set to 2 at compile-time, then always
+** do the suffix shortening regardless of URI parameter.
+**
+** Examples:
+**
+**     test.db-journal    =>   test.nal
+**     test.db-wal        =>   test.wal
+**     test.db-shm        =>   test.shm
+**     test.db-mj7f3319fa =>   test.9fa
+*/
+void sqlite3FileSuffix3(const char *zBaseFilename, char *z){
+#if SQLITE_ENABLE_8_3_NAMES<2
+  if( sqlite3_uri_boolean(zBaseFilename, "8_3_names", 0) )
+#endif
+  {
+    int i, sz;
+    sz = sqlite3Strlen30(z);
+    for(i=sz-1; i>0 && z[i]!='/' && z[i]!='.'; i--){}
+    if( z[i]=='.' && ALWAYS(sz>i+4) ) memmove(&z[i+1], &z[sz-3], 4);
+  }
 }
 #endif
 
-#ifndef NDEBUG
 /*
-** This function sets a flag in the thread-specific-data structure that will
-** cause an assert to fail if sqliteMalloc() or sqliteRealloc() is called.
+** Find (an approximate) sum of two LogEst values.  This computation is
+** not a simple "+" operator because LogEst is stored as a logarithmic
+** value.
+**
 */
-void sqlite3MallocDisallow(){
-  assert(sqlite3ThreadData()->mallocAllowed);
-  sqlite3ThreadData()->mallocAllowed = 0;
+LogEst sqlite3LogEstAdd(LogEst a, LogEst b){
+  static const unsigned char x[] = {
+     10, 10,                         /* 0,1 */
+      9, 9,                          /* 2,3 */
+      8, 8,                          /* 4,5 */
+      7, 7, 7,                       /* 6,7,8 */
+      6, 6, 6,                       /* 9,10,11 */
+      5, 5, 5,                       /* 12-14 */
+      4, 4, 4, 4,                    /* 15-18 */
+      3, 3, 3, 3, 3, 3,              /* 19-24 */
+      2, 2, 2, 2, 2, 2, 2,           /* 25-31 */
+  };
+  if( a>=b ){
+    if( a>b+49 ) return a;
+    if( a>b+31 ) return a+1;
+    return a+x[a-b];
+  }else{
+    if( b>a+49 ) return b;
+    if( b>a+31 ) return b+1;
+    return b+x[b-a];
+  }
 }
 
 /*
-** This function clears the flag set in the thread-specific-data structure set
-** by sqlite3MallocDisallow().
+** Convert an integer into a LogEst.  In other words, compute an
+** approximation for 10*log2(x).
 */
-void sqlite3MallocAllow(){
-  assert(!sqlite3ThreadData()->mallocAllowed);
-  sqlite3ThreadData()->mallocAllowed = 1;
-}
+LogEst sqlite3LogEst(u64 x){
+  static LogEst a[] = { 0, 2, 3, 5, 6, 7, 8, 9 };
+  LogEst y = 40;
+  if( x<8 ){
+    if( x<2 ) return 0;
+    while( x<8 ){  y -= 10; x <<= 1; }
+  }else{
+#if GCC_VERSION>=5004000
+    int i = 60 - __builtin_clzll(x);
+    y += i*10;
+    x >>= i;
+#else
+    while( x>255 ){ y += 40; x >>= 4; }  /*OPTIMIZATION-IF-TRUE*/
+    while( x>15 ){  y += 10; x >>= 1; }
 #endif
+  }
+  return a[x&7] + y - 10;
+}
+
+/*
+** Convert a double into a LogEst
+** In other words, compute an approximation for 10*log2(x).
+*/
+LogEst sqlite3LogEstFromDouble(double x){
+  u64 a;
+  LogEst e;
+  assert( sizeof(x)==8 && sizeof(a)==8 );
+  if( x<=1 ) return 0;
+  if( x<=2000000000 ) return sqlite3LogEst((u64)x);
+  memcpy(&a, &x, 8);
+  e = (a>>52) - 1022;
+  return e*10;
+}
+
+/*
+** Convert a LogEst into an integer.
+*/
+u64 sqlite3LogEstToInt(LogEst x){
+  u64 n;
+  n = x%10;
+  x /= 10;
+  if( n>=5 ) n -= 2;
+  else if( n>=1 ) n -= 1;
+  if( x>60 ) return (u64)LARGEST_INT64;
+  return x>=3 ? (n+8)<<(x-3) : (n+8)>>(3-x);
+}
+
+/*
+** Add a new name/number pair to a VList.  This might require that the
+** VList object be reallocated, so return the new VList.  If an OOM
+** error occurs, the original VList returned and the
+** db->mallocFailed flag is set.
+**
+** A VList is really just an array of integers.  To destroy a VList,
+** simply pass it to sqlite3DbFree().
+**
+** The first integer is the number of integers allocated for the whole
+** VList.  The second integer is the number of integers actually used.
+** Each name/number pair is encoded by subsequent groups of 3 or more
+** integers.
+**
+** Each name/number pair starts with two integers which are the numeric
+** value for the pair and the size of the name/number pair, respectively.
+** The text name overlays one or more following integers.  The text name
+** is always zero-terminated.
+**
+** Conceptually:
+**
+**    struct VList {
+**      int nAlloc;   // Number of allocated slots
+**      int nUsed;    // Number of used slots
+**      struct VListEntry {
+**        int iValue;    // Value for this entry
+**        int nSlot;     // Slots used by this entry
+**        // ... variable name goes here
+**      } a[0];
+**    }
+**
+** During code generation, pointers to the variable names within the
+** VList are taken.  When that happens, nAlloc is set to zero as an
+** indication that the VList may never again be enlarged, since the
+** accompanying realloc() would invalidate the pointers.
+*/
+VList *sqlite3VListAdd(
+  sqlite3 *db,           /* The database connection used for malloc() */
+  VList *pIn,            /* The input VList.  Might be NULL */
+  const char *zName,     /* Name of symbol to add */
+  int nName,             /* Bytes of text in zName */
+  int iVal               /* Value to associate with zName */
+){
+  int nInt;              /* number of sizeof(int) objects needed for zName */
+  char *z;               /* Pointer to where zName will be stored */
+  int i;                 /* Index in pIn[] where zName is stored */
+
+  nInt = nName/4 + 3;
+  assert( pIn==0 || pIn[0]>=3 );  /* Verify ok to add new elements */
+  if( pIn==0 || pIn[1]+nInt > pIn[0] ){
+    /* Enlarge the allocation */
+    sqlite3_int64 nAlloc = (pIn ? 2*(sqlite3_int64)pIn[0] : 10) + nInt;
+    VList *pOut = sqlite3DbRealloc(db, pIn, nAlloc*sizeof(int));
+    if( pOut==0 ) return pIn;
+    if( pIn==0 ) pOut[1] = 2;
+    pIn = pOut;
+    pIn[0] = nAlloc;
+  }
+  i = pIn[1];
+  pIn[i] = iVal;
+  pIn[i+1] = nInt;
+  z = (char*)&pIn[i+2];
+  pIn[1] = i+nInt;
+  assert( pIn[1]<=pIn[0] );
+  memcpy(z, zName, nName);
+  z[nName] = 0;
+  return pIn;
+}
+
+/*
+** Return a pointer to the name of a variable in the given VList that
+** has the value iVal.  Or return a NULL if there is no such variable in
+** the list
+*/
+const char *sqlite3VListNumToName(VList *pIn, int iVal){
+  int i, mx;
+  if( pIn==0 ) return 0;
+  mx = pIn[1];
+  i = 2;
+  do{
+    if( pIn[i]==iVal ) return (char*)&pIn[i+2];
+    i += pIn[i+1];
+  }while( i<mx );
+  return 0;
+}
+
+/*
+** Return the number of the variable named zName, if it is in VList.
+** or return 0 if there is no such variable.
+*/
+int sqlite3VListNameToNum(VList *pIn, const char *zName, int nName){
+  int i, mx;
+  if( pIn==0 ) return 0;
+  mx = pIn[1];
+  i = 2;
+  do{
+    const char *z = (const char*)&pIn[i+2];
+    if( strncmp(z,zName,nName)==0 && z[nName]==0 ) return pIn[i];
+    i += pIn[i+1];
+  }while( i<mx );
+  return 0;
+}

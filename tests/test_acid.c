@@ -68,7 +68,7 @@ static int test_atomicity(const char *dbfile, char *err_msg) {
   printf("  Testing Atomicity...\n");
   
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0);
+  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -183,7 +183,7 @@ static int test_consistency(const char *dbfile, char *err_msg) {
   printf("  Testing Consistency...\n");
   
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0);
+  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -350,7 +350,7 @@ static int test_isolation(const char *dbfile, char *err_msg) {
   printf("  Testing Isolation...\n");
   
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0);
+  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -451,7 +451,7 @@ static int test_durability(const char *dbfile, char *err_msg) {
   /* Test 1: Data survives normal close/reopen */
   printf("    Test 4.1: Data survives close/reopen\n");
   
-  rc = kvstore_open(dbfile, &pKV, 0);
+  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -480,7 +480,7 @@ static int test_durability(const char *dbfile, char *err_msg) {
   pKV = NULL;
   
   /* Reopen and verify data exists */
-  rc = kvstore_open(dbfile, &pKV, 0);
+  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to reopen database: %d", rc);
     return 0;
@@ -522,7 +522,7 @@ static int test_durability(const char *dbfile, char *err_msg) {
     kvstore_close(pKV);
     
     /* Reopen */
-    rc = kvstore_open(dbfile, &pKV, 0);
+    rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if(rc != KVSTORE_OK) {
       snprintf(err_msg, 1024, "Failed to reopen in cycle %d: %d", cycle, rc);
       return 0;
