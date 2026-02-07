@@ -5,7 +5,7 @@ CFLAGS = -g -Wall -Iinclude
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME_S),Linux)
-  LDFLAGS = -lpthread -ldl -lm
+  LDFLAGS = 
 endif
 ifeq ($(UNAME_S),Darwin)
   LDFLAGS = -lpthread -lm

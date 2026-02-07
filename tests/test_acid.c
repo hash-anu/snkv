@@ -68,7 +68,7 @@ static int test_atomicity(const char *dbfile, char *err_msg) {
   printf("  Testing Atomicity...\n");
   
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_WAL);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;

@@ -319,7 +319,7 @@ int main(void) {
     printf("\n" COLOR_YELLOW "Initializing database..." COLOR_RESET "\n");
     remove(DB_FILE);
     
-    if (kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE) != KVSTORE_OK) {
+    if (kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL) != KVSTORE_OK) {
         fprintf(stderr, "Failed to open KVStore\n");
         return 1;
     }

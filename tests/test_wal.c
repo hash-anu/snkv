@@ -729,7 +729,441 @@ static void test_wal_iterator(void){
 }
 
 /* ================================================================
-** TEST 14: Statistics tracking under WAL
+** TEST 14: SHM file creation and lifecycle
+** The -shm file should exist while a WAL connection is active.
+** It is cleaned up (along with -wal) when the last connection closes
+** because SQLite auto-checkpoints on close.
+** ================================================================ */
+static void test_wal_shm_file(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("WAL -shm file lifecycle", 0); return; }
+
+  /* After open + WAL activation, both -wal and -shm should exist */
+  int wal_after_open = file_exists(WAL_WAL_FILE);
+  int shm_after_open = file_exists(WAL_SHM_FILE);
+
+  /* Write data — files should still be present */
+  const char *k = "shm_test_key";
+  const char *v = "shm_test_val";
+  kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+  int wal_after_write = file_exists(WAL_WAL_FILE);
+  int shm_after_write = file_exists(WAL_SHM_FILE);
+
+  /* Close — auto-checkpoint should remove -wal and -shm */
+  kvstore_close(pKV);
+  int wal_after_close = file_exists(WAL_WAL_FILE);
+  int shm_after_close = file_exists(WAL_SHM_FILE);
+  int db_after_close  = file_exists(WAL_DB_FILE);
+
+  if( !wal_after_open ) printf("  FAIL: -wal missing after open\n");
+  if( !shm_after_open ) printf("  FAIL: -shm missing after open\n");
+  if( !wal_after_write ) printf("  FAIL: -wal missing after write\n");
+  if( !shm_after_write ) printf("  FAIL: -shm missing after write\n");
+  if( wal_after_close ) printf("  FAIL: -wal still present after close\n");
+  if( shm_after_close ) printf("  FAIL: -shm still present after close\n");
+  if( !db_after_close ) printf("  FAIL: .db missing after close\n");
+
+  passed = wal_after_open && shm_after_open &&
+           wal_after_write && shm_after_write &&
+           !wal_after_close && !shm_after_close &&
+           db_after_close;
+
+  cleanup();
+  print_result("WAL -shm file lifecycle", passed);
+}
+
+/* ================================================================
+** TEST 15: SHM file persists throughout transaction lifecycle
+** Verify -shm exists during begin/put/commit cycle.
+** ================================================================ */
+static void test_wal_shm_during_transaction(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("WAL -shm during transaction", 0); return; }
+
+  rc = kvstore_begin(pKV, 1);
+  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("WAL -shm during transaction", 0); return; }
+
+  int shm_after_begin = file_exists(WAL_SHM_FILE);
+
+  int i;
+  for(i = 0; i < 100; i++){
+    char k[32], v[32];
+    snprintf(k, sizeof(k), "shmtx_%d", i);
+    snprintf(v, sizeof(v), "shmval_%d", i);
+    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+  }
+
+  int shm_after_puts = file_exists(WAL_SHM_FILE);
+
+  rc = kvstore_commit(pKV);
+  int shm_after_commit = file_exists(WAL_SHM_FILE);
+
+  if( !shm_after_begin ) printf("  FAIL: -shm missing after begin\n");
+  if( !shm_after_puts ) printf("  FAIL: -shm missing after puts\n");
+  if( !shm_after_commit ) printf("  FAIL: -shm missing after commit\n");
+
+  passed = shm_after_begin && shm_after_puts && shm_after_commit;
+
+  kvstore_close(pKV);
+  cleanup();
+  print_result("WAL -shm present during transaction", passed);
+}
+
+/* ================================================================
+** TEST 16: ACID - Atomicity
+** All operations in a transaction either commit entirely or not at all.
+** ================================================================ */
+static void test_wal_acid_atomicity(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Atomicity (WAL)", 0); return; }
+
+  /* Phase 1: Write 50 keys in a transaction, then rollback */
+  rc = kvstore_begin(pKV, 1);
+  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
+
+  int i;
+  for(i = 0; i < 50; i++){
+    char k[32], v[32];
+    snprintf(k, sizeof(k), "atom_%d", i);
+    snprintf(v, sizeof(v), "atomval_%d", i);
+    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+  }
+  kvstore_rollback(pKV);
+
+  /* Verify NONE of the 50 keys exist */
+  int none_exist = 1;
+  for(i = 0; i < 50; i++){
+    char k[32];
+    snprintf(k, sizeof(k), "atom_%d", i);
+    int exists = 0;
+    kvstore_exists(pKV, k, (int)strlen(k), &exists);
+    if( exists ){ none_exist = 0; break; }
+  }
+
+  /* Phase 2: Write 50 keys and commit */
+  rc = kvstore_begin(pKV, 1);
+  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
+  for(i = 0; i < 50; i++){
+    char k[32], v[32];
+    snprintf(k, sizeof(k), "atom_%d", i);
+    snprintf(v, sizeof(v), "atomval_%d", i);
+    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+  }
+  rc = kvstore_commit(pKV);
+  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
+
+  /* Verify ALL 50 keys exist with correct values */
+  int all_exist = 1;
+  for(i = 0; i < 50; i++){
+    char k[32], expected[32];
+    snprintf(k, sizeof(k), "atom_%d", i);
+    snprintf(expected, sizeof(expected), "atomval_%d", i);
+    void *got = NULL; int glen = 0;
+    rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
+    if( rc != KVSTORE_OK || !got ||
+        glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
+      all_exist = 0;
+    }
+    if( got ) sqliteFree(got);
+    if( !all_exist ) break;
+  }
+
+  passed = none_exist && all_exist;
+  if( !none_exist ) printf("  FAIL: rolled-back keys still exist\n");
+  if( !all_exist ) printf("  FAIL: committed keys not found\n");
+
+  kvstore_close(pKV);
+  cleanup();
+  print_result("ACID Atomicity (WAL) - all-or-nothing", passed);
+}
+
+/* ================================================================
+** TEST 17: ACID - Consistency
+** After writes and reopens, the database remains internally consistent.
+** ================================================================ */
+static void test_wal_acid_consistency(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  /* Write data in a transaction */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
+
+  rc = kvstore_begin(pKV, 1);
+  if( rc == KVSTORE_OK ){
+    int i;
+    for(i = 0; i < 200; i++){
+      char k[32], v[64];
+      snprintf(k, sizeof(k), "cons_%d", i);
+      snprintf(v, sizeof(v), "consistency_value_%d_padding", i);
+      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    }
+    kvstore_commit(pKV);
+  }
+  kvstore_close(pKV);
+
+  /* Reopen and run integrity check */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
+
+  char *errMsg = NULL;
+  rc = kvstore_integrity_check(pKV, &errMsg);
+  if( rc == KVSTORE_OK ){
+    /* Also verify data is readable */
+    int ok = 1;
+    int i;
+    for(i = 0; i < 200 && ok; i++){
+      char k[32], expected[64];
+      snprintf(k, sizeof(k), "cons_%d", i);
+      snprintf(expected, sizeof(expected), "consistency_value_%d_padding", i);
+      void *got = NULL; int glen = 0;
+      rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
+      if( rc != KVSTORE_OK || !got ||
+          glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
+        ok = 0;
+        printf("  FAIL: key cons_%d mismatch\n", i);
+      }
+      if( got ) sqliteFree(got);
+    }
+    passed = ok;
+  }else{
+    printf("  Integrity error: %s\n", errMsg ? errMsg : "(null)");
+    if( errMsg ) sqliteFree(errMsg);
+  }
+
+  kvstore_close(pKV);
+  cleanup();
+  print_result("ACID Consistency (WAL) - integrity after reopen", passed);
+}
+
+/* ================================================================
+** TEST 18: ACID - Isolation
+** Uncommitted writes must not be visible after rollback.
+** Phantom rows added in a rolled-back txn must vanish.
+** ================================================================ */
+static void test_wal_acid_isolation(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Isolation (WAL)", 0); return; }
+
+  /* Write baseline data */
+  const char *key = "iso_key";
+  const char *val_v1 = "isolation_v1";
+  kvstore_put(pKV, key, (int)strlen(key), val_v1, (int)strlen(val_v1));
+
+  /* Start txn, overwrite, add phantom, then rollback */
+  rc = kvstore_begin(pKV, 1);
+  if( rc == KVSTORE_OK ){
+    const char *val_v2 = "isolation_v2_SHOULD_NOT_PERSIST";
+    kvstore_put(pKV, key, (int)strlen(key), val_v2, (int)strlen(val_v2));
+
+    const char *tmp_key = "iso_phantom";
+    const char *tmp_val = "phantom_val";
+    kvstore_put(pKV, tmp_key, (int)strlen(tmp_key), tmp_val, (int)strlen(tmp_val));
+
+    kvstore_rollback(pKV);
+  }
+
+  /* After rollback: original value should be intact */
+  void *got = NULL; int glen = 0;
+  rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
+  int v1_ok = (rc == KVSTORE_OK && got &&
+               glen == (int)strlen(val_v1) &&
+               memcmp(got, val_v1, glen) == 0);
+  if( got ) sqliteFree(got); got = NULL;
+
+  /* Phantom key should not exist */
+  int phantom_exists = 0;
+  kvstore_exists(pKV, "iso_phantom", 11, &phantom_exists);
+
+  passed = v1_ok && !phantom_exists;
+  if( !v1_ok ) printf("  FAIL: original value corrupted after rollback\n");
+  if( phantom_exists ) printf("  FAIL: phantom key persists after rollback\n");
+
+  kvstore_close(pKV);
+  cleanup();
+  print_result("ACID Isolation (WAL) - rollback isolation", passed);
+}
+
+/* ================================================================
+** TEST 19: ACID - Durability
+** Committed data must survive close/reopen.
+** Uncommitted data must NOT survive close/reopen.
+** ================================================================ */
+static void test_wal_acid_durability(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  /* Phase 1: Write committed data */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
+
+  int i;
+  for(i = 0; i < 100; i++){
+    char k[32], v[64];
+    snprintf(k, sizeof(k), "dur_%d", i);
+    snprintf(v, sizeof(v), "durable_value_%d_xyz", i);
+    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+  }
+
+  /* Phase 2: Start uncommitted txn with overwrites + phantom keys */
+  rc = kvstore_begin(pKV, 1);
+  if( rc == KVSTORE_OK ){
+    for(i = 0; i < 100; i++){
+      char k[32], v[64];
+      snprintf(k, sizeof(k), "dur_%d", i);
+      snprintf(v, sizeof(v), "UNCOMMITTED_OVERWRITE_%d", i);
+      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    }
+    for(i = 100; i < 150; i++){
+      char k[32], v[32];
+      snprintf(k, sizeof(k), "dur_%d", i);
+      snprintf(v, sizeof(v), "phantom_%d", i);
+      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    }
+    /* Close WITHOUT committing */
+  }
+  kvstore_close(pKV);
+
+  /* Phase 3: Reopen and verify committed values survived */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
+
+  int committed_ok = 1;
+  for(i = 0; i < 100; i++){
+    char k[32], expected[64];
+    snprintf(k, sizeof(k), "dur_%d", i);
+    snprintf(expected, sizeof(expected), "durable_value_%d_xyz", i);
+    void *got = NULL; int glen = 0;
+    rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
+    if( rc != KVSTORE_OK || !got ||
+        glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
+      committed_ok = 0;
+      printf("  FAIL: dur_%d mismatch after reopen\n", i);
+    }
+    if( got ) sqliteFree(got);
+    if( !committed_ok ) break;
+  }
+
+  /* Phantom keys (100-149) should NOT exist */
+  int phantoms_gone = 1;
+  for(i = 100; i < 150; i++){
+    char k[32];
+    snprintf(k, sizeof(k), "dur_%d", i);
+    int exists = 0;
+    kvstore_exists(pKV, k, (int)strlen(k), &exists);
+    if( exists ){
+      phantoms_gone = 0;
+      printf("  FAIL: phantom dur_%d survived close\n", i);
+      break;
+    }
+  }
+
+  passed = committed_ok && phantoms_gone;
+
+  kvstore_close(pKV);
+  cleanup();
+  print_result("ACID Durability (WAL) - survive close/reopen", passed);
+}
+
+/* ================================================================
+** TEST 20: ACID - Crash atomicity (close mid-transaction)
+** Begin a write transaction, write data, close without commit.
+** Reopen: baseline intact, uncommitted writes gone.
+** ================================================================ */
+static void test_wal_acid_crash_atomicity(void){
+  KVStore *pKV = NULL;
+  int rc, passed = 0;
+
+  cleanup();
+
+  /* Write baseline data */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
+
+  const char *base_key = "crash_base";
+  const char *base_val = "base_value";
+  kvstore_put(pKV, base_key, (int)strlen(base_key), base_val, (int)strlen(base_val));
+  kvstore_close(pKV);
+
+  /* Reopen, start txn, write, close without commit */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
+
+  rc = kvstore_begin(pKV, 1);
+  if( rc == KVSTORE_OK ){
+    const char *new_val = "CRASHED_OVERWRITE";
+    kvstore_put(pKV, base_key, (int)strlen(base_key), new_val, (int)strlen(new_val));
+
+    int i;
+    for(i = 0; i < 50; i++){
+      char k[32], v[32];
+      snprintf(k, sizeof(k), "crash_%d", i);
+      snprintf(v, sizeof(v), "crashval_%d", i);
+      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    }
+    /* DO NOT commit */
+  }
+  kvstore_close(pKV);
+
+  /* Reopen: baseline should be original, crash_ keys should not exist */
+  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
+
+  void *got = NULL; int glen = 0;
+  rc = kvstore_get(pKV, base_key, (int)strlen(base_key), &got, &glen);
+  int base_ok = (rc == KVSTORE_OK && got &&
+                 glen == (int)strlen(base_val) &&
+                 memcmp(got, base_val, glen) == 0);
+  if( got ) sqliteFree(got);
+
+  int crash_keys_gone = 1;
+  int i;
+  for(i = 0; i < 50; i++){
+    char k[32];
+    snprintf(k, sizeof(k), "crash_%d", i);
+    int exists = 0;
+    kvstore_exists(pKV, k, (int)strlen(k), &exists);
+    if( exists ){
+      crash_keys_gone = 0;
+      printf("  FAIL: crash_%d survived uncommitted txn\n", i);
+      break;
+    }
+  }
+
+  passed = base_ok && crash_keys_gone;
+  if( !base_ok ) printf("  FAIL: base value corrupted after crash recovery\n");
+
+  kvstore_close(pKV);
+  cleanup();
+  print_result("ACID Crash Atomicity (WAL) - uncommitted data gone", passed);
+}
+
+/* ================================================================
+** TEST 21: Statistics tracking under WAL
 ** ================================================================ */
 static void test_wal_statistics(void){
   KVStore *pKV = NULL;
@@ -780,6 +1214,8 @@ int main(void){
 
   print_section("WAL File Behavior");
   test_wal_file_creation();
+  test_wal_shm_file();
+  test_wal_shm_during_transaction();
 
   print_section("WAL CRUD & Transactions");
   test_wal_basic_crud();
@@ -803,6 +1239,13 @@ int main(void){
   test_wal_integrity();
   test_wal_cross_mode();
   test_wal_statistics();
+
+  print_section("WAL ACID Compliance");
+  test_wal_acid_atomicity();
+  test_wal_acid_consistency();
+  test_wal_acid_isolation();
+  test_wal_acid_durability();
+  test_wal_acid_crash_atomicity();
 
   printf("\n");
   printf("========================================\n");
