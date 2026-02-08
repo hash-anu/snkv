@@ -8,3 +8,4 @@ tests/test_mutex_journal
 tests/test_json
 tests/test_wal
 libsnkv.a
+tests/test_stress

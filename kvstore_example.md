@@ -4,29 +4,25 @@ A comprehensive collection of practical examples demonstrating how to use the KV
 
 ## Building and Running Examples
 
-To compile any example, you need to include the header files from the `include/` directory and link against all the required source files:
+First, build the SNKV static library:
 
 ```bash
-gcc -o example example.c \
-    -Iinclude \
-    src/kvstore_mutex.c \
-    src/kvstore.c \
-    src/os.c \
-    src/os_unix.c \
-    src/os_win.c \
-    src/util.c \
-    src/printf.c \
-    src/random.c \
-    src/hash.c \
-    src/pager.c \
-    src/btree.c
+make
+```
 
+Then compile your example against `libsnkv.a`:
+
+```bash
+gcc -Iinclude -o example example.c libsnkv.a
 ./example
 ```
 
-**Important:** 
-- The `-Iinclude` flag tells the compiler where to find the header files
-- All header files from the `include/` folder will be accessible
+Or use the built-in targets to build and run all examples:
+
+```bash
+make examples       # build all examples in examples/
+make run-examples   # build and run all examples
+```
 
 ## Getting Started
 
@@ -44,7 +40,7 @@ int main() {
     int rc;
     
     // Open or create database
-    rc = kvstore_open("hello.db", &pKV, 0);
+    rc = kvstore_open("hello.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open database\n");
         return 1;
@@ -109,7 +105,7 @@ void print_user(const char *user_id, KVStore *pKV) {
 
 int main() {
     KVStore *pKV;
-    kvstore_open("users.db", &pKV, 0);
+    kvstore_open("users.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // CREATE - Add new user
     printf("=== CREATE ===\n");
@@ -163,7 +159,7 @@ Efficiently check if keys exist without retrieving values.
 
 int main() {
     KVStore *pKV;
-    kvstore_open("inventory.db", &pKV, 0);
+    kvstore_open("inventory.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Add some items
     kvstore_put(pKV, "item:laptop", 11, "In Stock", 8);
@@ -265,7 +261,7 @@ int transfer_funds(KVStore *pKV, const char *from, const char *to, int amount) {
 
 int main() {
     KVStore *pKV;
-    kvstore_open("bank.db", &pKV, 0);
+    kvstore_open("bank.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Initialize accounts
     kvstore_put(pKV, "account:alice", 13, "1000", 4);
@@ -348,7 +344,7 @@ int batch_insert(KVStore *pKV, const char **keys, const char **values, int count
 
 int main() {
     KVStore *pKV;
-    kvstore_open("config.db", &pKV, 0);
+    kvstore_open("config.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     const char *keys[] = {"server.host", "server.port", "server.timeout"};
     const char *values[] = {"localhost", "8080", "30"};
@@ -387,7 +383,7 @@ int main() {
     KVColumnFamily *pUsersCF, *pProductsCF, *pOrdersCF;
     
     // Open database
-    kvstore_open("ecommerce.db", &pKV, 0);
+    kvstore_open("ecommerce.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Create column families
     printf("Creating column families...\n");
@@ -480,7 +476,7 @@ void list_column_families(KVStore *pKV) {
 
 int main() {
     KVStore *pKV;
-    kvstore_open("multi_cf.db", &pKV, 0);
+    kvstore_open("multi_cf.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     printf("=== Initial State ===\n");
     list_column_families(pKV);
@@ -552,7 +548,7 @@ int main() {
     KVStore *pKV;
     KVIterator *pIter;
     
-    kvstore_open("inventory.db", &pKV, 0);
+    kvstore_open("inventory.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Add sample data
     kvstore_put(pKV, "apple", 5, "50", 2);
@@ -614,7 +610,7 @@ int main() {
     KVStore *pKV;
     KVIterator *pIter;
     
-    kvstore_open("users.db", &pKV, 0);
+    kvstore_open("users.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Add users and admins
     kvstore_put(pKV, "user:alice", 10, "Regular User", 12);
@@ -710,7 +706,7 @@ void calculate_stats(KVStore *pKV, StoreStats *stats) {
 
 int main() {
     KVStore *pKV;
-    kvstore_open("data.db", &pKV, 0);
+    kvstore_open("data.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Add sample data
     kvstore_put(pKV, "a", 1, "short", 5);
@@ -806,7 +802,7 @@ int main() {
     char buffer[256];
     int rc;
     
-    rc = kvstore_open("test.db", &pKV, 0);
+    rc = kvstore_open("test.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Cannot open database: %s\n", 
                 kvstore_errmsg(pKV));
@@ -941,7 +937,7 @@ int session_cleanup_expired(KVStore *pKV, int max_age_seconds) {
 
 int main() {
     KVStore *pKV;
-    kvstore_open("sessions.db", &pKV, 0);
+    kvstore_open("sessions.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Create sessions
     printf("Creating sessions...\n");
@@ -1071,7 +1067,7 @@ int main() {
     KVStore *pKV;
     char buffer[256];
     
-    kvstore_open("cache.db", &pKV, 0);
+    kvstore_open("cache.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Set cache entries with different TTLs
     printf("Setting cache entries...\n");
@@ -1139,7 +1135,7 @@ typedef struct {
 } ConfigManager;
 
 int config_init(ConfigManager *mgr, const char *env) {
-    int rc = kvstore_open("config.db", &mgr->pKV, 0);
+    int rc = kvstore_open("config.db", &mgr->pKV, 0, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) {
         return rc;
     }
@@ -1314,7 +1310,7 @@ int main() {
     
     // Test without transaction (auto-commit each operation)
     printf("Without transaction (auto-commit):\n");
-    kvstore_open("bench1.db", &pKV, 0);
+    kvstore_open("bench1.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     time_no_tx = benchmark_inserts(pKV, num_ops, 0);
     printf("  Time: %.3f seconds\n", time_no_tx);
     printf("  Rate: %.0f ops/sec\n", num_ops / time_no_tx);
@@ -1322,7 +1318,7 @@ int main() {
     
     // Test with single transaction
     printf("\nWith transaction (batch commit):\n");
-    kvstore_open("bench2.db", &pKV, 0);
+    kvstore_open("bench2.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     time_with_tx = benchmark_inserts(pKV, num_ops, 1);
     printf("  Time: %.3f seconds\n", time_with_tx);
     printf("  Rate: %.0f ops/sec\n", num_ops / time_with_tx);
@@ -1417,7 +1413,7 @@ int main() {
     pthread_t threads[8];
     KVThreadData thread_data[8];
     
-    kvstore_open("multithreaded.db", &pKV, 0);
+    kvstore_open("multithreaded.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     printf("Starting multi-threaded test...\n\n");
     
@@ -1563,7 +1559,7 @@ int main() {
     KVStore *pKV;
     char buffer[256];
     
-    kvstore_open("versioned.db", &pKV, 0);
+    kvstore_open("versioned.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     printf("Creating versioned document...\n\n");
     
@@ -1724,7 +1720,7 @@ int main() {
     KVStore *pKV;
     User user, found_user;
     
-    kvstore_open("users_indexed.db", &pKV, 0);
+    kvstore_open("users_indexed.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
     
     // Create users
     printf("Creating users...\n");
