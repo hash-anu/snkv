@@ -277,7 +277,7 @@ static void bench_bulk_insert(void) {
     double start, end;
     
     remove("benchmark_bulk.db");
-    kvstore_open("benchmark_bulk.db", &kv, 0, KVSTORE_JOURNAL_DELETE);
+    kvstore_open("benchmark_bulk.db", &kv, 0, KVSTORE_JOURNAL_WAL);
     
     kvstore_begin(kv, 1);
     

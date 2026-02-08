@@ -55,7 +55,7 @@ TARGET = snkv$(TARGET_EXT)
 # ---- Test files ----
 TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_acid.c tests/test_mutex_journal.c tests/test_json.c \
-           tests/test_wal.c
+           tests/test_wal.c tests/test_stress.c
 TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
 
 all: $(TARGET)

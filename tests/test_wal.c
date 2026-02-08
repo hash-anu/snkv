@@ -608,7 +608,7 @@ static void test_wal_cross_mode(void){
   rc = kvstore_get(pKV, key1, (int)strlen(key1), &got, &glen);
   int k1_ok = (rc == KVSTORE_OK && got &&
                glen == (int)strlen(val1) && memcmp(got, val1, glen) == 0);
-  if( got ) sqliteFree(got); got = NULL;
+  if( got ){ sqliteFree(got); } got = NULL;
 
   rc = kvstore_get(pKV, key2, (int)strlen(key2), &got, &glen);
   int k2_ok = (rc == KVSTORE_OK && got &&
@@ -991,7 +991,7 @@ static void test_wal_acid_isolation(void){
   int v1_ok = (rc == KVSTORE_OK && got &&
                glen == (int)strlen(val_v1) &&
                memcmp(got, val_v1, glen) == 0);
-  if( got ) sqliteFree(got); got = NULL;
+  if( got ){ sqliteFree(got); } got = NULL;
 
   /* Phantom key should not exist */
   int phantom_exists = 0;
