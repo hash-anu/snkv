@@ -11572,13 +11572,38 @@ int sqlite3WritableSchema(sqlite3 *db){
   return 0;
 }
 
+/*
+** SNKV BLOBKEY comparison functions.
+**
+** In SNKV, every BLOBKEY cell stores its payload as:
+**     [key_len  4 bytes, big-endian] [key_bytes ...] [value_bytes ...]
+**
+** The comparison functions below compare only the key portion of two
+** such blobs so that entries are ordered lexicographically by key.
+*/
+
 UnpackedRecord *sqlite3VdbeAllocUnpackedRecord(KeyInfo *pKeyInfo){
-  (void)pKeyInfo;
-  return 0;
+  UnpackedRecord *p;
+  p = (UnpackedRecord *)sqlite3DbMallocZero(pKeyInfo->db,
+                                            sizeof(UnpackedRecord));
+  if( p ){
+    p->pKeyInfo  = pKeyInfo;
+    p->nField    = 1;
+    p->default_rc = 0;
+  }
+  return p;
 }
 
 void sqlite3VdbeRecordUnpack(int nKey, const void *pKey, UnpackedRecord *p){
-  (void)nKey; (void)pKey; (void)p;
+  const unsigned char *raw = (const unsigned char *)pKey;
+  u32 keyLen;
+  (void)nKey;
+  /* Decode key length from the first 4 bytes (big-endian) */
+  keyLen = ((u32)raw[0]<<24) | ((u32)raw[1]<<16)
+         | ((u32)raw[2]<<8)  |  (u32)raw[3];
+  p->u.z    = (char *)(raw + 4);
+  p->n      = (int)keyLen;
+  p->nField = 1;
 }
 
 RecordCompare sqlite3VdbeFindCompare(UnpackedRecord *p){
@@ -11586,9 +11611,29 @@ RecordCompare sqlite3VdbeFindCompare(UnpackedRecord *p){
   return sqlite3VdbeRecordCompare;
 }
 
-int sqlite3VdbeRecordCompare(int nKey, const void *pKey, UnpackedRecord *p){
-  (void)nKey; (void)pKey; (void)p;
-  return 0;
+int sqlite3VdbeRecordCompare(
+  int nCell,
+  const void *pCellKey,
+  UnpackedRecord *p
+){
+  const unsigned char *cell = (const unsigned char *)pCellKey;
+  u32 cellKeyLen;
+  int n, c;
+  (void)nCell;
+
+  /* Decode the stored cell's key length (4-byte big-endian header) */
+  cellKeyLen = ((u32)cell[0]<<24) | ((u32)cell[1]<<16)
+             | ((u32)cell[2]<<8)  |  (u32)cell[3];
+
+  /* Compare the shorter of the two keys */
+  n = (int)cellKeyLen < p->n ? (int)cellKeyLen : p->n;
+  c = memcmp(cell + 4, p->u.z, n);
+  if( c==0 ){
+    if( (int)cellKeyLen < p->n )      c = -1;
+    else if( (int)cellKeyLen > p->n ) c = +1;
+    else                              c = p->default_rc;
+  }
+  return c;
 }
 
 void sqlite3MemSetArrayInt64(sqlite3_value *aMem, int iIdx, i64 val){

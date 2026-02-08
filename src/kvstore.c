@@ -8,16 +8,17 @@
 ** with column family support, proper error handling, logging, safety checks,
 ** and thread-safety via mutexes.
 **
-** Architecture note (3.51.200 migration):
-**   SQLite 3.51.200 only supports BTREE_INTKEY (integer key + data) or
-**   BTREE_BLOBKEY (blob key, no data).  The old flags=0 mode (blob key +
-**   separate data) no longer exists.
+** Storage model:
+**   User data tables use BTREE_BLOBKEY.  Each entry is stored as a
+**   single blob in the btree:
+**     [key_len (4 bytes BE)] [key_bytes] [value_bytes]
+**   A custom comparison function (sqlite3VdbeRecordCompare in btree.c)
+**   compares only the key portion, so entries are kept in lexicographic
+**   key order.  This enables O(log n) point lookups, efficient prefix
+**   search via cursor seek, and sorted iteration.
 **
-**   We use BTREE_INTKEY tables.  For each key-value pair:
-**     rowid  = FNV-1a 64-bit hash of the blob key
-**     data   = [key_len (4 bytes BE) | key_bytes | value_bytes]
-**   Lookups hash the key, then verify the stored key matches.
-**   Collisions are handled with linear probing (hash+1, hash+2, ...).
+**   The internal CF metadata table remains BTREE_INTKEY with FNV-1a
+**   hash as rowid (only used for column family name → root page mapping).
 */
 
 #include "kvstore.h"
@@ -45,10 +46,7 @@
 # define KVSTORE_MAX_CF_NAME 255  /* Maximum column family name length */
 #endif
 
-/* Maximum number of linear probes on hash collision */
-#ifndef KVSTORE_MAX_COLLISION_PROBES
-# define KVSTORE_MAX_COLLISION_PROBES 64
-#endif
+/* (collision probes removed — BLOBKEY storage uses direct key comparison) */
 
 /*
 ** Column family metadata stored in meta table
@@ -67,27 +65,17 @@
 #define DEFAULT_CF_NAME "default"
 
 /* ======================================================================
-** FNV-1a 64-bit hash used to map blob keys → integer rowids
+** BLOBKEY encoding helpers.
+**
+** Every BLOBKEY cell stores its data as a single blob:
+**     [key_len  4 bytes, big-endian] [key_bytes ...] [value_bytes ...]
+**
+** The btree comparison function (sqlite3VdbeRecordCompare in btree.c)
+** compares only the key portion, so entries are ordered lexicographically
+** by key.  Two entries with the same key compare as equal; BtreeInsert
+** will overwrite the old cell automatically (upsert).
 ** ====================================================================== */
-static i64 kvstoreHashKey(const void *pKey, int nKey){
-  const unsigned char *p = (const unsigned char *)pKey;
-  u64 hash = (u64)14695981039346656037ULL;
-  int i;
-  for(i = 0; i < nKey; i++){
-    hash ^= (u64)p[i];
-    hash *= (u64)1099511628211ULL;
-  }
-  /* Ensure positive i64 and non-zero */
-  hash &= 0x7FFFFFFFFFFFFFFFULL;
-  if( hash == 0 ) hash = 1;
-  return (i64)hash;
-}
-
-/* ======================================================================
-** Encode / decode helpers for the data payload stored with each rowid.
-**   Format:  [key_len (4 bytes BE)] [key_data] [value_data]
-** ====================================================================== */
-static void *kvstoreEncodeData(
+static void *kvstoreEncodeBlob(
   const void *pKey, int nKey,
   const void *pVal, int nVal,
   int *pnTotal
@@ -141,6 +129,7 @@ struct KVColumnFamily {
 struct KVStore {
   Btree *pBt;        /* Underlying btree handle */
   sqlite3 *db;       /* Database connection (required by btree) */
+  KeyInfo *pKeyInfo; /* Shared KeyInfo for BLOBKEY cursor comparisons */
   int iMetaTable;    /* Root page of CF metadata table */
   int inTrans;       /* Transaction state: 0=none, 1=read, 2=write */
   int isCorrupted;   /* Set if database corruption is detected */
@@ -178,6 +167,8 @@ struct KVIterator {
   void *pValBuf;     /* Buffer for current value */
   int nValBuf;       /* Size of value buffer */
   int isValid;       /* Iterator validity flag */
+  void *pPrefix;     /* Prefix filter (NULL = no filter) */
+  int nPrefix;       /* Length of prefix */
 };
 
 /*
@@ -266,37 +257,80 @@ static int kvstoreCheckCorruption(KVStore *pKV, int rc){
 }
 
 /* ======================================================================
-** Seek helpers for INTKEY tables with hashed blob keys.
+** BLOBKEY seek helper.
 **
-**   kvstoreSeekKey  – positions cursor on the entry whose stored key
-**                     matches (pKey, nKey).  Uses linear probing on
-**                     hash collisions.
-**                     Returns SQLITE_OK and sets *pFound=1 if found.
-**
-**   kvstoreSeekSlot – finds the first empty rowid slot starting at
-**                     the hash of (pKey, nKey).  Used for insertion
-**                     when the key does NOT yet exist.
+** Positions the cursor on the entry whose key matches (pKey, nKey).
+** Uses BtreeIndexMoveto which goes through our custom comparison
+** function.  Returns SQLITE_OK and sets *pFound=1 if an exact
+** match was found; the cursor is left pointing at the entry.
 ** ====================================================================== */
 static int kvstoreSeekKey(
   BtCursor *pCur,
+  KeyInfo *pKeyInfo,
   const void *pKey, int nKey,
-  int *pFound,
-  i64 *pRowid         /* OUT: rowid where key was found */
+  int *pFound
 ){
-  i64 baseHash = kvstoreHashKey(pKey, nKey);
-  int probe;
+  int rc;
+  int res = 0;
+  UnpackedRecord *pIdxKey;
+
   *pFound = 0;
 
+  pIdxKey = sqlite3VdbeAllocUnpackedRecord(pKeyInfo);
+  if( pIdxKey == 0 ) return SQLITE_NOMEM;
+
+  /* Point UnpackedRecord at the actual key bytes (not the header) */
+  pIdxKey->u.z = (char *)pKey;
+  pIdxKey->n   = nKey;
+  pIdxKey->nField    = 1;
+  pIdxKey->default_rc = 0;  /* exact match */
+
+  rc = sqlite3BtreeIndexMoveto(pCur, pIdxKey, &res);
+  sqlite3DbFree(pKeyInfo->db, pIdxKey);
+
+  if( rc == SQLITE_OK && res == 0 ){
+    *pFound = 1;
+  }
+  return rc;
+}
+
+/* ======================================================================
+** INTKEY helpers for the CF metadata table (internal only).
+** The metadata table stores CF name → root page mappings using INTKEY
+** with FNV-1a hash as rowid.
+** ====================================================================== */
+#ifndef KVSTORE_MAX_COLLISION_PROBES
+# define KVSTORE_MAX_COLLISION_PROBES 64
+#endif
+
+static i64 kvstoreMetaHashKey(const void *pKey, int nKey){
+  const unsigned char *p = (const unsigned char *)pKey;
+  u64 hash = (u64)14695981039346656037ULL;
+  int i;
+  for(i = 0; i < nKey; i++){
+    hash ^= (u64)p[i];
+    hash *= (u64)1099511628211ULL;
+  }
+  hash &= 0x7FFFFFFFFFFFFFFFULL;
+  if( hash == 0 ) hash = 1;
+  return (i64)hash;
+}
+
+static int kvstoreMetaSeekKey(
+  BtCursor *pCur,
+  const void *pKey, int nKey,
+  int *pFound,
+  i64 *pRowid
+){
+  i64 baseHash = kvstoreMetaHashKey(pKey, nKey);
+  int probe;
+  *pFound = 0;
   for(probe = 0; probe < KVSTORE_MAX_COLLISION_PROBES; probe++){
     i64 tryRowid = baseHash + probe;
     int res = 0;
     int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
     if( rc != SQLITE_OK ) return rc;
-    if( res != 0 ){
-      /* No entry at this rowid → key does not exist */
-      return SQLITE_OK;
-    }
-    /* Entry exists – verify stored key */
+    if( res != 0 ) return SQLITE_OK;
     u32 payloadSz = sqlite3BtreePayloadSize(pCur);
     if( (int)payloadSz >= 4 + nKey ){
       unsigned char hdr[4];
@@ -307,10 +341,7 @@ static int kvstoreSeekKey(
         void *storedKey = sqlite3Malloc(nKey);
         if( storedKey == 0 ) return SQLITE_NOMEM;
         rc = sqlite3BtreePayload(pCur, 4, nKey, storedKey);
-        if( rc != SQLITE_OK ){
-          sqlite3_free(storedKey);
-          return rc;
-        }
+        if( rc != SQLITE_OK ){ sqlite3_free(storedKey); return rc; }
         int match = (memcmp(storedKey, pKey, nKey) == 0);
         sqlite3_free(storedKey);
         if( match ){
@@ -320,32 +351,26 @@ static int kvstoreSeekKey(
         }
       }
     }
-    /* Key at this slot doesn't match – continue probing */
   }
-  /* Exhausted probes without finding key */
   return SQLITE_OK;
 }
 
-/* Find an empty slot for inserting a new key (starting from its hash) */
-static int kvstoreFindSlot(
+static int kvstoreMetaFindSlot(
   BtCursor *pCur,
   const void *pKey, int nKey,
-  i64 *pRowid          /* OUT: rowid of the empty slot */
+  i64 *pRowid
 ){
-  i64 baseHash = kvstoreHashKey(pKey, nKey);
+  i64 baseHash = kvstoreMetaHashKey(pKey, nKey);
   int probe;
-
   for(probe = 0; probe < KVSTORE_MAX_COLLISION_PROBES; probe++){
     i64 tryRowid = baseHash + probe;
     int res = 0;
     int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
     if( rc != SQLITE_OK ) return rc;
     if( res != 0 ){
-      /* Empty slot */
       *pRowid = tryRowid;
       return SQLITE_OK;
     }
-    /* Slot occupied – check if it's our key (update case handled by caller) */
   }
   return SQLITE_FULL;
 }
@@ -397,8 +422,8 @@ static int createDefaultCF(KVStore *pKV){
   rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
   if( rc != SQLITE_OK ) return rc;
 
-  /* Create default CF table (INTKEY) */
-  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_INTKEY);
+  /* Create default CF table (BLOBKEY — keys stored lexicographically) */
+  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_BLOBKEY);
   if( rc != SQLITE_OK ){
     sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     return rc;
@@ -611,6 +636,33 @@ int kvstore_open(
     pKV->iMetaTable = (int)cfMetaRoot;
   }
 
+  /* Allocate a shared KeyInfo used by all BLOBKEY data-table cursors */
+  {
+    KeyInfo *pKI = (KeyInfo*)sqlite3MallocZero(SZ_KEYINFO(1));
+    if( !pKI ){
+      /* Clean up everything allocated so far */
+      if( pKV->pDefaultCF ){
+        if( pKV->pDefaultCF->pMutex ) kvstore_mutex_free(pKV->pDefaultCF->pMutex);
+        sqlite3_free(pKV->pDefaultCF->zName);
+        sqlite3_free(pKV->pDefaultCF);
+      }
+      sqlite3BtreeClose(pKV->pBt);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
+      kvstore_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return KVSTORE_NOMEM;
+    }
+    pKI->nRef      = 1;
+    pKI->enc       = SQLITE_UTF8;
+    pKI->nKeyField = 1;
+    pKI->nAllField = 1;
+    pKI->db        = pKV->db;
+    pKI->aSortFlags = 0;  /* ascending, no collation */
+    pKI->aColl[0]  = 0;
+    pKV->pKeyInfo  = pKI;
+  }
+
   pKV->inTrans = 0;
   *ppKV = pKV;
   return KVSTORE_OK;
@@ -657,6 +709,9 @@ int kvstore_close(KVStore *pKV){
 
   /* Close the btree */
   rc = sqlite3BtreeClose(pKV->pBt);
+
+  /* Free shared KeyInfo */
+  sqlite3_free(pKV->pKeyInfo);
 
   /* Free error message */
   if( pKV->zErrMsg ){
@@ -908,7 +963,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   }
 
   int found = 0;
-  rc = kvstoreSeekKey(pCur, zName, (int)nNameLen, &found, NULL);
+  rc = kvstoreMetaSeekKey(pCur, zName, (int)nNameLen, &found, NULL);
   kvstoreFreeCursor(pCur);
   pCur = NULL;
 
@@ -924,8 +979,8 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return KVSTORE_ERROR;
   }
 
-  /* Create new btree table for this CF */
-  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_INTKEY);
+  /* Create new btree table for this CF (BLOBKEY) */
+  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_BLOBKEY);
   if( rc != SQLITE_OK ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
@@ -945,7 +1000,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     tableRootBytes[3] = iTable & 0xFF;
 
     int nEncoded;
-    void *pEncoded = kvstoreEncodeData(zName, (int)nNameLen,
+    void *pEncoded = kvstoreEncodeBlob(zName, (int)nNameLen,
                                        tableRootBytes, 4, &nEncoded);
     if( !pEncoded ){
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
@@ -970,7 +1025,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     }
 
     i64 slot;
-    rc = kvstoreFindSlot(pCur, zName, (int)nNameLen, &slot);
+    rc = kvstoreMetaFindSlot(pCur, zName, (int)nNameLen, &slot);
     if( rc != SQLITE_OK ){
       sqlite3_free(pEncoded);
       kvstoreFreeCursor(pCur);
@@ -1105,7 +1160,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   int found = 0;
   i64 foundRowid = 0;
-  rc = kvstoreSeekKey(pCur, zName, (int)nNameLen, &found, &foundRowid);
+  rc = kvstoreMetaSeekKey(pCur, zName, (int)nNameLen, &found, &foundRowid);
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
@@ -1269,7 +1324,7 @@ static int kvstore_cf_put_internal(
     kvstore_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, 0, pCur);
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, pKV->pKeyInfo, pCur);
   if( rc != SQLITE_OK ){
     kvstoreCheckCorruption(pKV, rc);
     kvstoreFreeCursor(pCur);
@@ -1279,66 +1334,28 @@ static int kvstore_cf_put_internal(
     return rc;
   }
 
-  /* Check if key already exists (for update) */
-  int found = 0;
-  i64 existingRowid = 0;
-  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, &existingRowid);
-  if( rc != SQLITE_OK ){
-    kvstoreFreeCursor(pCur);
-    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    kvstore_mutex_leave(pKV->pMutex);
-    kvstore_mutex_leave(pCF->pMutex);
-    return rc;
-  }
-
-  /* Determine the rowid to use */
-  i64 rowid;
-  if( found ){
-    /* Update existing entry – delete the old one first */
-    int res = 0;
-    rc = sqlite3BtreeTableMoveto(pCur, existingRowid, 0, &res);
-    if( rc == SQLITE_OK && res == 0 ){
-      rc = sqlite3BtreeDelete(pCur, 0);
-    }
-    if( rc != SQLITE_OK ){
+  /* Encode [key_len | key | value] as a single BLOBKEY entry.
+  ** BtreeInsert handles seek + overwrite (upsert) automatically. */
+  {
+    int nEncoded;
+    void *pEncoded = kvstoreEncodeBlob(pKey, nKey, pValue, nValue, &nEncoded);
+    if( !pEncoded ){
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
       kvstore_mutex_leave(pKV->pMutex);
       kvstore_mutex_leave(pCF->pMutex);
-      return rc;
+      return SQLITE_NOMEM;
     }
-    rowid = existingRowid;
-  }else{
-    /* New key – find empty slot */
-    rc = kvstoreFindSlot(pCur, pKey, nKey, &rowid);
-    if( rc != SQLITE_OK ){
-      kvstoreFreeCursor(pCur);
-      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      kvstore_mutex_leave(pKV->pMutex);
-      kvstore_mutex_leave(pCF->pMutex);
-      return rc;
-    }
+
+    BtreePayload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.pKey  = pEncoded;
+    payload.nKey  = nEncoded;
+    /* pData and nData are 0 for index/BLOBKEY tables */
+
+    rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+    sqlite3_free(pEncoded);
   }
-
-  /* Encode and insert */
-  int nEncoded;
-  void *pEncoded = kvstoreEncodeData(pKey, nKey, pValue, nValue, &nEncoded);
-  if( !pEncoded ){
-    kvstoreFreeCursor(pCur);
-    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    kvstore_mutex_leave(pKV->pMutex);
-    kvstore_mutex_leave(pCF->pMutex);
-    return SQLITE_NOMEM;
-  }
-
-  BtreePayload payload;
-  memset(&payload, 0, sizeof(payload));
-  payload.nKey  = rowid;
-  payload.pData = pEncoded;
-  payload.nData = nEncoded;
-
-  rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
-  sqlite3_free(pEncoded);
   kvstoreFreeCursor(pCur);
 
   if( rc == SQLITE_OK ){
@@ -1419,7 +1436,7 @@ static int kvstore_cf_get_internal(
     kvstore_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, 0, pCur);
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pCur);
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
@@ -1429,8 +1446,7 @@ static int kvstore_cf_get_internal(
   }
 
   int found = 0;
-  i64 foundRowid = 0;
-  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, &foundRowid);
+  rc = kvstoreSeekKey(pCur, pKV->pKeyInfo, pKey, nKey, &found);
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
@@ -1439,19 +1455,7 @@ static int kvstore_cf_get_internal(
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
 
-  /* Re-position and read value */
-  {
-    int res = 0;
-    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
-    if( rc != SQLITE_OK || res != 0 ){
-      kvstoreFreeCursor(pCur);
-      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      kvstore_mutex_leave(pKV->pMutex);
-      kvstore_mutex_leave(pCF->pMutex);
-      return (rc == SQLITE_OK) ? KVSTORE_CORRUPT : rc;
-    }
-  }
-
+  /* Cursor is already positioned on the matching entry */
   u32 payloadSz = sqlite3BtreePayloadSize(pCur);
   int storedKeyLen = 0;
   {
@@ -1547,7 +1551,7 @@ static int kvstore_cf_delete_internal(
     kvstore_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, 0, pCur);
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, pKV->pKeyInfo, pCur);
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
@@ -1557,8 +1561,7 @@ static int kvstore_cf_delete_internal(
   }
 
   int found = 0;
-  i64 foundRowid = 0;
-  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, &foundRowid);
+  rc = kvstoreSeekKey(pCur, pKV->pKeyInfo, pKey, nKey, &found);
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
@@ -1567,14 +1570,8 @@ static int kvstore_cf_delete_internal(
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
 
-  /* Position on exact rowid and delete */
-  {
-    int res = 0;
-    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
-    if( rc == SQLITE_OK && res == 0 ){
-      rc = sqlite3BtreeDelete(pCur, 0);
-    }
-  }
+  /* Cursor is already positioned — delete the entry */
+  rc = sqlite3BtreeDelete(pCur, 0);
   kvstoreFreeCursor(pCur);
 
   if( rc == SQLITE_OK ){
@@ -1653,7 +1650,7 @@ static int kvstore_cf_exists_internal(
     kvstore_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, 0, pCur);
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pCur);
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
@@ -1663,7 +1660,7 @@ static int kvstore_cf_exists_internal(
   }
 
   int found = 0;
-  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, NULL);
+  rc = kvstoreSeekKey(pCur, pKV->pKeyInfo, pKey, nKey, &found);
   kvstoreFreeCursor(pCur);
 
   if( autoTrans ){
@@ -1775,7 +1772,7 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
     kvstore_mutex_leave(pKV->pMutex);
     return SQLITE_NOMEM;
   }
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, 0, pIter->pCur);
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pIter->pCur);
   if( rc != SQLITE_OK ){
     kvstoreCheckCorruption(pKV, rc);
     if( pIter->ownsTrans ){
@@ -1797,6 +1794,99 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
 }
 
 /*
+** Create a prefix iterator for a specific column family.
+** The iterator is positioned at the first key >= prefix.
+** Subsequent calls to kvstore_iterator_next will stop when keys
+** no longer start with the prefix.
+*/
+int kvstore_cf_prefix_iterator_create(
+  KVColumnFamily *pCF,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+){
+  int rc;
+  KVIterator *pIter;
+
+  if( !pCF || !ppIter || !pPrefix || nPrefix <= 0 ){
+    return KVSTORE_ERROR;
+  }
+
+  /* Create a normal iterator first */
+  rc = kvstore_cf_iterator_create(pCF, ppIter);
+  if( rc != KVSTORE_OK ) return rc;
+
+  pIter = *ppIter;
+
+  /* Store a copy of the prefix */
+  pIter->pPrefix = sqlite3Malloc(nPrefix);
+  if( !pIter->pPrefix ){
+    kvstore_iterator_close(pIter);
+    *ppIter = NULL;
+    return KVSTORE_NOMEM;
+  }
+  memcpy(pIter->pPrefix, pPrefix, nPrefix);
+  pIter->nPrefix = nPrefix;
+
+  /* Position iterator at the first matching key */
+  rc = kvstore_iterator_first(pIter);
+  if( rc != KVSTORE_OK ){
+    kvstore_iterator_close(pIter);
+    *ppIter = NULL;
+    return rc;
+  }
+
+  return KVSTORE_OK;
+}
+
+/*
+** Create a prefix iterator for the default column family.
+*/
+int kvstore_prefix_iterator_create(
+  KVStore *pKV,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+){
+  if( !pKV || !pKV->pDefaultCF ){
+    return KVSTORE_ERROR;
+  }
+  return kvstore_cf_prefix_iterator_create(pKV->pDefaultCF, pPrefix, nPrefix, ppIter);
+}
+
+/*
+** Check if the current cursor entry's key starts with the iterator's prefix.
+** Returns 1 if match (or no prefix filter), 0 otherwise.
+*/
+static int kvstoreIterCheckPrefix(KVIterator *pIter){
+  unsigned char hdr[4];
+  int rc, keyLen;
+
+  if( !pIter->pPrefix ) return 1;
+  if( pIter->eof ) return 0;
+
+  u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  if( payloadSz < (u32)(4 + pIter->nPrefix) ) return 0;
+
+  rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
+  if( rc != SQLITE_OK ) return 0;
+  keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  if( keyLen < pIter->nPrefix ) return 0;
+
+  /* Read just the prefix-length portion of the stored key and compare */
+  {
+    unsigned char stackBuf[256];
+    void *pBuf = (pIter->nPrefix <= (int)sizeof(stackBuf))
+                   ? stackBuf
+                   : sqlite3Malloc(pIter->nPrefix);
+    int match;
+    if( !pBuf ) return 0;
+    rc = sqlite3BtreePayload(pIter->pCur, 4, pIter->nPrefix, pBuf);
+    match = (rc == SQLITE_OK && memcmp(pBuf, pIter->pPrefix, pIter->nPrefix) == 0);
+    if( pBuf != stackBuf ) sqlite3_free(pBuf);
+    return match;
+  }
+}
+
+/*
 ** Move iterator to first entry
 */
 int kvstore_iterator_first(KVIterator *pIter){
@@ -1806,9 +1896,39 @@ int kvstore_iterator_first(KVIterator *pIter){
     return KVSTORE_ERROR;
   }
 
-  rc = sqlite3BtreeFirst(pIter->pCur, &res);
-  if( rc == SQLITE_OK ){
-    pIter->eof = res;
+  if( pIter->pPrefix ){
+    /* Prefix iterator: seek to the first key >= prefix */
+    KVStore *pKV = pIter->pCF->pKV;
+    UnpackedRecord *pIdxKey = sqlite3VdbeAllocUnpackedRecord(pKV->pKeyInfo);
+    if( !pIdxKey ) return SQLITE_NOMEM;
+
+    pIdxKey->u.z       = (char *)pIter->pPrefix;
+    pIdxKey->n         = pIter->nPrefix;
+    pIdxKey->nField    = 1;
+    pIdxKey->default_rc = 0;
+
+    rc = sqlite3BtreeIndexMoveto(pIter->pCur, pIdxKey, &res);
+    sqlite3DbFree(pKV->pKeyInfo->db, pIdxKey);
+    if( rc != SQLITE_OK ) return rc;
+
+    if( res < 0 ){
+      /* Cursor is before the first matching key — advance */
+      rc = sqlite3BtreeNext(pIter->pCur, 0);
+      if( rc == SQLITE_DONE ){
+        pIter->eof = 1;
+        return SQLITE_OK;
+      }
+      if( rc != SQLITE_OK ) return rc;
+    }
+    pIter->eof = 0;
+    if( !kvstoreIterCheckPrefix(pIter) ){
+      pIter->eof = 1;
+    }
+  }else{
+    rc = sqlite3BtreeFirst(pIter->pCur, &res);
+    if( rc == SQLITE_OK ){
+      pIter->eof = res;
+    }
   }
 
   return rc;
@@ -1832,6 +1952,11 @@ int kvstore_iterator_next(KVIterator *pIter){
   if( rc == SQLITE_DONE ){
     pIter->eof = 1;
     rc = SQLITE_OK;
+  }else if( rc == SQLITE_OK && pIter->pPrefix ){
+    /* Check prefix bound — keys are sorted, so first mismatch means done */
+    if( !kvstoreIterCheckPrefix(pIter) ){
+      pIter->eof = 1;
+    }
   }
 
   return rc;
@@ -1971,6 +2096,10 @@ void kvstore_iterator_close(KVIterator *pIter){
 
   if( pIter->pValBuf ){
     sqlite3_free(pIter->pValBuf);
+  }
+
+  if( pIter->pPrefix ){
+    sqlite3_free(pIter->pPrefix);
   }
 
   sqlite3_free(pIter);
@@ -2345,7 +2474,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
 
   int found = 0;
   i64 foundRowid = 0;
-  rc = kvstoreSeekKey(pCur, zName, (int)nNameLen, &found, &foundRowid);
+  rc = kvstoreMetaSeekKey(pCur, zName, (int)nNameLen, &found, &foundRowid);
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
