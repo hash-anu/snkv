@@ -9,18 +9,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
-    
+
     - name: Build main target
       run: make
-    
+
     - name: Build all test executables
       run: |
         make tests/test_prod
@@ -29,25 +29,33 @@ jobs:
         make tests/test_acid
         make tests/test_mutex_journal
         make tests/test_json
-    
+        make tests/test_wal
+        make tests/test_stress
+
     - name: Run test_prod
       run: ./tests/test_prod
-    
+
     - name: Run test_columnfamily
       run: ./tests/test_columnfamily
-    
+
     - name: Run test_benchmark
       run: ./tests/test_benchmark
-    
+
     - name: Run test_acid
       run: ./tests/test_acid
-    
+
     - name: Run test_mutex_journal
       run: ./tests/test_mutex_journal
-    
+
     - name: Run test_json
       run: ./tests/test_json
-    
+
+    - name: Run test_wal
+      run: ./tests/test_wal
+
+    - name: Run test_stress
+      run: ./tests/test_stress
+
     - name: Clean up
       if: always()
       run: make clean

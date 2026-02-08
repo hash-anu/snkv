@@ -141,7 +141,7 @@ static void test_store_mutex_protection(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK && pKV != NULL) {
         /* Test that operations work (implicitly testing mutex) */
         const char *key = "test_key";
@@ -176,7 +176,7 @@ static void test_cf_mutex_protection(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         rc = kvstore_cf_create(pKV, "test_cf", &pCF);
         if (rc == KVSTORE_OK && pCF != NULL) {
@@ -213,17 +213,21 @@ static void test_journal_creation(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
-        /* Start a write transaction */
+        /* Start a write transaction and perform a write to trigger journal */
         rc = kvstore_begin(pKV, 1);
         if (rc == KVSTORE_OK) {
+            const char *key = "jtest";
+            const char *val = "jval";
+            kvstore_put(pKV, key, 5, val, 4);
+
             /* Journal file should exist during transaction */
             int journal_exists = file_exists(TEST_JOURNAL_FILE);
-            
+
             /* Rollback to clean up */
             kvstore_rollback(pKV);
-            
+
             passed = journal_exists;
         }
         kvstore_close(pKV);
@@ -243,7 +247,7 @@ static void test_journal_commit(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         const char *key = "commit_test";
         const char *value = "commit_value";
@@ -279,7 +283,7 @@ static void test_journal_rollback(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         const char *key = "rollback_test";
         const char *value = "rollback_value";
@@ -321,7 +325,7 @@ static void test_journal_persistence(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         /* Start write transaction */
         rc = kvstore_begin(pKV, 1);
@@ -407,7 +411,7 @@ static void test_concurrent_access(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         /* Initialize thread data */
         for (i = 0; i < NUM_THREADS; i++) {
@@ -524,7 +528,7 @@ static void test_transaction_isolation(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         /* Initialize thread data */
         for (i = 0; i < 5; i++) {
@@ -579,7 +583,7 @@ static void test_mutex_data_integrity(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         /* All threads will write different keys */
         for (i = 0; i < NUM_THREADS; i++) {
@@ -628,7 +632,7 @@ static void test_journal_recovery(void) {
     cleanup_test_files();
     
     /* Create database with some data */
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         const char *key = "recovery_test";
         const char *value1 = "original_value";
@@ -649,7 +653,7 @@ static void test_journal_recovery(void) {
     }
     
     /* Reopen database - journal should be replayed or rolled back */
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         const char *key = "recovery_test";
         void *retrieved_value = NULL;
@@ -658,7 +662,8 @@ static void test_journal_recovery(void) {
         rc = kvstore_get(pKV, key, strlen(key), &retrieved_value, &value_len);
         if (rc == KVSTORE_OK && retrieved_value != NULL) {
             /* Value should be original (transaction was not committed) */
-            passed = (strcmp((char*)retrieved_value, "original_value") == 0);
+            passed = (value_len == (int)strlen("original_value") &&
+                      memcmp(retrieved_value, "original_value", value_len) == 0);
             sqliteFree(retrieved_value);
         }
         
@@ -681,7 +686,7 @@ static void test_multi_cf_concurrent(void) {
     
     cleanup_test_files();
     
-    rc = kvstore_open(TEST_DB_FILE, &pKV, 0);
+    rc = kvstore_open(TEST_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
     if (rc == KVSTORE_OK) {
         /* Create two column families */
         rc = kvstore_cf_create(pKV, "cf1", &pCF1);

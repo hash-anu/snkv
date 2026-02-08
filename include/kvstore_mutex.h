@@ -40,6 +40,5 @@ kvstore_mutex* kvstore_mutex_alloc(void);
 void kvstore_mutex_free(kvstore_mutex *p);
 void kvstore_mutex_enter(kvstore_mutex *p);
 void kvstore_mutex_leave(kvstore_mutex *p);
-int kvstore_mutex_try(kvstore_mutex *p);
 
 #endif /* KVSTORE_MUTEX_H */

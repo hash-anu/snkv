@@ -90,7 +90,7 @@ static void test_open_close(void){
   
   cleanup_db(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   ASSERT_TRUE(kv != NULL, "KVStore handle is NULL");
   
@@ -113,7 +113,7 @@ static void test_basic_crud(void){
   
   cleanup_db(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* PUT */
@@ -156,7 +156,7 @@ static void test_update(void){
   int vlen;
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Initial put */
@@ -188,7 +188,7 @@ static void test_transactions(void){
   int rc, exists;
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Test commit */
@@ -234,7 +234,7 @@ static void test_batch_operations(void){
   char key[32], val[64];
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   rc = kvstore_begin(kv, 1);
@@ -276,7 +276,7 @@ static void test_iterator(void){
   int klen, vlen;
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Insert test data */
@@ -329,7 +329,7 @@ static void test_large_data(void){
   int large_size = 1024 * 1024;  /* 1MB */
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Allocate large value */
@@ -365,7 +365,7 @@ static void test_error_handling(void){
   int vlen;
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Test NULL key */
@@ -402,7 +402,7 @@ static void test_persistence(void){
   cleanup_db(TEST_DB);
   
   /* Session 1: Write data */
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database (session 1)");
   
   rc = kvstore_put(kv, "persistent", 10, "data", 4);
@@ -412,7 +412,7 @@ static void test_persistence(void){
   ASSERT_OK(rc, "Failed to close (session 1)");
   
   /* Session 2: Read data */
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database (session 2)");
   
   rc = kvstore_exists(kv, "persistent", 10, &exists);
@@ -440,7 +440,7 @@ static void test_statistics(void){
   int rc;
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Perform operations */
@@ -481,7 +481,7 @@ static void test_integrity(void){
   char *errMsg = NULL;
   
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0);
+  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Insert data */
@@ -527,7 +527,7 @@ static void test_performance(void){
   int num_ops = 10000;
   
   cleanup_db(PERF_DB);
-  rc = kvstore_open(PERF_DB, &kv, 0);
+  rc = kvstore_open(PERF_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Benchmark: Sequential writes */

@@ -2,16 +2,26 @@
 /*
 **
 ** Key-Value Store Implementation - Column Families
-** Built on top of SQLite v3.3.0 btree implementation
+** Built on top of SQLite v3.51.200 btree implementation
 **
 ** This implementation provides a robust key-value store
 ** with column family support, proper error handling, logging, safety checks,
 ** and thread-safety via mutexes.
-** 
-** 
+**
+** Architecture note (3.51.200 migration):
+**   SQLite 3.51.200 only supports BTREE_INTKEY (integer key + data) or
+**   BTREE_BLOBKEY (blob key, no data).  The old flags=0 mode (blob key +
+**   separate data) no longer exists.
+**
+**   We use BTREE_INTKEY tables.  For each key-value pair:
+**     rowid  = FNV-1a 64-bit hash of the blob key
+**     data   = [key_len (4 bytes BE) | key_bytes | value_bytes]
+**   Lookups hash the key, then verify the stored key matches.
+**   Collisions are handled with linear probing (hash+1, hash+2, ...).
 */
 
 #include "kvstore.h"
+#include "pager.h"
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
@@ -35,6 +45,11 @@
 # define KVSTORE_MAX_CF_NAME 255  /* Maximum column family name length */
 #endif
 
+/* Maximum number of linear probes on hash collision */
+#ifndef KVSTORE_MAX_COLLISION_PROBES
+# define KVSTORE_MAX_COLLISION_PROBES 64
+#endif
+
 /*
 ** Column family metadata stored in meta table
 ** Meta layout:
@@ -50,6 +65,64 @@
 ** Default column family name
 */
 #define DEFAULT_CF_NAME "default"
+
+/* ======================================================================
+** FNV-1a 64-bit hash used to map blob keys → integer rowids
+** ====================================================================== */
+static i64 kvstoreHashKey(const void *pKey, int nKey){
+  const unsigned char *p = (const unsigned char *)pKey;
+  u64 hash = (u64)14695981039346656037ULL;
+  int i;
+  for(i = 0; i < nKey; i++){
+    hash ^= (u64)p[i];
+    hash *= (u64)1099511628211ULL;
+  }
+  /* Ensure positive i64 and non-zero */
+  hash &= 0x7FFFFFFFFFFFFFFFULL;
+  if( hash == 0 ) hash = 1;
+  return (i64)hash;
+}
+
+/* ======================================================================
+** Encode / decode helpers for the data payload stored with each rowid.
+**   Format:  [key_len (4 bytes BE)] [key_data] [value_data]
+** ====================================================================== */
+static void *kvstoreEncodeData(
+  const void *pKey, int nKey,
+  const void *pVal, int nVal,
+  int *pnTotal
+){
+  int nTotal = 4 + nKey + nVal;
+  unsigned char *pOut = (unsigned char *)sqlite3Malloc(nTotal);
+  if( pOut == 0 ) return 0;
+  pOut[0] = (unsigned char)((nKey >> 24) & 0xFF);
+  pOut[1] = (unsigned char)((nKey >> 16) & 0xFF);
+  pOut[2] = (unsigned char)((nKey >>  8) & 0xFF);
+  pOut[3] = (unsigned char)( nKey        & 0xFF);
+  memcpy(pOut + 4, pKey, nKey);
+  if( nVal > 0 && pVal ){
+    memcpy(pOut + 4 + nKey, pVal, nVal);
+  }
+  *pnTotal = nTotal;
+  return pOut;
+}
+
+/* ======================================================================
+** Internal cursor helpers – wraps the new callerallocs cursor model
+** ====================================================================== */
+static BtCursor *kvstoreAllocCursor(void){
+  int n = sqlite3BtreeCursorSize();
+  BtCursor *p = (BtCursor*)sqlite3MallocZero(n);
+  if( p ) sqlite3BtreeCursorZero(p);
+  return p;
+}
+
+static void kvstoreFreeCursor(BtCursor *pCur){
+  if( pCur ){
+    sqlite3BtreeCloseCursor(pCur);
+    sqlite3_free(pCur);
+  }
+}
 
 /*
 ** Column Family structure
@@ -72,16 +145,16 @@ struct KVStore {
   int inTrans;       /* Transaction state: 0=none, 1=read, 2=write */
   int isCorrupted;   /* Set if database corruption is detected */
   char *zErrMsg;     /* Last error message */
-  
+
   /* Thread safety */
   kvstore_mutex *pMutex;  /* Main mutex protecting store operations */
-  
+
   /* Column families */
   KVColumnFamily *pDefaultCF;  /* Default column family */
   KVColumnFamily **apCF;       /* Array of open column families */
   int nCF;                     /* Number of open column families */
   int nCFAlloc;                /* Allocated size of apCF array */
-  
+
   /* Statistics */
   struct {
     u64 nPuts;       /* Number of put operations */
@@ -113,12 +186,12 @@ struct KVIterator {
 static void kvstoreSetError(KVStore *pKV, const char *zFormat, ...){
   va_list ap;
   if( pKV->zErrMsg ){
-    sqliteFree(pKV->zErrMsg);
+    sqlite3_free(pKV->zErrMsg);
     pKV->zErrMsg = 0;
   }
   if( zFormat ){
     va_start(ap, zFormat);
-    pKV->zErrMsg = sqlite3VMPrintf(zFormat, ap);
+    pKV->zErrMsg = sqlite3VMPrintf(pKV->db, zFormat, ap);
     va_end(ap);
   }
   pKV->stats.nErrors++;
@@ -129,11 +202,11 @@ static void kvstoreSetError(KVStore *pKV, const char *zFormat, ...){
 */
 const char *kvstore_errmsg(KVStore *pKV){
   const char *zMsg;
-  
+
   if( !pKV ){
     return "no error";
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
   if( pKV->zErrMsg ){
     zMsg = pKV->zErrMsg;
@@ -141,23 +214,8 @@ const char *kvstore_errmsg(KVStore *pKV){
     zMsg = "no error";
   }
   kvstore_mutex_leave(pKV->pMutex);
-  
-  return zMsg;
-}
 
-/*
-** Memory comparison function for key ordering
-*/
-static int keyCompare(
-  void *NotUsed,
-  int n1, const void *p1,
-  int n2, const void *p2
-){
-  int c = memcmp(p1, p2, n1 < n2 ? n1 : n2);
-  if( c == 0 ){
-    c = n1 - n2;
-  }
-  return c;
+  return zMsg;
 }
 
 /*
@@ -174,24 +232,24 @@ static int kvstoreValidateKeyValue(
     kvstoreSetError(pKV, "invalid key: null or zero length");
     return KVSTORE_ERROR;
   }
-  
+
   if( nKey > KVSTORE_MAX_KEY_SIZE ){
-    kvstoreSetError(pKV, "key too large: %d bytes (max %d)", 
+    kvstoreSetError(pKV, "key too large: %d bytes (max %d)",
                     nKey, KVSTORE_MAX_KEY_SIZE);
     return KVSTORE_ERROR;
   }
-  
+
   if( pValue == NULL && nValue != 0 ){
     kvstoreSetError(pKV, "invalid value: null pointer with non-zero length");
     return KVSTORE_ERROR;
   }
-  
+
   if( nValue > KVSTORE_MAX_VALUE_SIZE ){
-    kvstoreSetError(pKV, "value too large: %d bytes (max %d)", 
+    kvstoreSetError(pKV, "value too large: %d bytes (max %d)",
                     nValue, KVSTORE_MAX_VALUE_SIZE);
     return KVSTORE_ERROR;
   }
-  
+
   return KVSTORE_OK;
 }
 
@@ -207,36 +265,123 @@ static int kvstoreCheckCorruption(KVStore *pKV, int rc){
   return 0;
 }
 
+/* ======================================================================
+** Seek helpers for INTKEY tables with hashed blob keys.
+**
+**   kvstoreSeekKey  – positions cursor on the entry whose stored key
+**                     matches (pKey, nKey).  Uses linear probing on
+**                     hash collisions.
+**                     Returns SQLITE_OK and sets *pFound=1 if found.
+**
+**   kvstoreSeekSlot – finds the first empty rowid slot starting at
+**                     the hash of (pKey, nKey).  Used for insertion
+**                     when the key does NOT yet exist.
+** ====================================================================== */
+static int kvstoreSeekKey(
+  BtCursor *pCur,
+  const void *pKey, int nKey,
+  int *pFound,
+  i64 *pRowid         /* OUT: rowid where key was found */
+){
+  i64 baseHash = kvstoreHashKey(pKey, nKey);
+  int probe;
+  *pFound = 0;
+
+  for(probe = 0; probe < KVSTORE_MAX_COLLISION_PROBES; probe++){
+    i64 tryRowid = baseHash + probe;
+    int res = 0;
+    int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
+    if( rc != SQLITE_OK ) return rc;
+    if( res != 0 ){
+      /* No entry at this rowid → key does not exist */
+      return SQLITE_OK;
+    }
+    /* Entry exists – verify stored key */
+    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    if( (int)payloadSz >= 4 + nKey ){
+      unsigned char hdr[4];
+      rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+      if( rc != SQLITE_OK ) return rc;
+      int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      if( storedKeyLen == nKey ){
+        void *storedKey = sqlite3Malloc(nKey);
+        if( storedKey == 0 ) return SQLITE_NOMEM;
+        rc = sqlite3BtreePayload(pCur, 4, nKey, storedKey);
+        if( rc != SQLITE_OK ){
+          sqlite3_free(storedKey);
+          return rc;
+        }
+        int match = (memcmp(storedKey, pKey, nKey) == 0);
+        sqlite3_free(storedKey);
+        if( match ){
+          *pFound = 1;
+          if( pRowid ) *pRowid = tryRowid;
+          return SQLITE_OK;
+        }
+      }
+    }
+    /* Key at this slot doesn't match – continue probing */
+  }
+  /* Exhausted probes without finding key */
+  return SQLITE_OK;
+}
+
+/* Find an empty slot for inserting a new key (starting from its hash) */
+static int kvstoreFindSlot(
+  BtCursor *pCur,
+  const void *pKey, int nKey,
+  i64 *pRowid          /* OUT: rowid of the empty slot */
+){
+  i64 baseHash = kvstoreHashKey(pKey, nKey);
+  int probe;
+
+  for(probe = 0; probe < KVSTORE_MAX_COLLISION_PROBES; probe++){
+    i64 tryRowid = baseHash + probe;
+    int res = 0;
+    int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
+    if( rc != SQLITE_OK ) return rc;
+    if( res != 0 ){
+      /* Empty slot */
+      *pRowid = tryRowid;
+      return SQLITE_OK;
+    }
+    /* Slot occupied – check if it's our key (update case handled by caller) */
+  }
+  return SQLITE_FULL;
+}
+
 /*
 ** Initialize CF metadata table (caller must hold mutex)
 */
 static int initCFMetadataTable(KVStore *pKV){
   int rc;
-  
-  rc = sqlite3BtreeBeginTrans(pKV->pBt, 1);
+  Pgno pgno;
+
+  rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
   if( rc != SQLITE_OK ) return rc;
-  
-  /* Create metadata table */
-  rc = sqlite3BtreeCreateTable(pKV->pBt, &pKV->iMetaTable, 0);
+
+  /* Create metadata table (INTKEY) */
+  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_INTKEY);
   if( rc != SQLITE_OK ){
-    sqlite3BtreeRollback(pKV->pBt);
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     return rc;
   }
-  
+  pKV->iMetaTable = (int)pgno;
+
   /* Store metadata table root in meta[3] */
-  rc = sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_METADATA_ROOT, pKV->iMetaTable);
+  rc = sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_METADATA_ROOT, pgno);
   if( rc != SQLITE_OK ){
-    sqlite3BtreeRollback(pKV->pBt);
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     return rc;
   }
-  
+
   /* Initialize CF count to 1 (default CF) */
   rc = sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, 1);
   if( rc != SQLITE_OK ){
-    sqlite3BtreeRollback(pKV->pBt);
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     return rc;
   }
-  
+
   rc = sqlite3BtreeCommit(pKV->pBt);
   return rc;
 }
@@ -247,46 +392,45 @@ static int initCFMetadataTable(KVStore *pKV){
 static int createDefaultCF(KVStore *pKV){
   int rc;
   KVColumnFamily *pCF;
-  
-  rc = sqlite3BtreeBeginTrans(pKV->pBt, 1);
+  Pgno pgno;
+
+  rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
   if( rc != SQLITE_OK ) return rc;
-  
-  /* Create default CF table */
-  int iTable;
-  rc = sqlite3BtreeCreateTable(pKV->pBt, &iTable, 0);
+
+  /* Create default CF table (INTKEY) */
+  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_INTKEY);
   if( rc != SQLITE_OK ){
-    sqlite3BtreeRollback(pKV->pBt);
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     return rc;
   }
-  
+
   /* Store in meta[1] for backward compatibility */
-  rc = sqlite3BtreeUpdateMeta(pKV->pBt, META_DEFAULT_CF_ROOT, iTable);
+  rc = sqlite3BtreeUpdateMeta(pKV->pBt, META_DEFAULT_CF_ROOT, pgno);
   if( rc != SQLITE_OK ){
-    sqlite3BtreeRollback(pKV->pBt);
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     return rc;
   }
-  
+
   rc = sqlite3BtreeCommit(pKV->pBt);
   if( rc != SQLITE_OK ) return rc;
-  
+
   /* Create CF structure */
-  pCF = (KVColumnFamily*)sqliteMalloc(sizeof(KVColumnFamily));
+  pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
   if( !pCF ) return KVSTORE_NOMEM;
-  
-  memset(pCF, 0, sizeof(KVColumnFamily));
+
   pCF->pKV = pKV;
   pCF->zName = sqliteStrDup(DEFAULT_CF_NAME);
-  pCF->iTable = iTable;
+  pCF->iTable = (int)pgno;
   pCF->refCount = 1;
-  
+
   /* Create mutex for default CF */
   pCF->pMutex = kvstore_mutex_alloc();
   if( !pCF->pMutex ){
-    sqliteFree(pCF->zName);
-    sqliteFree(pCF);
+    sqlite3_free(pCF->zName);
+    sqlite3_free(pCF);
     return KVSTORE_NOMEM;
   }
-  
+
   pKV->pDefaultCF = pCF;
   return KVSTORE_OK;
 }
@@ -297,124 +441,176 @@ static int createDefaultCF(KVStore *pKV){
 int kvstore_open(
   const char *zFilename,
   KVStore **ppKV,
-  int flags
+  int flags,
+  int journalMode
 ){
   KVStore *pKV;
   int rc;
-  
+
   if( ppKV == NULL ){
     return KVSTORE_ERROR;
   }
   *ppKV = NULL;
-  
+
+  /* One-time SQLite library initialisation */
+  rc = sqlite3_initialize();
+  if( rc != SQLITE_OK ) return rc;
+
   /* Allocate KVStore structure */
-  pKV = (KVStore*)sqliteMalloc(sizeof(KVStore));
+  pKV = (KVStore*)sqlite3MallocZero(sizeof(KVStore));
   if( pKV == NULL ){
     return KVSTORE_NOMEM;
   }
-  memset(pKV, 0, sizeof(KVStore));
-  
+
   /* Create main mutex first */
   pKV->pMutex = kvstore_mutex_alloc();
   if( !pKV->pMutex ){
-    sqliteFree(pKV);
+    sqlite3_free(pKV);
     return KVSTORE_NOMEM;
   }
-  
+
   /* Create a minimal sqlite3 structure (required by btree) */
-  pKV->db = (sqlite3*)sqliteMalloc(sizeof(sqlite3));
+  pKV->db = (sqlite3*)sqlite3MallocZero(sizeof(sqlite3));
   if( pKV->db == NULL ){
     kvstore_mutex_free(pKV->pMutex);
-    sqliteFree(pKV);
+    sqlite3_free(pKV);
     return KVSTORE_NOMEM;
   }
-  memset(pKV->db, 0, sizeof(sqlite3));
-  
-  /* Open the btree */
-  rc = sqlite3BtreeOpen(zFilename, pKV->db, &pKV->pBt, flags);
+  pKV->db->mutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
+  pKV->db->aLimit[SQLITE_LIMIT_LENGTH] = SQLITE_MAX_LENGTH;
+
+  /* Open the btree (new signature: pVfs, filename, db, ppBt, flags, vfsFlags) */
+  rc = sqlite3BtreeOpen(
+    sqlite3_vfs_find(0),       /* default VFS */
+    zFilename,
+    pKV->db,
+    &pKV->pBt,
+    flags,                     /* btree flags */
+    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB
+  );
   if( rc != SQLITE_OK ){
     kvstoreSetError(pKV, "failed to open btree: error %d", rc);
-    sqliteFree(pKV->db);
+    sqlite3_mutex_free(pKV->db->mutex);
+    sqlite3_free(pKV->db);
     kvstore_mutex_free(pKV->pMutex);
-    sqliteFree(pKV);
+    sqlite3_free(pKV);
     return rc;
   }
-  
+
   /* Set cache size for better performance */
   sqlite3BtreeSetCacheSize(pKV->pBt, KVSTORE_DEFAULT_CACHE_SIZE);
-  
+
+  /* Set journal mode (rollback-delete or WAL).
+  ** sqlite3BtreeSetVersion(pBt, 2) writes the WAL format marker into the
+  ** database header (bytes 18-19).  On the next transaction the pager will
+  ** detect this and open the WAL file automatically.
+  ** sqlite3BtreeSetVersion(pBt, 1) reverts to rollback-journal mode.
+  */
+  {
+    int ver = (journalMode == KVSTORE_JOURNAL_WAL) ? 2 : 1;
+    rc = sqlite3BtreeSetVersion(pKV->pBt, ver);
+    if( rc == SQLITE_OK ){
+      /* SetVersion leaves a transaction open – commit it */
+      rc = sqlite3BtreeCommit(pKV->pBt);
+    }
+    if( rc != SQLITE_OK ){
+      kvstoreSetError(pKV, "failed to set journal mode: error %d", rc);
+      sqlite3BtreeClose(pKV->pBt);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
+      kvstore_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return rc;
+    }
+  }
+
   /* Check if this is a new database or existing one */
   u32 defaultCFRoot = 0;
   u32 cfMetaRoot = 0;
   int needsInit = 0;
-  
-  /* Try to read existing metadata */
-  rc = sqlite3BtreeGetMeta(pKV->pBt, META_DEFAULT_CF_ROOT, &defaultCFRoot);
-  if( rc == SQLITE_OK ){
-    sqlite3BtreeGetMeta(pKV->pBt, META_CF_METADATA_ROOT, &cfMetaRoot);
+
+  /* Begin a read transaction so BtreeGetMeta can access page 1 */
+  rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
+  if( rc != SQLITE_OK ){
+    kvstoreSetError(pKV, "failed to begin read transaction: error %d", rc);
+    sqlite3BtreeClose(pKV->pBt);
+    sqlite3_mutex_free(pKV->db->mutex);
+    sqlite3_free(pKV->db);
+    kvstore_mutex_free(pKV->pMutex);
+    sqlite3_free(pKV);
+    return rc;
   }
-  
+
+  /* Try to read existing metadata */
+  sqlite3BtreeGetMeta(pKV->pBt, META_DEFAULT_CF_ROOT, &defaultCFRoot);
+  sqlite3BtreeGetMeta(pKV->pBt, META_CF_METADATA_ROOT, &cfMetaRoot);
+
+  sqlite3BtreeCommit(pKV->pBt);
+
   if( defaultCFRoot == 0 ){
     needsInit = 1;
   }
-  
+
   if( needsInit ){
     /* New database - initialize */
     rc = createDefaultCF(pKV);
     if( rc != SQLITE_OK ){
       sqlite3BtreeClose(pKV->pBt);
-      sqliteFree(pKV->db);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
       kvstore_mutex_free(pKV->pMutex);
-      sqliteFree(pKV);
+      sqlite3_free(pKV);
       return rc;
     }
-    
+
     rc = initCFMetadataTable(pKV);
     if( rc != SQLITE_OK ){
       if( pKV->pDefaultCF ){
         if( pKV->pDefaultCF->pMutex ) kvstore_mutex_free(pKV->pDefaultCF->pMutex);
-        sqliteFree(pKV->pDefaultCF->zName);
-        sqliteFree(pKV->pDefaultCF);
+        sqlite3_free(pKV->pDefaultCF->zName);
+        sqlite3_free(pKV->pDefaultCF);
       }
       sqlite3BtreeClose(pKV->pBt);
-      sqliteFree(pKV->db);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
       kvstore_mutex_free(pKV->pMutex);
-      sqliteFree(pKV);
+      sqlite3_free(pKV);
       return rc;
     }
   }else{
     /* Existing database - open default CF */
-    KVColumnFamily *pCF = (KVColumnFamily*)sqliteMalloc(sizeof(KVColumnFamily));
+    KVColumnFamily *pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
     if( !pCF ){
       sqlite3BtreeClose(pKV->pBt);
-      sqliteFree(pKV->db);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
       kvstore_mutex_free(pKV->pMutex);
-      sqliteFree(pKV);
+      sqlite3_free(pKV);
       return KVSTORE_NOMEM;
     }
-    
-    memset(pCF, 0, sizeof(KVColumnFamily));
+
     pCF->pKV = pKV;
     pCF->zName = sqliteStrDup(DEFAULT_CF_NAME);
     pCF->iTable = (int)defaultCFRoot;
     pCF->refCount = 1;
-    
+
     /* Create mutex for default CF */
     pCF->pMutex = kvstore_mutex_alloc();
     if( !pCF->pMutex ){
-      sqliteFree(pCF->zName);
-      sqliteFree(pCF);
+      sqlite3_free(pCF->zName);
+      sqlite3_free(pCF);
       sqlite3BtreeClose(pKV->pBt);
-      sqliteFree(pKV->db);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
       kvstore_mutex_free(pKV->pMutex);
-      sqliteFree(pKV);
+      sqlite3_free(pKV);
       return KVSTORE_NOMEM;
     }
-    
+
     pKV->pDefaultCF = pCF;
     pKV->iMetaTable = (int)cfMetaRoot;
   }
-  
+
   pKV->inTrans = 0;
   *ppKV = pKV;
   return KVSTORE_OK;
@@ -425,57 +621,60 @@ int kvstore_open(
 */
 int kvstore_close(KVStore *pKV){
   int rc, i;
-  
+
   if( pKV == NULL ){
     return KVSTORE_OK;
   }
-  
+
   /* Acquire mutex before closing */
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   /* Rollback any active transaction */
   if( pKV->inTrans ){
-    sqlite3BtreeRollback(pKV->pBt);
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
     pKV->inTrans = 0;
   }
-  
+
   /* Close all open column families */
   if( pKV->pDefaultCF ){
     if( pKV->pDefaultCF->pMutex ){
       kvstore_mutex_free(pKV->pDefaultCF->pMutex);
     }
-    sqliteFree(pKV->pDefaultCF->zName);
-    sqliteFree(pKV->pDefaultCF);
+    sqlite3_free(pKV->pDefaultCF->zName);
+    sqlite3_free(pKV->pDefaultCF);
   }
-  
+
   for(i = 0; i < pKV->nCF; i++){
     if( pKV->apCF[i] ){
       if( pKV->apCF[i]->pMutex ){
         kvstore_mutex_free(pKV->apCF[i]->pMutex);
       }
-      sqliteFree(pKV->apCF[i]->zName);
-      sqliteFree(pKV->apCF[i]);
+      sqlite3_free(pKV->apCF[i]->zName);
+      sqlite3_free(pKV->apCF[i]);
     }
   }
-  sqliteFree(pKV->apCF);
-  
+  sqlite3_free(pKV->apCF);
+
   /* Close the btree */
   rc = sqlite3BtreeClose(pKV->pBt);
-  
+
   /* Free error message */
   if( pKV->zErrMsg ){
-    sqliteFree(pKV->zErrMsg);
+    sqlite3_free(pKV->zErrMsg);
   }
-  
-  /* Free resources */
-  sqliteFree(pKV->db);
-  
+
+  /* Free db resources */
+  if( pKV->db->mutex ){
+    sqlite3_mutex_free(pKV->db->mutex);
+  }
+  sqlite3_free(pKV->db);
+
   /* Release and free mutex */
   kvstore_mutex_leave(pKV->pMutex);
   kvstore_mutex_free(pKV->pMutex);
-  
-  sqliteFree(pKV);
-  
+
+  sqlite3_free(pKV);
+
   return rc;
 }
 
@@ -484,33 +683,33 @@ int kvstore_close(KVStore *pKV){
 */
 int kvstore_begin(KVStore *pKV, int wrflag){
   int rc;
-  
+
   if( pKV == NULL ){
     return KVSTORE_ERROR;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot begin transaction: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
+
   if( pKV->inTrans ){
     kvstoreSetError(pKV, "transaction already active");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
-  rc = sqlite3BtreeBeginTrans(pKV->pBt, wrflag);
+
+  rc = sqlite3BtreeBeginTrans(pKV->pBt, wrflag, 0);
   if( rc == SQLITE_OK ){
     pKV->inTrans = wrflag ? 2 : 1;
   }else{
     kvstoreCheckCorruption(pKV, rc);
     kvstoreSetError(pKV, "failed to begin transaction: error %d", rc);
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   return rc;
 }
@@ -520,19 +719,19 @@ int kvstore_begin(KVStore *pKV, int wrflag){
 */
 int kvstore_commit(KVStore *pKV){
   int rc;
-  
+
   if( pKV == NULL ){
     return KVSTORE_ERROR;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( !pKV->inTrans ){
     kvstoreSetError(pKV, "no active transaction to commit");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   rc = sqlite3BtreeCommit(pKV->pBt);
   if( rc == SQLITE_OK ){
     pKV->inTrans = 0;
@@ -540,7 +739,7 @@ int kvstore_commit(KVStore *pKV){
     kvstoreCheckCorruption(pKV, rc);
     kvstoreSetError(pKV, "failed to commit transaction: error %d", rc);
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   return rc;
 }
@@ -550,26 +749,26 @@ int kvstore_commit(KVStore *pKV){
 */
 int kvstore_rollback(KVStore *pKV){
   int rc;
-  
+
   if( pKV == NULL ){
     return KVSTORE_ERROR;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( !pKV->inTrans ){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_OK; /* No transaction to rollback */
   }
-  
-  rc = sqlite3BtreeRollback(pKV->pBt);
+
+  rc = sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
   pKV->inTrans = 0;
-  
+
   if( rc != SQLITE_OK ){
     kvstoreCheckCorruption(pKV, rc);
     kvstoreSetError(pKV, "failed to rollback transaction: error %d", rc);
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   return rc;
 }
@@ -577,43 +776,34 @@ int kvstore_rollback(KVStore *pKV){
 /* Forward declaration for CF operations */
 static int kvstore_cf_put_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey,
-  const void *pValue,
-  int nValue
+  const void *pKey, int nKey,
+  const void *pValue, int nValue
 );
-
 static int kvstore_cf_get_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey,
-  void **ppValue,
-  int *pnValue
+  const void *pKey, int nKey,
+  void **ppValue, int *pnValue
 );
-
 static int kvstore_cf_delete_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey
+  const void *pKey, int nKey
 );
-
 static int kvstore_cf_exists_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey,
+  const void *pKey, int nKey,
   int *pExists
 );
 
 /*
 ** Default CF operations (wrappers)
 */
-int kvstore_put(KVStore *pKV, const void *pKey, int nKey, 
+int kvstore_put(KVStore *pKV, const void *pKey, int nKey,
                 const void *pValue, int nValue){
   if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
   return kvstore_cf_put_internal(pKV->pDefaultCF, pKey, nKey, pValue, nValue);
 }
 
-int kvstore_get(KVStore *pKV, const void *pKey, int nKey, 
+int kvstore_get(KVStore *pKV, const void *pKey, int nKey,
                 void **ppValue, int *pnValue){
   if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
   return kvstore_cf_get_internal(pKV->pDefaultCF, pKey, nKey, ppValue, pnValue);
@@ -636,18 +826,18 @@ int kvstore_cf_get_default(KVStore *pKV, KVColumnFamily **ppCF){
   if( !pKV || !ppCF ){
     return KVSTORE_ERROR;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( !pKV->pDefaultCF ){
     kvstoreSetError(pKV, "default column family not initialized");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   pKV->pDefaultCF->refCount++;
   *ppCF = pKV->pDefaultCF;
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   return KVSTORE_OK;
 }
@@ -660,18 +850,18 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   BtCursor *pCur = NULL;
   KVColumnFamily *pCF = NULL;
   int autoTrans = 0;
-  int iTable;
+  Pgno pgno;
   u32 cfCount;
   i64 nNameLen;
   char *zNameCopy = NULL;
-  
+
   if( !pKV || !zName || !ppCF ){
     if( pKV ) kvstoreSetError(pKV, "invalid parameters to cf_create");
     return KVSTORE_ERROR;
   }
-  
+
   *ppCF = NULL;
-  
+
   nNameLen = strlen(zName);
   if( nNameLen == 0 || nNameLen > KVSTORE_MAX_CF_NAME ){
     kvstore_mutex_enter(pKV->pMutex);
@@ -679,17 +869,17 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   /* Check if default CF */
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
     return kvstore_cf_get_default(pKV, ppCF);
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   /* Start transaction */
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       return rc;
@@ -701,90 +891,117 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_READONLY;
   }
-  
-  /* Check if CF already exists */
-  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, keyCompare, NULL, &pCur);
+
+  /* Check if CF already exists – search metadata table */
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
-  int loc;
-  rc = sqlite3BtreeMoveto(pCur, zName, nNameLen, &loc);
+
+  int found = 0;
+  rc = kvstoreSeekKey(pCur, zName, (int)nNameLen, &found, NULL);
+  kvstoreFreeCursor(pCur);
+  pCur = NULL;
+
   if( rc != SQLITE_OK ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
-  if( loc == 0 ){
-    /* CF already exists */
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+  if( found ){
+    if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstoreSetError(pKV, "column family already exists: %s", zName);
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
-  sqlite3BtreeCloseCursor(pCur);
-  
+
   /* Create new btree table for this CF */
-  rc = sqlite3BtreeCreateTable(pKV->pBt, &iTable, 0);
+  rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_INTKEY);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
-  /* Store CF metadata (name -> table root) */
-  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, keyCompare, NULL, &pCur);
-  if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
+
+  /* Store CF metadata in the metadata table.
+  ** The metadata table is also INTKEY.  We hash the CF name to get
+  ** a rowid and store [name_len | name | table_root (4 bytes BE)] as data.
+  */
+  {
+    unsigned char tableRootBytes[4];
+    int iTable = (int)pgno;
+    tableRootBytes[0] = (iTable >> 24) & 0xFF;
+    tableRootBytes[1] = (iTable >> 16) & 0xFF;
+    tableRootBytes[2] = (iTable >>  8) & 0xFF;
+    tableRootBytes[3] = iTable & 0xFF;
+
+    int nEncoded;
+    void *pEncoded = kvstoreEncodeData(zName, (int)nNameLen,
+                                       tableRootBytes, 4, &nEncoded);
+    if( !pEncoded ){
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return SQLITE_NOMEM;
     }
-    kvstore_mutex_leave(pKV->pMutex);
-    return rc;
-  }
-  
-  /* Value is just the table root as 4-byte integer */
-  unsigned char tableRootBytes[4];
-  tableRootBytes[0] = (iTable >> 24) & 0xFF;
-  tableRootBytes[1] = (iTable >> 16) & 0xFF;
-  tableRootBytes[2] = (iTable >> 8) & 0xFF;
-  tableRootBytes[3] = iTable & 0xFF;
-  
-  rc = sqlite3BtreeInsert(pCur, zName, nNameLen, tableRootBytes, 4);
-  sqlite3BtreeCloseCursor(pCur);
-  
-  if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
+
+    pCur = kvstoreAllocCursor();
+    if( !pCur ){
+      sqlite3_free(pEncoded);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return SQLITE_NOMEM;
     }
-    kvstore_mutex_leave(pKV->pMutex);
-    return rc;
+    rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(pEncoded);
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return rc;
+    }
+
+    i64 slot;
+    rc = kvstoreFindSlot(pCur, zName, (int)nNameLen, &slot);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(pEncoded);
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return rc;
+    }
+
+    BtreePayload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.nKey  = slot;
+    payload.pData = pEncoded;
+    payload.nData = nEncoded;
+
+    rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+    sqlite3_free(pEncoded);
+    kvstoreFreeCursor(pCur);
+    pCur = NULL;
+
+    if( rc != SQLITE_OK ){
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return rc;
+    }
   }
-  
+
   /* Update CF count */
   sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
   cfCount++;
   sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
-  
+
   /* Commit if we started the transaction */
   if( autoTrans ){
     rc = sqlite3BtreeCommit(pKV->pBt);
@@ -794,38 +1011,37 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       return rc;
     }
   }
-  
+
   /* Create CF structure */
-  pCF = (KVColumnFamily*)sqliteMalloc(sizeof(KVColumnFamily));
+  pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
   if( !pCF ){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  
+
   zNameCopy = sqliteStrDup(zName);
   if( !zNameCopy ){
-    sqliteFree(pCF);
+    sqlite3_free(pCF);
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  
-  memset(pCF, 0, sizeof(KVColumnFamily));
+
   pCF->pKV = pKV;
   pCF->zName = zNameCopy;
-  pCF->iTable = iTable;
+  pCF->iTable = (int)pgno;
   pCF->refCount = 1;
-  
+
   /* Create mutex for this CF */
   pCF->pMutex = kvstore_mutex_alloc();
   if( !pCF->pMutex ){
-    sqliteFree(zNameCopy);
-    sqliteFree(pCF);
+    sqlite3_free(zNameCopy);
+    sqlite3_free(pCF);
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
-  
+
   *ppCF = pCF;
   return KVSTORE_OK;
 }
@@ -839,11 +1055,9 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   KVColumnFamily *pCF = NULL;
   int autoTrans = 0;
   i64 nNameLen;
-  u32 dataSize;
-  unsigned char tableRootBytes[4];
   int iTable;
   char *zNameCopy = NULL;
-  
+
   if( !pKV || !zName || !ppCF ){
     if( pKV ){
       kvstore_mutex_enter(pKV->pMutex);
@@ -852,20 +1066,20 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     }
     return KVSTORE_ERROR;
   }
-  
+
   *ppCF = NULL;
   nNameLen = strlen(zName);
-  
+
   /* Check if default CF */
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
     return kvstore_cf_get_default(pKV, ppCF);
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   /* Start read transaction if needed */
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       return rc;
@@ -873,89 +1087,102 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     autoTrans = 1;
     pKV->inTrans = 1;
   }
-  
+
   /* Look up CF in metadata table */
-  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, keyCompare, NULL, &pCur);
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
-  int loc;
-  rc = sqlite3BtreeMoveto(pCur, zName, nNameLen, &loc);
-  if( rc != SQLITE_OK || loc != 0 || sqlite3BtreeEof(pCur) ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+
+  int found = 0;
+  i64 foundRowid = 0;
+  rc = kvstoreSeekKey(pCur, zName, (int)nNameLen, &found, &foundRowid);
+  if( rc != SQLITE_OK || !found ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOTFOUND;
+    return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
-  
-  /* Read table root */
-  rc = sqlite3BtreeDataSize(pCur, &dataSize);
-  if( rc != SQLITE_OK || dataSize != 4 ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
+
+  /* Re-position cursor on the found rowid and read data */
+  {
+    int res = 0;
+    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
+    if( rc != SQLITE_OK || res != 0 ){
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return KVSTORE_CORRUPT;
     }
+  }
+
+  /* Read the payload: [name_len(4) | name | table_root(4)] */
+  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
-  rc = sqlite3BtreeData(pCur, 0, 4, tableRootBytes);
-  sqlite3BtreeCloseCursor(pCur);
-  
+
+  /* Read table root bytes (last 4 bytes of value portion) */
+  unsigned char tableRootBytes[4];
+  rc = sqlite3BtreePayload(pCur, 4 + (int)nNameLen, 4, tableRootBytes);
+  kvstoreFreeCursor(pCur);
+  pCur = NULL;
+
   if( autoTrans ){
     sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
   }
-  
+
   if( rc != SQLITE_OK ){
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
+
   iTable = (tableRootBytes[0] << 24) | (tableRootBytes[1] << 16) |
            (tableRootBytes[2] << 8) | tableRootBytes[3];
-  
+
   /* Create CF structure */
-  pCF = (KVColumnFamily*)sqliteMalloc(sizeof(KVColumnFamily));
+  pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
   if( !pCF ){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  
+
   zNameCopy = sqliteStrDup(zName);
   if( !zNameCopy ){
-    sqliteFree(pCF);
+    sqlite3_free(pCF);
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  
-  memset(pCF, 0, sizeof(KVColumnFamily));
+
   pCF->pKV = pKV;
   pCF->zName = zNameCopy;
   pCF->iTable = iTable;
   pCF->refCount = 1;
-  
+
   /* Create mutex for this CF */
   pCF->pMutex = kvstore_mutex_alloc();
   if( !pCF->pMutex ){
-    sqliteFree(zNameCopy);
-    sqliteFree(pCF);
+    sqlite3_free(zNameCopy);
+    sqlite3_free(pCF);
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
-  
+
   *ppCF = pCF;
   return KVSTORE_OK;
 }
@@ -966,26 +1193,26 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 void kvstore_cf_close(KVColumnFamily *pCF){
   KVStore *pKV;
   int shouldFree = 0;
-  
+
   if( !pCF ) return;
-  
+
   pKV = pCF->pKV;
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   pCF->refCount--;
   if( pCF->refCount <= 0 && pCF != pKV->pDefaultCF ){
     shouldFree = 1;
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
-  
+
   if( shouldFree ){
     if( pCF->pMutex ){
       kvstore_mutex_free(pCF->pMutex);
     }
-    sqliteFree(pCF->zName);
-    sqliteFree(pCF);
+    sqlite3_free(pCF->zName);
+    sqlite3_free(pCF);
   }
 }
 
@@ -994,38 +1221,33 @@ void kvstore_cf_close(KVColumnFamily *pCF){
 */
 static int kvstore_cf_put_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey,
-  const void *pValue,
-  int nValue
+  const void *pKey, int nKey,
+  const void *pValue, int nValue
 ){
   BtCursor *pCur = NULL;
   int rc;
   int autoTrans = 0;
-  i64 nKey64;
   KVStore *pKV = pCF->pKV;
-  
+
   kvstore_mutex_enter(pCF->pMutex);
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot put: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
+
   rc = kvstoreValidateKeyValue(pKV, pKey, nKey, pValue, nValue);
   if( rc != KVSTORE_OK ){
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return rc;
   }
-  
-  nKey64 = nKey;
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       kvstore_mutex_leave(pCF->pMutex);
@@ -1039,22 +1261,86 @@ static int kvstore_cf_put_internal(
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_READONLY;
   }
-  
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, keyCompare, NULL, &pCur);
+
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    kvstore_mutex_leave(pCF->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, 0, pCur);
   if( rc != SQLITE_OK ){
     kvstoreCheckCorruption(pKV, rc);
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return rc;
   }
-  
-  rc = sqlite3BtreeInsert(pCur, pKey, nKey64, pValue, nValue);
-  sqlite3BtreeCloseCursor(pCur);
-  
+
+  /* Check if key already exists (for update) */
+  int found = 0;
+  i64 existingRowid = 0;
+  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, &existingRowid);
+  if( rc != SQLITE_OK ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    kvstore_mutex_leave(pCF->pMutex);
+    return rc;
+  }
+
+  /* Determine the rowid to use */
+  i64 rowid;
+  if( found ){
+    /* Update existing entry – delete the old one first */
+    int res = 0;
+    rc = sqlite3BtreeTableMoveto(pCur, existingRowid, 0, &res);
+    if( rc == SQLITE_OK && res == 0 ){
+      rc = sqlite3BtreeDelete(pCur, 0);
+    }
+    if( rc != SQLITE_OK ){
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      kvstore_mutex_leave(pCF->pMutex);
+      return rc;
+    }
+    rowid = existingRowid;
+  }else{
+    /* New key – find empty slot */
+    rc = kvstoreFindSlot(pCur, pKey, nKey, &rowid);
+    if( rc != SQLITE_OK ){
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      kvstore_mutex_leave(pCF->pMutex);
+      return rc;
+    }
+  }
+
+  /* Encode and insert */
+  int nEncoded;
+  void *pEncoded = kvstoreEncodeData(pKey, nKey, pValue, nValue, &nEncoded);
+  if( !pEncoded ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    kvstore_mutex_leave(pCF->pMutex);
+    return SQLITE_NOMEM;
+  }
+
+  BtreePayload payload;
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey  = rowid;
+  payload.pData = pEncoded;
+  payload.nData = nEncoded;
+
+  rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+  sqlite3_free(pEncoded);
+  kvstoreFreeCursor(pCur);
+
   if( rc == SQLITE_OK ){
     pKV->stats.nPuts++;
     if( autoTrans ){
@@ -1064,14 +1350,14 @@ static int kvstore_cf_put_internal(
   }else{
     kvstoreCheckCorruption(pKV, rc);
     if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
+      sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
       pKV->inTrans = 0;
     }
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   kvstore_mutex_leave(pCF->pMutex);
-  
+
   return rc;
 }
 
@@ -1080,48 +1366,43 @@ static int kvstore_cf_put_internal(
 */
 static int kvstore_cf_get_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey,
-  void **ppValue,
-  int *pnValue
+  const void *pKey, int nKey,
+  void **ppValue, int *pnValue
 ){
   BtCursor *pCur = NULL;
-  int rc, loc;
-  u32 dataSize;
-  void *pValue = NULL;
+  int rc;
   int autoTrans = 0;
-  i64 nKey64 = nKey;
   KVStore *pKV = pCF->pKV;
-  
+
   if( !ppValue || !pnValue ){
     kvstore_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "invalid parameters to get");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   *ppValue = NULL;
   *pnValue = 0;
-  
+
   kvstore_mutex_enter(pCF->pMutex);
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot get: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
+
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       kvstore_mutex_leave(pCF->pMutex);
@@ -1130,83 +1411,88 @@ static int kvstore_cf_get_internal(
     autoTrans = 1;
     pKV->inTrans = 1;
   }
-  
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, keyCompare, NULL, &pCur);
+
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    kvstore_mutex_leave(pCF->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, 0, pCur);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return rc;
   }
-  
-  rc = sqlite3BtreeMoveto(pCur, pKey, nKey64, &loc);
-  if( rc != SQLITE_OK || loc != 0 || sqlite3BtreeEof(pCur) ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+
+  int found = 0;
+  i64 foundRowid = 0;
+  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, &foundRowid);
+  if( rc != SQLITE_OK || !found ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
-  
-  rc = sqlite3BtreeDataSize(pCur, &dataSize);
-  if( rc != SQLITE_OK ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
+
+  /* Re-position and read value */
+  {
+    int res = 0;
+    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
+    if( rc != SQLITE_OK || res != 0 ){
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      kvstore_mutex_leave(pCF->pMutex);
+      return (rc == SQLITE_OK) ? KVSTORE_CORRUPT : rc;
     }
-    kvstore_mutex_leave(pKV->pMutex);
-    kvstore_mutex_leave(pCF->pMutex);
-    return rc;
   }
-  
-  if( dataSize > 0 ){
-    pValue = sqliteMalloc(dataSize);
+
+  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  int storedKeyLen = 0;
+  {
+    unsigned char hdr[4];
+    rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+    if( rc == SQLITE_OK ){
+      storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+    }
+  }
+
+  int valueLen = (int)payloadSz - 4 - storedKeyLen;
+  void *pValue = NULL;
+  if( rc == SQLITE_OK && valueLen > 0 ){
+    pValue = sqlite3Malloc(valueLen);
     if( !pValue ){
-      sqlite3BtreeCloseCursor(pCur);
-      if( autoTrans ){
-        sqlite3BtreeRollback(pKV->pBt);
-        pKV->inTrans = 0;
+      rc = SQLITE_NOMEM;
+    }else{
+      rc = sqlite3BtreePayload(pCur, 4 + storedKeyLen, valueLen, pValue);
+      if( rc != SQLITE_OK ){
+        sqlite3_free(pValue);
+        pValue = NULL;
       }
-      kvstore_mutex_leave(pKV->pMutex);
-      kvstore_mutex_leave(pCF->pMutex);
-      return KVSTORE_NOMEM;
-    }
-    
-    rc = sqlite3BtreeData(pCur, 0, dataSize, pValue);
-    if( rc != SQLITE_OK ){
-      sqliteFree(pValue);
-      sqlite3BtreeCloseCursor(pCur);
-      if( autoTrans ){
-        sqlite3BtreeRollback(pKV->pBt);
-        pKV->inTrans = 0;
-      }
-      kvstore_mutex_leave(pKV->pMutex);
-      kvstore_mutex_leave(pCF->pMutex);
-      return rc;
     }
   }
-  
-  sqlite3BtreeCloseCursor(pCur);
+
+  kvstoreFreeCursor(pCur);
   if( autoTrans ){
     sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
   }
-  
-  pKV->stats.nGets++;
-  *ppValue = pValue;
-  *pnValue = (int)dataSize;
-  
+
+  if( rc == SQLITE_OK ){
+    pKV->stats.nGets++;
+    *ppValue = pValue;
+    *pnValue = (valueLen > 0) ? valueLen : 0;
+  }
+
   kvstore_mutex_leave(pKV->pMutex);
   kvstore_mutex_leave(pCF->pMutex);
-  
-  return KVSTORE_OK;
+
+  return rc;
 }
 
 /*
@@ -1214,34 +1500,32 @@ static int kvstore_cf_get_internal(
 */
 static int kvstore_cf_delete_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey
+  const void *pKey, int nKey
 ){
   BtCursor *pCur = NULL;
-  int rc, loc;
+  int rc;
   int autoTrans = 0;
-  i64 nKey64 = nKey;
   KVStore *pKV = pCF->pKV;
-  
+
   kvstore_mutex_enter(pCF->pMutex);
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot delete: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
+
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       kvstore_mutex_leave(pCF->pMutex);
@@ -1255,33 +1539,44 @@ static int kvstore_cf_delete_internal(
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_READONLY;
   }
-  
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, keyCompare, NULL, &pCur);
+
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    kvstore_mutex_leave(pCF->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 1, 0, pCur);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return rc;
   }
-  
-  rc = sqlite3BtreeMoveto(pCur, pKey, nKey64, &loc);
-  if( rc != SQLITE_OK || loc != 0 || sqlite3BtreeEof(pCur) ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+
+  int found = 0;
+  i64 foundRowid = 0;
+  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, &foundRowid);
+  if( rc != SQLITE_OK || !found ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
-  
-  rc = sqlite3BtreeDelete(pCur);
-  sqlite3BtreeCloseCursor(pCur);
-  
+
+  /* Position on exact rowid and delete */
+  {
+    int res = 0;
+    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
+    if( rc == SQLITE_OK && res == 0 ){
+      rc = sqlite3BtreeDelete(pCur, 0);
+    }
+  }
+  kvstoreFreeCursor(pCur);
+
   if( rc == SQLITE_OK ){
     pKV->stats.nDeletes++;
     if( autoTrans ){
@@ -1290,14 +1585,14 @@ static int kvstore_cf_delete_internal(
     }
   }else{
     if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
+      sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
       pKV->inTrans = 0;
     }
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   kvstore_mutex_leave(pCF->pMutex);
-  
+
   return rc;
 }
 
@@ -1306,44 +1601,42 @@ static int kvstore_cf_delete_internal(
 */
 static int kvstore_cf_exists_internal(
   KVColumnFamily *pCF,
-  const void *pKey,
-  int nKey,
+  const void *pKey, int nKey,
   int *pExists
 ){
   BtCursor *pCur = NULL;
-  int rc, loc, eof;
+  int rc;
   int autoTrans = 0;
-  i64 nKey64 = nKey;
   KVStore *pKV = pCF->pKV;
-  
+
   if( !pExists ){
     kvstore_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "invalid parameters to exists");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   *pExists = 0;
-  
+
   kvstore_mutex_enter(pCF->pMutex);
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot check existence: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
+
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       kvstore_mutex_leave(pCF->pMutex);
@@ -1352,34 +1645,39 @@ static int kvstore_cf_exists_internal(
     autoTrans = 1;
     pKV->inTrans = 1;
   }
-  
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, keyCompare, NULL, &pCur);
+
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    kvstore_mutex_leave(pCF->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, 0, pCur);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     kvstore_mutex_leave(pCF->pMutex);
     return rc;
   }
-  
-  rc = sqlite3BtreeMoveto(pCur, pKey, nKey64, &loc);
-  eof = sqlite3BtreeEof(pCur);
-  
-  sqlite3BtreeCloseCursor(pCur);
+
+  int found = 0;
+  rc = kvstoreSeekKey(pCur, pKey, nKey, &found, NULL);
+  kvstoreFreeCursor(pCur);
+
   if( autoTrans ){
     sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
   }
-  
+
   if( rc == SQLITE_OK ){
-    *pExists = (loc == 0 && !eof) ? 1 : 0;
+    *pExists = found;
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   kvstore_mutex_leave(pCF->pMutex);
-  
+
   return rc;
 }
 
@@ -1425,40 +1723,39 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
   KVIterator *pIter;
   int rc;
   KVStore *pKV;
-  
+
   if( !pCF || !ppIter ){
     return KVSTORE_ERROR;
   }
-  
+
   pKV = pCF->pKV;
   *ppIter = NULL;
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot create iterator: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
-  pIter = (KVIterator*)sqliteMalloc(sizeof(KVIterator));
+
+  pIter = (KVIterator*)sqlite3MallocZero(sizeof(KVIterator));
   if( !pIter ){
     kvstoreSetError(pKV, "out of memory allocating iterator");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_NOMEM;
   }
-  memset(pIter, 0, sizeof(KVIterator));
-  
+
   pIter->pCF = pCF;
   pCF->refCount++;  /* Hold reference to CF */
   pIter->eof = 1;
   pIter->ownsTrans = 0;
   pIter->isValid = 1;
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqliteFree(pIter);
+      sqlite3_free(pIter);
       pCF->refCount--;
       kvstore_mutex_leave(pKV->pMutex);
       return rc;
@@ -1466,23 +1763,35 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
     pIter->ownsTrans = 1;
     pKV->inTrans = 1;
   }
-  
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, keyCompare, NULL, &pIter->pCur);
-  if( rc != SQLITE_OK ){
-    kvstoreCheckCorruption(pKV, rc);
+
+  pIter->pCur = kvstoreAllocCursor();
+  if( !pIter->pCur ){
     if( pIter->ownsTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
+      sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
       pKV->inTrans = 0;
     }
     pCF->refCount--;
-    sqliteFree(pIter);
+    sqlite3_free(pIter);
+    kvstore_mutex_leave(pKV->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, 0, pIter->pCur);
+  if( rc != SQLITE_OK ){
+    kvstoreCheckCorruption(pKV, rc);
+    if( pIter->ownsTrans ){
+      sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
+      pKV->inTrans = 0;
+    }
+    pCF->refCount--;
+    sqlite3_free(pIter->pCur);
+    sqlite3_free(pIter);
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
+
   pKV->stats.nIterations++;
   kvstore_mutex_leave(pKV->pMutex);
-  
+
   *ppIter = pIter;
   return KVSTORE_OK;
 }
@@ -1492,17 +1801,16 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
 */
 int kvstore_iterator_first(KVIterator *pIter){
   int rc, res;
-  
+
   if( !pIter || !pIter->isValid ){
     return KVSTORE_ERROR;
   }
-  
-  /* No mutex needed - iterator operations are single-threaded per iterator */
+
   rc = sqlite3BtreeFirst(pIter->pCur, &res);
   if( rc == SQLITE_OK ){
     pIter->eof = res;
   }
-  
+
   return rc;
 }
 
@@ -1510,21 +1818,22 @@ int kvstore_iterator_first(KVIterator *pIter){
 ** Move iterator to next entry
 */
 int kvstore_iterator_next(KVIterator *pIter){
-  int rc, res;
-  
+  int rc;
+
   if( !pIter || !pIter->isValid ){
     return KVSTORE_ERROR;
   }
-  
+
   if( pIter->eof ){
     return KVSTORE_OK;
   }
-  
-  rc = sqlite3BtreeNext(pIter->pCur, &res);
-  if( rc == SQLITE_OK ){
-    pIter->eof = res;
+
+  rc = sqlite3BtreeNext(pIter->pCur, 0);
+  if( rc == SQLITE_DONE ){
+    pIter->eof = 1;
+    rc = SQLITE_OK;
   }
-  
+
   return rc;
 }
 
@@ -1539,84 +1848,91 @@ int kvstore_iterator_eof(KVIterator *pIter){
 }
 
 /*
-** Get current key from iterator
+** Get current key from iterator.
+** Reads the encoded payload and extracts the key portion.
 */
 int kvstore_iterator_key(KVIterator *pIter, void **ppKey, int *pnKey){
   int rc;
-  i64 keySize;
-  
+
   if( !pIter || !pIter->isValid || !ppKey || !pnKey ){
     return KVSTORE_ERROR;
   }
-  
+
   if( pIter->eof ){
     return KVSTORE_ERROR;
   }
-  
-  rc = sqlite3BtreeKeySize(pIter->pCur, &keySize);
-  if( rc != SQLITE_OK ){
-    return rc;
-  }
-  
-  if( pIter->nKeyBuf < (int)keySize ){
-    void *pNew = sqliteRealloc(pIter->pKeyBuf, (int)keySize);
-    if( !pNew ){
-      return KVSTORE_NOMEM;
-    }
+
+  u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  if( payloadSz < 4 ) return KVSTORE_CORRUPT;
+
+  unsigned char hdr[4];
+  rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
+  if( rc != SQLITE_OK ) return rc;
+
+  int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return KVSTORE_CORRUPT;
+
+  if( pIter->nKeyBuf < keyLen ){
+    void *pNew = sqlite3Realloc(pIter->pKeyBuf, keyLen);
+    if( !pNew ) return KVSTORE_NOMEM;
     pIter->pKeyBuf = pNew;
-    pIter->nKeyBuf = (int)keySize;
+    pIter->nKeyBuf = keyLen;
   }
-  
-  rc = sqlite3BtreeKey(pIter->pCur, 0, (int)keySize, pIter->pKeyBuf);
-  if( rc != SQLITE_OK ){
-    return rc;
-  }
-  
+
+  rc = sqlite3BtreePayload(pIter->pCur, 4, keyLen, pIter->pKeyBuf);
+  if( rc != SQLITE_OK ) return rc;
+
   *ppKey = pIter->pKeyBuf;
-  *pnKey = (int)keySize;
-  
+  *pnKey = keyLen;
+
   return KVSTORE_OK;
 }
 
 /*
-** Get current value from iterator
+** Get current value from iterator.
+** Reads the encoded payload and extracts the value portion.
 */
 int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
   int rc;
-  u32 dataSize;
-  
+
   if( !pIter || !pIter->isValid || !ppValue || !pnValue ){
     return KVSTORE_ERROR;
   }
-  
+
   if( pIter->eof ){
     return KVSTORE_ERROR;
   }
-  
-  rc = sqlite3BtreeDataSize(pIter->pCur, &dataSize);
-  if( rc != SQLITE_OK ){
-    return rc;
+
+  u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  if( payloadSz < 4 ) return KVSTORE_CORRUPT;
+
+  unsigned char hdr[4];
+  rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
+  if( rc != SQLITE_OK ) return rc;
+
+  int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  int valLen = (int)payloadSz - 4 - keyLen;
+  if( valLen < 0 ) return KVSTORE_CORRUPT;
+
+  if( valLen == 0 ){
+    *ppValue = NULL;
+    *pnValue = 0;
+    return KVSTORE_OK;
   }
-  
-  if( pIter->nValBuf < (int)dataSize ){
-    void *pNew = sqliteRealloc(pIter->pValBuf, (int)dataSize);
-    if( !pNew ){
-      return KVSTORE_NOMEM;
-    }
+
+  if( pIter->nValBuf < valLen ){
+    void *pNew = sqlite3Realloc(pIter->pValBuf, valLen);
+    if( !pNew ) return KVSTORE_NOMEM;
     pIter->pValBuf = pNew;
-    pIter->nValBuf = (int)dataSize;
+    pIter->nValBuf = valLen;
   }
-  
-  if( dataSize > 0 ){
-    rc = sqlite3BtreeData(pIter->pCur, 0, dataSize, pIter->pValBuf);
-    if( rc != SQLITE_OK ){
-      return rc;
-    }
-  }
-  
+
+  rc = sqlite3BtreePayload(pIter->pCur, 4 + keyLen, valLen, pIter->pValBuf);
+  if( rc != SQLITE_OK ) return rc;
+
   *ppValue = pIter->pValBuf;
-  *pnValue = (int)dataSize;
-  
+  *pnValue = valLen;
+
   return KVSTORE_OK;
 }
 
@@ -1625,38 +1941,39 @@ int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
 */
 void kvstore_iterator_close(KVIterator *pIter){
   KVStore *pKV;
-  
+
   if( !pIter ){
     return;
   }
-  
+
   pIter->isValid = 0;
   pKV = pIter->pCF ? pIter->pCF->pKV : NULL;
-  
+
   if( pIter->pCur ){
-    sqlite3BtreeCloseCursor(pIter->pCur);
+    kvstoreFreeCursor(pIter->pCur);
+    pIter->pCur = NULL;
   }
-  
+
   if( pIter->ownsTrans && pKV ){
     kvstore_mutex_enter(pKV->pMutex);
     sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
     kvstore_mutex_leave(pKV->pMutex);
   }
-  
+
   if( pIter->pCF ){
     kvstore_cf_close(pIter->pCF);
   }
-  
+
   if( pIter->pKeyBuf ){
-    sqliteFree(pIter->pKeyBuf);
+    sqlite3_free(pIter->pKeyBuf);
   }
-  
+
   if( pIter->pValBuf ){
-    sqliteFree(pIter->pValBuf);
+    sqlite3_free(pIter->pValBuf);
   }
-  
-  sqliteFree(pIter);
+
+  sqlite3_free(pIter);
 }
 
 /*
@@ -1666,17 +1983,17 @@ int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
   if( !pKV || !pStats ){
     return KVSTORE_ERROR;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   pStats->nPuts = pKV->stats.nPuts;
   pStats->nGets = pKV->stats.nGets;
   pStats->nDeletes = pKV->stats.nDeletes;
   pStats->nIterations = pKV->stats.nIterations;
   pStats->nErrors = pKV->stats.nErrors;
-  
+
   kvstore_mutex_leave(pKV->pMutex);
-  
+
   return KVSTORE_OK;
 }
 
@@ -1685,23 +2002,24 @@ int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
 */
 int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
   int rc;
-  int *aiRoot;
+  Pgno *aRoot;
   int nRoot;
-  char *zErr;
   int hadTrans = 0;
-  
+  int nErr = 0;
+  char *zErr = NULL;
+
   if( !pKV ){
     return KVSTORE_ERROR;
   }
-  
+
   if( pzErrMsg ){
     *pzErrMsg = NULL;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       return rc;
@@ -1709,110 +2027,142 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
     hadTrans = 1;
     pKV->inTrans = 1;
   }
-  
-  /* Build array of all root pages to check */
-  /* We need: default CF table + metadata table = 2 roots */
-  nRoot = 2;
-  aiRoot = (int*)sqliteMalloc(nRoot * sizeof(int));
-  if( !aiRoot ){
-    if( hadTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
+
+  /* Build array of all root pages to check.
+  ** Include page 1 (master/schema root), default CF root, metadata table root,
+  ** plus every CF root page stored in the metadata table.  This prevents
+  ** false "Page N: never used" warnings from the integrity checker.
+  */
+  {
+    int nAlloc = 16;
+    nRoot = 0;
+    aRoot = (Pgno*)sqlite3MallocZero(nAlloc * sizeof(Pgno));
+    if( !aRoot ){
+      if( hadTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return KVSTORE_NOMEM;
     }
-    kvstore_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+
+    /* Page 1 is always used (file header / master page) */
+    aRoot[nRoot++] = 1;
+    aRoot[nRoot++] = (Pgno)pKV->pDefaultCF->iTable;
+    if( pKV->iMetaTable ){
+      aRoot[nRoot++] = (Pgno)pKV->iMetaTable;
+    }
+
+    /* Scan metadata table to find all CF root pages */
+    if( pKV->iMetaTable ){
+      BtCursor *pCur = kvstoreAllocCursor();
+      if( pCur ){
+        rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
+        if( rc == SQLITE_OK ){
+          int res;
+          rc = sqlite3BtreeFirst(pCur, &res);
+          while( rc == SQLITE_OK && !res ){
+            u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+            if( payloadSz >= 8 ){
+              unsigned char hdr[4];
+              rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+              if( rc == SQLITE_OK ){
+                int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+                int rootOff = 4 + nameLen;
+                if( rootOff + 4 <= (int)payloadSz ){
+                  unsigned char rootBytes[4];
+                  rc = sqlite3BtreePayload(pCur, rootOff, 4, rootBytes);
+                  if( rc == SQLITE_OK ){
+                    Pgno cfRoot = (rootBytes[0]<<24)|(rootBytes[1]<<16)
+                                 |(rootBytes[2]<<8)|rootBytes[3];
+                    if( cfRoot > 0 ){
+                      if( nRoot >= nAlloc ){
+                        nAlloc *= 2;
+                        Pgno *aNew = sqlite3Realloc(aRoot, nAlloc*sizeof(Pgno));
+                        if( !aNew ){ rc = SQLITE_NOMEM; break; }
+                        aRoot = aNew;
+                      }
+                      aRoot[nRoot++] = cfRoot;
+                    }
+                  }
+                }
+              }
+            }
+            rc = sqlite3BtreeNext(pCur, 0);
+            if( rc == SQLITE_DONE ){ rc = SQLITE_OK; break; }
+          }
+        }
+        kvstoreFreeCursor(pCur);
+      }
+    }
   }
-  
-  /* Add default CF table root */
-  aiRoot[0] = pKV->pDefaultCF->iTable;
-  /* Add metadata table root */
-  aiRoot[1] = pKV->iMetaTable;
-  
-  /* Perform integrity check on all roots */
-  zErr = sqlite3BtreeIntegrityCheck(pKV->pBt, aiRoot, nRoot);
-  
-  sqliteFree(aiRoot);
-  
+
+  /* Run the integrity check */
+  rc = sqlite3BtreeIntegrityCheck(
+    pKV->db,
+    pKV->pBt,
+    aRoot,       /* root pages */
+    0,           /* aCnt (entry count output – not needed) */
+    nRoot,       /* number of roots */
+    100,         /* max errors to report */
+    &nErr,       /* OUT: error count */
+    &zErr        /* OUT: error message */
+  );
+
+  sqlite3_free(aRoot);
+
   if( hadTrans ){
     sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
   }
-  
-  if( zErr ){
-    /* Filter out "Page X is never used" false positives for page 1 */
-    /* Page 1 is the database header page and is expected to not be in use */
-    if( strstr(zErr, "Page 1 is never used") != NULL ){
-      /* Check if there are other errors besides Page 1 */
-      char *otherErr = strstr(zErr, "\n");
-      if( otherErr && otherErr[1] != '\0' ){
-        /* Check if remaining errors are also just "Page X is never used" */
-        char *checkErr = otherErr + 1;
-        int hasRealErrors = 0;
-        
-        /* Simple check: if the error contains something other than "is never used", it's real */
-        if( strstr(checkErr, "is never used") == NULL || 
-            (strstr(checkErr, "corrupt") != NULL) ||
-            (strstr(checkErr, "wrong") != NULL) ){
-          hasRealErrors = 1;
-        }
-        
-        if( hasRealErrors ){
-          pKV->isCorrupted = 1;
-          kvstoreSetError(pKV, "integrity check failed: %s", checkErr);
-          if( pzErrMsg ){
-            *pzErrMsg = sqlite3MPrintf("%s", checkErr);
-          }
-          sqliteFree(zErr);
-          kvstore_mutex_leave(pKV->pMutex);
-          return KVSTORE_CORRUPT;
-        }
-      }
-      /* Only page 1 or "never used" warnings, database is OK */
-      sqliteFree(zErr);
-      kvstore_mutex_leave(pKV->pMutex);
-      return KVSTORE_OK;
+
+  if( nErr > 0 && zErr ){
+    pKV->isCorrupted = 1;
+    kvstoreSetError(pKV, "integrity check failed: %s", zErr);
+    if( pzErrMsg ){
+      *pzErrMsg = zErr;
     }else{
-      /* Real corruption detected */
-      pKV->isCorrupted = 1;
-      kvstoreSetError(pKV, "integrity check failed: %s", zErr);
-      if( pzErrMsg ){
-        *pzErrMsg = zErr;
-      }else{
-        sqliteFree(zErr);
-      }
-      kvstore_mutex_leave(pKV->pMutex);
-      return KVSTORE_CORRUPT;
+      sqlite3_free(zErr);
     }
+    kvstore_mutex_leave(pKV->pMutex);
+    return KVSTORE_CORRUPT;
   }
-  
+
+  if( zErr ) sqlite3_free(zErr);
+
   kvstore_mutex_leave(pKV->pMutex);
   return KVSTORE_OK;
 }
 
 /*
-** Synchronize database to disk
+** Synchronize database to disk.
+** In SQLite 3.51.200 there is no sqlite3BtreeSync.
+** We do a commit+begin cycle to flush to disk if a write transaction
+** is active, otherwise this is a no-op (reads are already consistent).
 */
 int kvstore_sync(KVStore *pKV){
-  int rc;
-  
+  int rc = SQLITE_OK;
+
   if( !pKV ){
     return KVSTORE_ERROR;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot sync: database is corrupted");
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
-  rc = sqlite3BtreeSync(pKV->pBt, NULL);
-  if( rc != SQLITE_OK ){
-    kvstoreCheckCorruption(pKV, rc);
-    kvstoreSetError(pKV, "failed to sync database: error %d", rc);
+
+  if( pKV->inTrans == 2 ){
+    /* Write transaction active – commit and re-open */
+    rc = sqlite3BtreeCommit(pKV->pBt);
+    if( rc == SQLITE_OK ){
+      pKV->inTrans = 0;
+    }else{
+      kvstoreCheckCorruption(pKV, rc);
+      kvstoreSetError(pKV, "failed to sync database: error %d", rc);
+    }
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
   return rc;
 }
@@ -1827,102 +2177,107 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   char **azNames = NULL;
   int nCount = 0;
   int nAlloc = 8;
-  void *pKey;
-  
+
   if( !pKV || !pazNames || !pnCount ){
     return KVSTORE_ERROR;
   }
-  
+
   *pazNames = NULL;
   *pnCount = 0;
-  
-  azNames = (char**)sqliteMalloc(nAlloc * sizeof(char*));
+
+  azNames = (char**)sqlite3MallocZero(nAlloc * sizeof(char*));
   if( !azNames ){
     return KVSTORE_NOMEM;
   }
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
-      sqliteFree(azNames);
+      sqlite3_free(azNames);
       return rc;
     }
     autoTrans = 1;
     pKV->inTrans = 1;
   }
-  
-  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, keyCompare, NULL, &pCur);
-  if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
-    sqliteFree(azNames);
+    sqlite3_free(azNames);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
+  if( rc != SQLITE_OK ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    sqlite3_free(azNames);
     return rc;
   }
-  
+
   int res;
   rc = sqlite3BtreeFirst(pCur, &res);
-  
+
   while( rc == SQLITE_OK && !res ){
-    i64 keySize;
-    rc = sqlite3BtreeKeySize(pCur, &keySize);
-    if( rc != SQLITE_OK ) break;
-    
-    pKey = sqliteMalloc((int)keySize + 1);
-    if( !pKey ){
-      rc = KVSTORE_NOMEM;
-      break;
-    }
-    
-    rc = sqlite3BtreeKey(pCur, 0, (int)keySize, pKey);
-    if( rc != SQLITE_OK ){
-      sqliteFree(pKey);
-      break;
-    }
-    
-    ((char*)pKey)[keySize] = '\0';
-    
-    if( nCount >= nAlloc ){
-      nAlloc *= 2;
-      char **azNew = (char**)sqliteRealloc(azNames, nAlloc * sizeof(char*));
-      if( !azNew ){
-        sqliteFree(pKey);
-        rc = KVSTORE_NOMEM;
-        break;
+    /* Read payload to extract name */
+    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    if( payloadSz >= 4 ){
+      unsigned char hdr[4];
+      rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+      if( rc != SQLITE_OK ) break;
+
+      int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      if( nameLen > 0 && 4 + nameLen <= (int)payloadSz ){
+        char *name = (char*)sqlite3Malloc(nameLen + 1);
+        if( !name ){ rc = KVSTORE_NOMEM; break; }
+
+        rc = sqlite3BtreePayload(pCur, 4, nameLen, name);
+        if( rc != SQLITE_OK ){ sqlite3_free(name); break; }
+        name[nameLen] = '\0';
+
+        if( nCount >= nAlloc ){
+          nAlloc *= 2;
+          char **azNew = (char**)sqlite3Realloc(azNames, nAlloc * sizeof(char*));
+          if( !azNew ){ sqlite3_free(name); rc = KVSTORE_NOMEM; break; }
+          azNames = azNew;
+        }
+
+        azNames[nCount++] = name;
       }
-      azNames = azNew;
     }
-    
-    azNames[nCount++] = (char*)pKey;
-    
-    rc = sqlite3BtreeNext(pCur, &res);
+
+    rc = sqlite3BtreeNext(pCur, 0);
+    if( rc == SQLITE_DONE ){
+      rc = SQLITE_OK;
+      break;
+    }
   }
-  
-  sqlite3BtreeCloseCursor(pCur);
-  
+
+  kvstoreFreeCursor(pCur);
+
   if( autoTrans ){
     sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
-  
+
   if( rc != KVSTORE_OK ){
-    for(int i = 0; i < nCount; i++){
-      sqliteFree(azNames[i]);
+    int i;
+    for(i = 0; i < nCount; i++){
+      sqlite3_free(azNames[i]);
     }
-    sqliteFree(azNames);
+    sqlite3_free(azNames);
     return rc;
   }
-  
+
   *pazNames = azNames;
   *pnCount = nCount;
-  
+
   return KVSTORE_OK;
 }
 
@@ -1934,13 +2289,10 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   BtCursor *pCur = NULL;
   int autoTrans = 0;
   i64 nNameLen;
-  int loc;
   u32 cfCount;
-  u32 dataSize;
-  unsigned char tableRootBytes[4];
   int iTable;
-  int iMoved = 0;  // For sqlite3BtreeDropTable
-  
+  int iMoved = 0;
+
   if( !pKV || !zName ){
     if( pKV ){
       kvstore_mutex_enter(pKV->pMutex);
@@ -1949,7 +2301,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     }
     return KVSTORE_ERROR;
   }
-  
+
   /* Cannot drop default CF */
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
     kvstore_mutex_enter(pKV->pMutex);
@@ -1957,13 +2309,13 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }
-  
+
   nNameLen = strlen(zName);
-  
+
   kvstore_mutex_enter(pKV->pMutex);
-  
+
   if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1);
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstore_mutex_leave(pKV->pMutex);
       return rc;
@@ -1975,91 +2327,250 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_READONLY;
   }
-  
-  /* Find CF in metadata table and get its table root */
-  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, keyCompare, NULL, &pCur);
+
+  /* Find CF in metadata table */
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+    kvstore_mutex_leave(pKV->pMutex);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
-  rc = sqlite3BtreeMoveto(pCur, zName, nNameLen, &loc);
-  if( rc != SQLITE_OK || loc != 0 || sqlite3BtreeEof(pCur) ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeCommit(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+
+  int found = 0;
+  i64 foundRowid = 0;
+  rc = kvstoreSeekKey(pCur, zName, (int)nNameLen, &found, &foundRowid);
+  if( rc != SQLITE_OK || !found ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
-  
-  /* Read the table root page number */
-  rc = sqlite3BtreeDataSize(pCur, &dataSize);
-  if( rc != SQLITE_OK || dataSize != 4 ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
+
+  /* Read the table root from payload */
+  {
+    int res = 0;
+    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
+    if( rc != SQLITE_OK || res != 0 ){
+      kvstoreFreeCursor(pCur);
+      if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
+      kvstore_mutex_leave(pKV->pMutex);
+      return KVSTORE_CORRUPT;
     }
+  }
+
+  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return KVSTORE_CORRUPT;
   }
-  
-  rc = sqlite3BtreeData(pCur, 0, 4, tableRootBytes);
+
+  unsigned char tableRootBytes[4];
+  rc = sqlite3BtreePayload(pCur, 4 + (int)nNameLen, 4, tableRootBytes);
   if( rc != SQLITE_OK ){
-    sqlite3BtreeCloseCursor(pCur);
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    kvstoreFreeCursor(pCur);
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
+
   iTable = (tableRootBytes[0] << 24) | (tableRootBytes[1] << 16) |
            (tableRootBytes[2] << 8) | tableRootBytes[3];
-  
+
   /* Delete from metadata table */
-  rc = sqlite3BtreeDelete(pCur);
-  sqlite3BtreeCloseCursor(pCur);
-  
+  rc = sqlite3BtreeDelete(pCur, 0);
+  kvstoreFreeCursor(pCur);
+  pCur = NULL;
+
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
+
   /* Drop the actual table */
   rc = sqlite3BtreeDropTable(pKV->pBt, iTable, &iMoved);
   if( rc != SQLITE_OK ){
-    if( autoTrans ){
-      sqlite3BtreeRollback(pKV->pBt);
-      pKV->inTrans = 0;
-    }
+    if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     kvstoreSetError(pKV, "failed to drop table: error %d", rc);
     kvstore_mutex_leave(pKV->pMutex);
     return rc;
   }
-  
+
   /* Update CF count */
   sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
   if( cfCount > 0 ) cfCount--;
   sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
-  
+
   if( autoTrans ){
     rc = sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
   }
-  
+
   kvstore_mutex_leave(pKV->pMutex);
-  
+
+  return rc;
+}
+
+/* ===== SNKV compatibility functions ===== */
+
+int sqlite3CorruptError(int lineno){
+  sqlite3_log(SQLITE_CORRUPT,
+    "database corruption at line %d of [%.10s]",
+    lineno, SQLITE_SOURCE_ID);
+  return SQLITE_CORRUPT;
+}
+
+int sqlite3CantopenError(int lineno){
+  sqlite3_log(SQLITE_CANTOPEN,
+    "cannot open file at line %d of [%.10s]",
+    lineno, SQLITE_SOURCE_ID);
+  return SQLITE_CANTOPEN;
+}
+
+int sqlite3MisuseError(int lineno){
+  sqlite3_log(SQLITE_MISUSE,
+    "misuse at line %d of [%.10s]",
+    lineno, SQLITE_SOURCE_ID);
+  return SQLITE_MISUSE;
+}
+
+#if defined(SQLITE_DEBUG) || defined(SQLITE_ENABLE_CORRUPT_PGNO)
+int sqlite3CorruptPgnoError(int lineno, Pgno pgno){
+  sqlite3_log(SQLITE_CORRUPT,
+    "database corruption page %u at line %d of [%.10s]",
+    pgno, lineno, SQLITE_SOURCE_ID);
+  return SQLITE_CORRUPT;
+}
+#endif
+
+#ifdef SQLITE_DEBUG
+int sqlite3NomemError(int lineno){
+  return SQLITE_NOMEM;
+}
+int sqlite3IoerrnomemError(int lineno){
+  return SQLITE_IOERR_NOMEM;
+}
+#endif
+
+/*
+** Minimal sqlite3_initialize – sets up mutexes, memory allocator,
+** page cache, and OS (VFS).  Skips SQL-layer registration.
+*/
+int sqlite3_initialize(void){
+  int rc;
+
+  if( sqlite3GlobalConfig.isInit ){
+    return SQLITE_OK;
+  }
+  if( sqlite3GlobalConfig.inProgress ){
+    return SQLITE_OK;
+  }
+  sqlite3GlobalConfig.inProgress = 1;
+
+  rc = sqlite3MutexInit();
+  if( rc ) goto done;
+
+  sqlite3GlobalConfig.isMutexInit = 1;
+  if( !sqlite3GlobalConfig.isMallocInit ){
+    rc = sqlite3MallocInit();
+    if( rc ) goto done;
+    sqlite3GlobalConfig.isMallocInit = 1;
+  }
+
+  if( !sqlite3GlobalConfig.isPCacheInit ){
+    rc = sqlite3PcacheInitialize();
+    if( rc ) goto done;
+    sqlite3GlobalConfig.isPCacheInit = 1;
+  }
+
+  rc = sqlite3OsInit();
+  if( rc ) goto done;
+
+  sqlite3PCacheBufferSetup(
+    sqlite3GlobalConfig.pPage,
+    sqlite3GlobalConfig.szPage,
+    sqlite3GlobalConfig.nPage
+  );
+
+  sqlite3MemoryBarrier();
+  sqlite3GlobalConfig.isInit = 1;
+
+done:
+  sqlite3GlobalConfig.inProgress = 0;
+  return rc;
+}
+
+/*
+** Minimal sqlite3_config – only handle the most common options.
+*/
+int sqlite3_config(int op, ...){
+  int rc = SQLITE_OK;
+  if( sqlite3GlobalConfig.isInit ) return SQLITE_MISUSE_BKPT;
+
+  va_list ap;
+  va_start(ap, op);
+  switch( op ){
+    case SQLITE_CONFIG_SINGLETHREAD:
+      sqlite3GlobalConfig.bCoreMutex = 0;
+      sqlite3GlobalConfig.bFullMutex = 0;
+      break;
+    case SQLITE_CONFIG_MULTITHREAD:
+      sqlite3GlobalConfig.bCoreMutex = 1;
+      sqlite3GlobalConfig.bFullMutex = 0;
+      break;
+    case SQLITE_CONFIG_SERIALIZED:
+      sqlite3GlobalConfig.bCoreMutex = 1;
+      sqlite3GlobalConfig.bFullMutex = 1;
+      break;
+    case SQLITE_CONFIG_MEMSTATUS:
+      sqlite3GlobalConfig.bMemstat = va_arg(ap, int);
+      break;
+    case SQLITE_CONFIG_SMALL_MALLOC:
+      sqlite3GlobalConfig.bSmallMalloc = va_arg(ap, int);
+      break;
+    case SQLITE_CONFIG_MALLOC: {
+      sqlite3_mem_methods *p = va_arg(ap, sqlite3_mem_methods*);
+      if( p ) sqlite3GlobalConfig.m = *p;
+      break;
+    }
+    case SQLITE_CONFIG_GETMALLOC: {
+      sqlite3_mem_methods *p = va_arg(ap, sqlite3_mem_methods*);
+      if( p ) *p = sqlite3GlobalConfig.m;
+      break;
+    }
+    case SQLITE_CONFIG_MUTEX: {
+      sqlite3_mutex_methods *p = va_arg(ap, sqlite3_mutex_methods*);
+      if( p ) sqlite3GlobalConfig.mutex = *p;
+      break;
+    }
+    case SQLITE_CONFIG_GETMUTEX: {
+      sqlite3_mutex_methods *p = va_arg(ap, sqlite3_mutex_methods*);
+      if( p ) *p = sqlite3GlobalConfig.mutex;
+      break;
+    }
+    case SQLITE_CONFIG_PCACHE2: {
+      sqlite3_pcache_methods2 *p = va_arg(ap, sqlite3_pcache_methods2*);
+      if( p ) sqlite3GlobalConfig.pcache2 = *p;
+      break;
+    }
+    case SQLITE_CONFIG_GETPCACHE2: {
+      sqlite3_pcache_methods2 *p = va_arg(ap, sqlite3_pcache_methods2*);
+      if( p ) *p = sqlite3GlobalConfig.pcache2;
+      break;
+    }
+    default:
+      rc = SQLITE_OK;  /* Silently ignore unknown options */
+      break;
+  }
+  va_end(ap);
   return rc;
 }

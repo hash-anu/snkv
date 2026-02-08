@@ -277,7 +277,7 @@ static void bench_bulk_insert(void) {
     double start, end;
     
     remove("benchmark_bulk.db");
-    kvstore_open("benchmark_bulk.db", &kv, 0);
+    kvstore_open("benchmark_bulk.db", &kv, 0, KVSTORE_JOURNAL_WAL);
     
     kvstore_begin(kv, 1);
     
@@ -319,7 +319,7 @@ int main(void) {
     printf("\n" COLOR_YELLOW "Initializing database..." COLOR_RESET "\n");
     remove(DB_FILE);
     
-    if (kvstore_open(DB_FILE, &kv, 0) != KVSTORE_OK) {
+    if (kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL) != KVSTORE_OK) {
         fprintf(stderr, "Failed to open KVStore\n");
         return 1;
     }

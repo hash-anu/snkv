@@ -83,18 +83,3 @@ void kvstore_mutex_leave(kvstore_mutex *p){
 #endif
 }
 
-/*
-** Try to enter a mutex (non-blocking)
-** Returns 1 if successful, 0 if mutex is already locked
-*/
-int kvstore_mutex_try(kvstore_mutex *p){
-  if( p == NULL || !p->isValid ){
-    return 0;
-  }
-  
-#if defined(_WIN32) || defined(WIN32)
-  return TryEnterCriticalSection(&p->cs) ? 1 : 0;
-#else
-  return (pthread_mutex_trylock(&p->mutex) == 0) ? 1 : 0;
-#endif
-}

@@ -2,11 +2,11 @@
 
 ## Overview
 
-**SNKV** is a lightweight, high‑performance **ACID compliant key–value store** built directly on top of the **SQLite B‑Tree layer**.
+**SNKV** is a lightweight, high‑performance **ACID compliant key–value store** built directly on top of the **SQLite v3.51.200 B‑Tree layer**.
 
-Instead of using SQLite through SQL queries, SNKV **bypasses the entire SQL processing stack** and directly invokes SQLite’s **production‑ready B‑Tree APIs** to perform key–value operations.
+Instead of using SQLite through SQL queries, SNKV **bypasses the entire SQL processing stack** and directly invokes SQLite's **production‑ready B‑Tree APIs** to perform key–value operations.
 
-The result is a database that retains **SQLite’s proven reliability and durability**, while being **~50% faster for mix KV workloads (70% read, 20% write, 10% delete operations)** due to dramatically reduced overhead.
+The result is a database that retains **SQLite's proven reliability and durability**, while being **~60% faster for mixed KV workloads (70% read, 20% write, 10% delete operations)** due to dramatically reduced overhead.
 
 ---
 
@@ -20,24 +20,72 @@ SQLite is an excellent general‑purpose database, but for key–value workloads
 
 SNKV removes these layers entirely and keeps only what is essential for a KV store.
 
+## Building
+
+SNKV builds as a static library (`libsnkv.a`):
+
+```bash
+make              # builds libsnkv.a
+make examples     # builds example programs in examples/
+make run-examples # builds and runs all examples
+make test         # runs all test suites
+make clean        # removes all build artifacts
+```
+
 ## Usage
 
 SNKV exposes a simple C API for key–value operations without any SQL involvement.
 
-A minimal end-to-end usage example is provided in: snkv/main.c
+```c
+#include "kvstore.h"
 
-This file demonstrates:
+int main(void) {
+    KVStore *pKV;
+    kvstore_open("mydb.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
 
-* Opening a database
-* Creating a column family
-* Put / Get / Delete operations
-* Transaction operations
-* Proper cleanup and shutdown
-* Checkout [Example](https://github.com/hash-anu/snkv/blob/master/kvstore_example.md) for more information about API usages
+    kvstore_put(pKV, "key", 3, "value", 5);
+
+    void *pValue; int nValue;
+    kvstore_get(pKV, "key", 3, &pValue, &nValue);
+    printf("%.*s\n", nValue, (char*)pValue);
+    sqliteFree(pValue);
+
+    kvstore_close(pKV);
+    return 0;
+}
+```
+
+Compile against the library:
+
+```bash
+gcc -Iinclude -o myapp myapp.c libsnkv.a
+```
+
+Standalone examples are provided in the `examples/` directory:
+
+| Example | Covers |
+|---|---|
+| `examples/basic.c` | Hello world, CRUD, existence checks |
+| `examples/transactions.c` | Atomic batch operations, rollback |
+| `examples/column_families.c` | Data organization with column families |
+| `examples/iterators.c` | Scanning, filtered iteration, statistics |
+| `examples/session_store.c` | Real-world session management |
+| `examples/benchmark.c` | Auto-commit vs batch transaction performance |
+
+See [kvstore_example.md](kvstore_example.md) for the full API usage guide.
+
+## Features
+
+* **ACID transactions** — begin, commit, rollback with full durability
+* **WAL mode** — Write-Ahead Logging for concurrent readers + writer
+* **Column families** — multiple logical namespaces in a single database
+* **Iterators** — ordered key-value traversal with cursor-based scanning
+* **Thread safety** — mutex-protected operations for concurrent access
+* **Zero memory leaks** — verified with Valgrind memcheck
 
 ## Tests
 
-All unit tests and benchmarks are located in the tests/ directory.
+All unit tests and benchmarks are located in the `tests/` directory (8 test suites, 100+ tests).
 
 ## Visual Architecture Comparison
 
@@ -113,9 +161,10 @@ SNKV intentionally keeps the **most battle‑tested parts of SQLite**, unchanged
 
 This means SNKV benefits from:
 
-* Crash safety (rollback journal)
+* Crash safety (rollback journal and WAL)
 * Atomic commits
 * Page cache and efficient I/O
+* Write-Ahead Logging for concurrent access
 * Real‑world tested
 
 ## Clean Architecture Diagram
@@ -132,7 +181,7 @@ This means SNKV benefits from:
                                      ▼
                     ┌────────────────────────────────┐
                     │        KVStore Layer           │
-                    │   (Thin Wrapper - ~1600 LOC)   │
+                    │   (Thin Wrapper - ~2400 LOC)   │
                     │                                │
                     │  • Simple API                  │
                     │  • Column Families             │
@@ -146,7 +195,7 @@ This means SNKV benefits from:
                                  ▼
                     ┌────────────────────────────────┐
                     │       B-Tree Engine            │
-                    │  (SQLite 3.3.0 - Proven Code)  │
+                    │  (SQLite v3.51.200 - Proven Code)  │
                     │                                │
                     │  • Tree Operations             │
                     │  • Key-Value Storage           │
@@ -157,7 +206,7 @@ This means SNKV benefits from:
                                  ▼
                     ┌────────────────────────────────┐
                     │       Pager Module             │
-                    │  (SQLite 3.3.0 - Proven Code)  │
+                    │  (SQLite v3.51.200 - Proven Code)  │
                     │                                │
                     │  • Transaction Management      │
                     │  • Rollback Journal            │
@@ -168,7 +217,7 @@ This means SNKV benefits from:
                                  ▼
                     ┌────────────────────────────────┐
                     │       OS Interface             │
-                    │  (SQLite 3.3.0 - Proven Code)  │
+                    │  (SQLite v3.51.200 - Proven Code)  │
                     │                                │
                     │  • File I/O                    │
                     │  • File Locking                │
@@ -178,10 +227,13 @@ This means SNKV benefits from:
                                  │
                                  ▼
                          ┌──────────────┐
+                         ┌──────────────┐
                          │  Disk Files  │
                          │              │
                          │  • kvstore.db│
-                         │  • journal   │
+                         │  • -wal      │
+                         │  • -shm      │
+                         │  • -journal  │
                          └──────────────┘
 
 ## Result
@@ -199,33 +251,35 @@ Typical gains:
 
 ---
 
-## Comparison with Latest SQLite
-The following table shows the **average performance across 5 runs** for both **SQLite (SQL-based KV access)** and **SNKV (direct B-Tree KV access)** using identical workloads (50,000 records).
+## Comparison with SQLite v3.51.200
+The following table shows the **average performance across 5 runs** for both **SQLite v3.51.200 (SQL-based KV access)** and **SNKV (direct B-Tree KV access)** using identical workloads (50,000 records).
 
 All numbers are **operations per second (ops/sec)**.
 
 | Benchmark                    | SQLite (avg) | SNKV (avg) | Winner          |
 | ---------------------------- | ------------ | ---------- | --------------- |
-| Sequential Writes            | 68,503       | 70,888     | SNKV (+3.5%)    |
-| Random Reads                 | 48,206       | 36,210     | SQLite (+33%)   |
-| Sequential Scan              | 1,089,049    | 2,173,141  | SNKV (\~2×)     |
-| Random Updates               | 47,339       | 47,297     | Tie             |
-| Random Deletes               | 31,937       | 44,046     | SNKV (+38%)     |
-| Exists Checks                | 59,884       | 36,041     | SQLite (+66%)   |
-| Mixed Workload (70R/20W/10D) | 50,379       | 78,860     | **SNKV (+56%)** |
-| Bulk Insert (single txn)     | 104,526      | 133,566    | SNKV (+28%)     |
+| Sequential Writes            | 146,727      | 128,310    | SQLite (+14%)   |
+| Random Reads                 | 173,863      | 219,050    | SNKV (+26%)     |
+| Sequential Scan              | 2,138,485    | 3,025,534  | SNKV (\~1.4×)   |
+| Random Updates               | 116,026      | 111,054    | Tie             |
+| Random Deletes               | 62,728       | 105,890    | SNKV (+69%)     |
+| Exists Checks                | 263,348      | 227,897    | SQLite (+16%)   |
+| Mixed Workload (70R/20W/10D) | 129,999      | 210,916    | **SNKV (+62%)** |
+| Bulk Insert (single txn)     | 245,598      | 269,433    | SNKV (+10%)     |
 
 ### Key Observations
 
-- **SNKV dominates write-heavy and mixed workloads** due to zero SQL/VDBE overhead
-- **Sequential scans are \~2× faster** in SNKV due to direct cursor traversal
-- **SQLite wins point-lookups (reads / exists)** because of its highly optimized VDBE fast paths and statement caching
+- **SNKV dominates mixed and delete-heavy workloads** due to zero SQL/VDBE overhead
+- **Random reads are 26% faster** in SNKV — no SQL parsing or statement preparation per lookup
+- **Sequential scans are \~1.4× faster** in SNKV due to direct cursor traversal
+- **Deletes are 69% faster** — the biggest single-operation win for SNKV
+- **SQLite wins sequential writes and exists checks** due to its optimized prepared-statement caching
 - Update performance is effectively identical (same B-Tree + Pager path)
 
 ### Benchmark Code
 
-- SQLite benchmark source: [https://github.com/hash-anu/sqlite-benchmark-kv](https://github.com/hash-anu/sqllite-benchmark-kv)
-- SNKV benchmark source: `snkv/tests/test_benchmark.c`
+- SQLite benchmark source: [https://github.com/hash-anu/sqlite-benchmark-kv](https://github.com/hash-anu/sqlite-benchmark-kv)
+- SNKV benchmark source: `tests/test_benchmark.c`
 
 ## When to Use SNKV
 
