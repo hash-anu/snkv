@@ -5,7 +5,7 @@ CFLAGS = -g -Wall -Iinclude
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME_S),Linux)
-  LDFLAGS = 
+  LDFLAGS =
 endif
 ifeq ($(UNAME_S),Darwin)
   LDFLAGS = -lpthread -lm
@@ -44,13 +44,12 @@ SQLITE_CORE = src/btree.c src/btmutex.c \
               src/fault.c src/mem1.c src/rowset.c \
               src/sqlite_stubs.c
 
-# Library objects (everything except main.c)
+# Library objects
 LIB_SRC = src/kvstore.c src/kvstore_mutex.c $(SQLITE_CORE)
 LIB_OBJ = $(LIB_SRC:.c=.o)
 
-SRC = src/main.c $(LIB_SRC)
-OBJ = $(SRC:.c=.o)
-TARGET = snkv$(TARGET_EXT)
+# Static library
+LIB = libsnkv.a
 
 # ---- Test files ----
 TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
@@ -58,13 +57,30 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_wal.c tests/test_stress.c
 TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
 
-all: $(TARGET)
+# ---- Example files ----
+EXAMPLE_SRC = $(wildcard examples/*.c)
+EXAMPLE_BIN = $(EXAMPLE_SRC:.c=$(TARGET_EXT))
 
-$(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+all: $(LIB)
+
+$(LIB): $(LIB_OBJ)
+	ar rcs $@ $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# ---- Example targets ----
+examples: $(LIB) $(EXAMPLE_BIN)
+
+examples/%$(TARGET_EXT): examples/%.c $(LIB)
+	$(CC) $(CFLAGS) -o $@ $< $(LIB) $(LDFLAGS)
+
+run-examples: examples
+	@for e in $(EXAMPLE_BIN); do \
+	  echo "=== Running $$e ==="; \
+	  ./$$e || exit 1; \
+	  echo; \
+	done
 
 # ---- Test targets ----
 tests: $(TEST_BIN)
@@ -80,7 +96,7 @@ test: tests
 	done
 
 clean:
-	rm -f $(OBJ) $(TARGET) $(TEST_BIN) tests/*.o
-	rm -f *.db tests/*.db
+	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
+	rm -f *.db tests/*.db examples/*.db
 
-.PHONY: all clean tests test
+.PHONY: all clean tests test examples run-examples
