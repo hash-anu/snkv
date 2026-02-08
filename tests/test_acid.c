@@ -52,7 +52,11 @@ static int buffers_equal(const void *a, const void *b, int size) {
 ** ATOMICITY TEST
 ** Verifies that transaction rollback properly undoes all changes
 */
-static int test_atomicity(const char *dbfile, char *err_msg) {
+static const char *journal_mode_name(int mode) {
+  return mode == KVSTORE_JOURNAL_WAL ? "WAL" : "DELETE";
+}
+
+static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
   KVStore *pKV = NULL;
   int rc;
   char key1[] = "atomicity_test_key1";
@@ -65,10 +69,10 @@ static int test_atomicity(const char *dbfile, char *err_msg) {
   int nVal = 0;
   int exists = 0;
   
-  printf("  Testing Atomicity...\n");
-  
+  printf("  Testing Atomicity (%s)...\n", journal_mode_name(journal_mode));
+
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -172,7 +176,7 @@ static int test_atomicity(const char *dbfile, char *err_msg) {
 ** CONSISTENCY TEST
 ** Verifies that database maintains valid state and constraints
 */
-static int test_consistency(const char *dbfile, char *err_msg) {
+static int test_consistency(const char *dbfile, char *err_msg, int journal_mode) {
   KVStore *pKV = NULL;
   KVColumnFamily *pCF1 = NULL, *pCF2 = NULL;
   int rc;
@@ -180,10 +184,10 @@ static int test_consistency(const char *dbfile, char *err_msg) {
   void *pVal = NULL;
   int nVal = 0;
   
-  printf("  Testing Consistency...\n");
-  
+  printf("  Testing Consistency (%s)...\n", journal_mode_name(journal_mode));
+
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -337,7 +341,7 @@ static int test_consistency(const char *dbfile, char *err_msg) {
 ** Note: This is a simplified test since full concurrency requires
 ** multi-process or multi-thread testing
 */
-static int test_isolation(const char *dbfile, char *err_msg) {
+static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   KVStore *pKV = NULL;
   int rc;
   char key1[] = "isolation_key1";
@@ -347,10 +351,10 @@ static int test_isolation(const char *dbfile, char *err_msg) {
   void *pVal = NULL;
   int nVal = 0;
   
-  printf("  Testing Isolation...\n");
-  
+  printf("  Testing Isolation (%s)...\n", journal_mode_name(journal_mode));
+
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -438,7 +442,7 @@ static int test_isolation(const char *dbfile, char *err_msg) {
 ** Verifies that committed data survives database close/reopen
 ** and simulated crashes
 */
-static int test_durability(const char *dbfile, char *err_msg) {
+static int test_durability(const char *dbfile, char *err_msg, int journal_mode) {
   KVStore *pKV = NULL;
   int rc;
   char key[] = "durability_key";
@@ -446,12 +450,12 @@ static int test_durability(const char *dbfile, char *err_msg) {
   void *pVal = NULL;
   int nVal = 0;
   
-  printf("  Testing Durability...\n");
-  
+  printf("  Testing Durability (%s)...\n", journal_mode_name(journal_mode));
+
   /* Test 1: Data survives normal close/reopen */
   printf("    Test 4.1: Data survives close/reopen\n");
-  
-  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+
+  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -480,7 +484,7 @@ static int test_durability(const char *dbfile, char *err_msg) {
   pKV = NULL;
   
   /* Reopen and verify data exists */
-  rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to reopen database: %d", rc);
     return 0;
@@ -522,7 +526,7 @@ static int test_durability(const char *dbfile, char *err_msg) {
     kvstore_close(pKV);
     
     /* Reopen */
-    rc = kvstore_open(dbfile, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
     if(rc != KVSTORE_OK) {
       snprintf(err_msg, 1024, "Failed to reopen in cycle %d: %d", cycle, rc);
       return 0;
@@ -559,62 +563,71 @@ static int test_durability(const char *dbfile, char *err_msg) {
 /*
 ** Main ACID compliance check function
 */
-int kvstore_acid_compliance_check(const char *dbfile, ACIDTestResult *result) {
+int kvstore_acid_compliance_check(const char *dbfile, ACIDTestResult *result,
+                                  int journal_mode) {
   int all_passed = 1;
-  
+  const char *mode_name = journal_mode_name(journal_mode);
+
   if(!result) {
     return 0;
   }
-  
+
   memset(result, 0, sizeof(ACIDTestResult));
-  
+
   printf("\n========================================\n");
-  printf("KVSTORE ACID COMPLIANCE TEST SUITE\n");
+  printf("KVSTORE ACID COMPLIANCE TEST SUITE (%s)\n", mode_name);
   printf("========================================\n\n");
-  printf("Database: %s\n\n", dbfile);
-  
+  printf("Database: %s\n", dbfile);
+  printf("Journal mode: %s\n\n", mode_name);
+
   /* Remove existing database for clean test */
   unlink(dbfile);
-  
+  /* Also remove WAL/SHM files if present */
+  char wal_path[256], shm_path[256];
+  snprintf(wal_path, sizeof(wal_path), "%s-wal", dbfile);
+  snprintf(shm_path, sizeof(shm_path), "%s-shm", dbfile);
+  unlink(wal_path);
+  unlink(shm_path);
+
   /* Test Atomicity */
   printf("[1/4] ATOMICITY\n");
-  result->atomicity_passed = test_atomicity(dbfile, result->error_msg);
+  result->atomicity_passed = test_atomicity(dbfile, result->error_msg, journal_mode);
   if(!result->atomicity_passed) {
     printf("  FAILED: %s\n", result->error_msg);
     all_passed = 0;
   }
   printf("\n");
-  
+
   /* Test Consistency */
   printf("[2/4] CONSISTENCY\n");
-  result->consistency_passed = test_consistency(dbfile, result->error_msg);
+  result->consistency_passed = test_consistency(dbfile, result->error_msg, journal_mode);
   if(!result->consistency_passed) {
     printf("  FAILED: %s\n", result->error_msg);
     all_passed = 0;
   }
   printf("\n");
-  
+
   /* Test Isolation */
   printf("[3/4] ISOLATION\n");
-  result->isolation_passed = test_isolation(dbfile, result->error_msg);
+  result->isolation_passed = test_isolation(dbfile, result->error_msg, journal_mode);
   if(!result->isolation_passed) {
     printf("  FAILED: %s\n", result->error_msg);
     all_passed = 0;
   }
   printf("\n");
-  
+
   /* Test Durability */
   printf("[4/4] DURABILITY\n");
-  result->durability_passed = test_durability(dbfile, result->error_msg);
+  result->durability_passed = test_durability(dbfile, result->error_msg, journal_mode);
   if(!result->durability_passed) {
     printf("  FAILED: %s\n", result->error_msg);
     all_passed = 0;
   }
   printf("\n");
-  
+
   /* Summary */
   printf("========================================\n");
-  printf("ACID COMPLIANCE TEST RESULTS\n");
+  printf("ACID COMPLIANCE RESULTS (%s)\n", mode_name);
   printf("========================================\n");
   printf("Atomicity:    %s\n", result->atomicity_passed ? "PASS" : "FAIL");
   printf("Consistency:  %s\n", result->consistency_passed ? "PASS" : "FAIL");
@@ -623,7 +636,7 @@ int kvstore_acid_compliance_check(const char *dbfile, ACIDTestResult *result) {
   printf("----------------------------------------\n");
   printf("Overall:      %s\n", all_passed ? "PASS" : "FAIL");
   printf("========================================\n\n");
-  
+
   result->overall_passed = all_passed;
   return all_passed;
 }
@@ -633,7 +646,6 @@ int kvstore_acid_compliance_check(const char *dbfile, ACIDTestResult *result) {
 */
 int main(int argc, char **argv) {
   const char *dbfile = "acid_test.db";
-  ACIDTestResult result;
   int verbose = 1;
   
   /* Parse command line arguments */
@@ -662,58 +674,84 @@ int main(int argc, char **argv) {
   }
   
   srand(time(NULL));
-  
+
   if(verbose) {
     printf("\n╔════════════════════════════════════════════════════════════╗\n");
-    printf("║      KVSTORE ACID COMPLIANCE TEST SUITE v1.0              ║\n");
+    printf("║      KVSTORE ACID COMPLIANCE TEST SUITE v2.0              ║\n");
     printf("║                                                            ║\n");
     printf("║  Comprehensive testing of ACID transaction properties     ║\n");
+    printf("║  Tests both DELETE journal and WAL journal modes          ║\n");
     printf("║  Built on SQLite btree implementation                     ║\n");
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
     printf("Test Database: %s\n\n", dbfile);
   }
-  
-  int passed = kvstore_acid_compliance_check(dbfile, &result);
-  
+
+  /* Run ACID suite with DELETE journal mode */
+  ACIDTestResult result_delete;
+  int passed_delete = kvstore_acid_compliance_check(dbfile, &result_delete,
+                                                     KVSTORE_JOURNAL_DELETE);
+
+  /* Run ACID suite with WAL journal mode */
+  ACIDTestResult result_wal;
+  int passed_wal = kvstore_acid_compliance_check(dbfile, &result_wal,
+                                                  KVSTORE_JOURNAL_WAL);
+
+  int all_passed = passed_delete && passed_wal;
+
   if(verbose) {
     printf("\n╔════════════════════════════════════════════════════════════╗\n");
     printf("║                    FINAL RESULTS                           ║\n");
     printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  Test Component       Status                               ║\n");
+    printf("║  DELETE Journal Mode                                       ║\n");
     printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  [A] Atomicity        %-33s║\n", 
-           result.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [C] Consistency      %-33s║\n", 
-           result.consistency_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [I] Isolation        %-33s║\n", 
-           result.isolation_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [D] Durability       %-33s║\n", 
-           result.durability_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [A] Atomicity        %-33s║\n",
+           result_delete.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [C] Consistency      %-33s║\n",
+           result_delete.consistency_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [I] Isolation        %-33s║\n",
+           result_delete.isolation_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [D] Durability       %-33s║\n",
+           result_delete.durability_passed ? "✓ PASSED" : "✗ FAILED");
     printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  OVERALL              %-33s║\n", 
-           result.overall_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  WAL Journal Mode                                          ║\n");
+    printf("╠════════════════════════════════════════════════════════════╣\n");
+    printf("║  [A] Atomicity        %-33s║\n",
+           result_wal.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [C] Consistency      %-33s║\n",
+           result_wal.consistency_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [I] Isolation        %-33s║\n",
+           result_wal.isolation_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("║  [D] Durability       %-33s║\n",
+           result_wal.durability_passed ? "✓ PASSED" : "✗ FAILED");
+    printf("╠════════════════════════════════════════════════════════════╣\n");
+    printf("║  OVERALL              %-33s║\n",
+           all_passed ? "✓ ALL PASSED" : "✗ FAILED");
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
   }
-  
-  if(!passed) {
+
+  if(!all_passed) {
     if(verbose) {
-      printf("❌ ACID compliance check FAILED!\n");
-      if(result.error_msg[0]) {
-        printf("Last error: %s\n", result.error_msg);
+      printf("ACID compliance check FAILED!\n");
+      if(!passed_delete && result_delete.error_msg[0]) {
+        printf("DELETE mode error: %s\n", result_delete.error_msg);
+      }
+      if(!passed_wal && result_wal.error_msg[0]) {
+        printf("WAL mode error: %s\n", result_wal.error_msg);
       }
     } else {
       printf("FAILED\n");
     }
     return 1;
   }
-  
+
   if(verbose) {
-    printf("✅ All ACID compliance tests PASSED!\n");
-    printf("The kvstore implementation is fully ACID compliant.\n\n");
+    printf("All ACID compliance tests PASSED!\n");
+    printf("The kvstore implementation is fully ACID compliant ");
+    printf("in both DELETE and WAL journal modes.\n\n");
   } else {
     printf("PASSED\n");
   }
   remove(dbfile);
-  
+
   return 0;
 }
