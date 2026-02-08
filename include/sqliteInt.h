@@ -1490,7 +1490,7 @@ struct VdbeOpList {
   signed char p3;
 };
 
-#include "opcodes.h"
+//#include "opcodes.h"
 
 /*
 ** RecordCompare – function pointer type used by btree.c for index

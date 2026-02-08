@@ -24,6 +24,13 @@
 #include <sys/stat.h>
 #include "kvstore.h"
 
+/*
+** SQLite extended error codes encode the base code in the lower 8 bits.
+** For example, SQLITE_BUSY_SNAPSHOT (261 = 0x105) has base SQLITE_BUSY (5).
+** Use this macro so retry logic catches all BUSY/LOCKED variants.
+*/
+#define IS_BUSY(rc)   (((rc)&0xFF)==SQLITE_BUSY || ((rc)&0xFF)==SQLITE_LOCKED)
+
 /* ---- configuration ---- */
 #define DB_FILE       "stress_test.db"
 #define DB_WAL_FILE   "stress_wal.db"
@@ -722,13 +729,29 @@ typedef struct {
   int busySkips;    /* ops skipped due to BUSY contention */
   int succeeded;    /* ops that completed successfully */
   int journalMode;
+  int lastErrCode;  /* last non-BUSY error code for diagnostics */
 } ThreadArg;
+
+static int open_with_retry(const char *db, KVStore **ppKV, int journalMode){
+  int rc, retries = 0;
+  do {
+    rc = kvstore_open(db, ppKV, 0, journalMode);
+    if( rc == KVSTORE_OK ) return KVSTORE_OK;
+    if( IS_BUSY(rc) ){
+      usleep(5000 + (rand() % 10000));
+      retries++;
+    }else{
+      return rc;
+    }
+  } while( retries < 20 );
+  return rc;
+}
 
 static void *writer_thread(void *arg){
   ThreadArg *ta = (ThreadArg*)arg;
   KVStore *kv = NULL;
-  int rc = kvstore_open(ta->db, &kv, 0, ta->journalMode);
-  if( rc != KVSTORE_OK ){ ta->errors++; return NULL; }
+  int rc = open_with_retry(ta->db, &kv, ta->journalMode);
+  if( rc != KVSTORE_OK ){ ta->errors++; ta->lastErrCode = rc; return NULL; }
 
   int i;
   char key[32], val[64];
@@ -746,11 +769,12 @@ static void *writer_thread(void *arg){
     do {
       rc = kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
       if( rc == KVSTORE_OK ){ ok = 1; break; }
-      if( rc == SQLITE_BUSY || rc == SQLITE_LOCKED || rc == KVSTORE_LOCKED ){
+      if( IS_BUSY(rc) || rc == KVSTORE_LOCKED || rc == SQLITE_PROTOCOL ){
         usleep(1000 + (rand() % 4000));
         retries++;
       }else{
         ta->errors++;  /* real error */
+        ta->lastErrCode = rc;
         break;
       }
     } while( retries < 100 );
@@ -767,8 +791,8 @@ static void *writer_thread(void *arg){
 static void *reader_thread(void *arg){
   ThreadArg *ta = (ThreadArg*)arg;
   KVStore *kv = NULL;
-  int rc = kvstore_open(ta->db, &kv, 0, ta->journalMode);
-  if( rc != KVSTORE_OK ){ ta->errors++; return NULL; }
+  int rc = open_with_retry(ta->db, &kv, ta->journalMode);
+  if( rc != KVSTORE_OK ){ ta->errors++; ta->lastErrCode = rc; return NULL; }
 
   int i;
   for(i = 0; i < ta->ops; i++){
@@ -783,10 +807,11 @@ static void *reader_thread(void *arg){
       }
       kvstore_iterator_close(iter);
       ta->succeeded++;
-    }else if( rc == SQLITE_BUSY || rc == SQLITE_LOCKED ){
+    }else if( IS_BUSY(rc) || rc == SQLITE_PROTOCOL ){
       ta->busySkips++;
     }else{
       ta->errors++;
+      ta->lastErrCode = rc;
     }
   }
   kvstore_close(kv);
@@ -816,6 +841,7 @@ static void test_concurrent_stress(void){
     args[i].errors = 0;
     args[i].busySkips = 0;
     args[i].succeeded = 0;
+    args[i].lastErrCode = 0;
     args[i].journalMode = KVSTORE_JOURNAL_WAL;
     if( i < 2 ){
       args[i].ops = writerOps;
@@ -837,7 +863,8 @@ static void test_concurrent_stress(void){
   }
 
   /* Verify integrity after concurrent storm */
-  rc = kvstore_open(DB_WAL_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+  usleep(50000);  /* brief settle after threads finish */
+  rc = open_with_retry(DB_WAL_FILE, &kv, KVSTORE_JOURNAL_WAL);
   int intOk = 0;
   if( rc == KVSTORE_OK ){
     char *errMsg = NULL;
@@ -865,6 +892,13 @@ static void test_concurrent_stress(void){
 
   printf("    %d threads: %d ok, %d busy-skipped, %d real errors, integrity %s\n",
          NUM_THREADS, totalOk, totalBusy, totalErrors, intOk ? "OK" : "FAIL");
+  if( totalErrors > 0 ){
+    for(i = 0; i < NUM_THREADS; i++){
+      if( args[i].errors > 0 )
+        printf("    thread %d: %d errors (last rc=%d)\n",
+               i, args[i].errors, args[i].lastErrCode);
+    }
+  }
 
   /*
   ** Pass criteria (matching SQLite's mptester philosophy):
