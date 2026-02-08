@@ -11542,3 +11542,58 @@ int sqlite3BtreeConnectionCount(Btree *p){
   return p->pBt->nRef;
 }
 #endif
+
+/* ===== SNKV compatibility functions ===== */
+
+int sqlite3TempInMemory(const sqlite3 *db){
+#if SQLITE_TEMP_STORE>=2
+  (void)db;
+  return 1;
+#else
+  (void)db;
+  return 0;
+#endif
+}
+
+int sqlite3InvokeBusyHandler(BusyHandler *p){
+  int rc;
+  if( p->xBusyHandler==0 || p->nBusy<0 ) return 0;
+  rc = p->xBusyHandler(p->pBusyArg, p->nBusy);
+  if( rc==0 ){
+    p->nBusy = -1;
+  }else{
+    p->nBusy++;
+  }
+  return rc;
+}
+
+int sqlite3WritableSchema(sqlite3 *db){
+  (void)db;
+  return 0;
+}
+
+UnpackedRecord *sqlite3VdbeAllocUnpackedRecord(KeyInfo *pKeyInfo){
+  (void)pKeyInfo;
+  return 0;
+}
+
+void sqlite3VdbeRecordUnpack(int nKey, const void *pKey, UnpackedRecord *p){
+  (void)nKey; (void)pKey; (void)p;
+}
+
+RecordCompare sqlite3VdbeFindCompare(UnpackedRecord *p){
+  (void)p;
+  return sqlite3VdbeRecordCompare;
+}
+
+int sqlite3VdbeRecordCompare(int nKey, const void *pKey, UnpackedRecord *p){
+  (void)nKey; (void)pKey; (void)p;
+  return 0;
+}
+
+void sqlite3MemSetArrayInt64(sqlite3_value *aMem, int iIdx, i64 val){
+  if( aMem ){
+    aMem[iIdx].u.i = val;
+    aMem[iIdx].flags = MEM_Int;
+  }
+}

@@ -7827,4 +7827,42 @@ int sqlite3PagerWalSystemErrno(Pager *pPager){
 }
 #endif
 
+/* ===== SNKV compatibility functions ===== */
+
+int sqlite3IsMemdb(const sqlite3_vfs *pVfs){
+  (void)pVfs;
+  return 0;
+}
+
+SQLITE_API char *sqlite3_temp_directory = 0;
+
+const char *sqlite3_uri_parameter(const char *zFilename, const char *zParam){
+  (void)zFilename; (void)zParam;
+  return 0;
+}
+
+int sqlite3_uri_boolean(const char *zFilename, const char *zParam, int bDflt){
+  (void)zFilename; (void)zParam;
+  return bDflt;
+}
+
+int sqlite3_exec(
+  sqlite3 *db,
+  const char *zSql,
+  int (*xCallback)(void*,int,char**,char**),
+  void *pArg,
+  char **pzErrMsg
+){
+  (void)db; (void)zSql; (void)xCallback; (void)pArg; (void)pzErrMsg;
+  return SQLITE_ERROR;
+}
+
+void sqlite3BackupUpdate(sqlite3_backup *p, Pgno iPage, const u8 *aData){
+  (void)p; (void)iPage; (void)aData;
+}
+
+void sqlite3BackupRestart(sqlite3_backup *p){
+  (void)p;
+}
+
 #endif /* SQLITE_OMIT_DISKIO */

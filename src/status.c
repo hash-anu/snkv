@@ -443,3 +443,15 @@ int sqlite3_db_status(
   }
   return rc;
 }
+
+/* ===== SNKV compatibility functions ===== */
+
+void sqlite3VdbeDelete(Vdbe *p){ (void)p; }
+
+void sqlite3DeleteTable(sqlite3 *db, Table *pTable){
+  (void)db; (void)pTable;
+}
+
+void sqlite3DeleteTrigger(sqlite3 *db, Trigger *pTrigger){
+  (void)db; (void)pTrigger;
+}

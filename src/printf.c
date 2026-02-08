@@ -1556,3 +1556,56 @@ char *sqlite3RCStrResize(char *z, u64 N){
     return (char*)&pNew[1];
   }
 }
+
+/* ===== SNKV compatibility functions ===== */
+
+sqlite3_int64 sqlite3_value_int64(sqlite3_value *pVal){
+  if( pVal && (pVal->flags & MEM_Int) ) return pVal->u.i;
+  return 0;
+}
+
+double sqlite3_value_double(sqlite3_value *pVal){
+  if( pVal && (pVal->flags & MEM_Real) ) return pVal->u.r;
+  if( pVal && (pVal->flags & MEM_Int) ) return (double)pVal->u.i;
+  return 0.0;
+}
+
+const unsigned char *sqlite3_value_text(sqlite3_value *pVal){
+  if( pVal && (pVal->flags & MEM_Str) ) return (const unsigned char*)pVal->z;
+  return 0;
+}
+
+void sqlite3_result_error_code(sqlite3_context *pCtx, int errCode){
+  (void)pCtx; (void)errCode;
+}
+
+void sqlite3_result_text(
+  sqlite3_context *pCtx,
+  const char *z,
+  int n,
+  void (*xDel)(void*)
+){
+  (void)pCtx; (void)z; (void)n; (void)xDel;
+}
+
+int sqlite3AppendOneUtf8Character(char *zOut, u32 c){
+  if( c<0x80 ){
+    zOut[0] = (char)c;
+    return 1;
+  }else if( c<0x800 ){
+    zOut[0] = (char)(0xC0 | (c>>6));
+    zOut[1] = (char)(0x80 | (c&0x3F));
+    return 2;
+  }else if( c<0x10000 ){
+    zOut[0] = (char)(0xE0 | (c>>12));
+    zOut[1] = (char)(0x80 | ((c>>6)&0x3F));
+    zOut[2] = (char)(0x80 | (c&0x3F));
+    return 3;
+  }else{
+    zOut[0] = (char)(0xF0 | (c>>18));
+    zOut[1] = (char)(0x80 | ((c>>12)&0x3F));
+    zOut[2] = (char)(0x80 | ((c>>6)&0x3F));
+    zOut[3] = (char)(0x80 | (c&0x3F));
+    return 4;
+  }
+}

@@ -1861,3 +1861,51 @@ int sqlite3VListNameToNum(VList *pIn, const char *zName, int nName){
   }while( i<mx );
   return 0;
 }
+
+/* ===== SNKV compatibility functions ===== */
+
+sqlite3_value *sqlite3ValueNew(sqlite3 *db){
+  sqlite3_value *p = sqlite3DbMallocZero(db, sizeof(*p));
+  if( p ){
+    p->flags = MEM_Null;
+    p->db = db;
+  }
+  return p;
+}
+
+void sqlite3ValueSetNull(sqlite3_value *p){
+  if( p ){
+    p->flags = MEM_Null;
+    if( p->zMalloc ){
+      sqlite3DbFree(p->db, p->zMalloc);
+      p->zMalloc = 0;
+    }
+    p->z = 0;
+    p->n = 0;
+  }
+}
+
+void sqlite3ValueSetStr(
+  sqlite3_value *p,
+  int n,
+  const void *z,
+  u8 enc,
+  void (*xDel)(void*)
+){
+  if( !p ) return;
+  sqlite3ValueSetNull(p);
+  if( z ){
+    int nByte = (n>0 ? n : (int)strlen((const char*)z)) + 1;
+    p->z = sqlite3DbMallocRaw(p->db, nByte);
+    if( p->z ){
+      memcpy(p->z, z, nByte-1);
+      p->z[nByte-1] = 0;
+      p->n = nByte - 1;
+      p->flags = MEM_Str;
+      p->enc = enc;
+    }
+    if( xDel && xDel!=SQLITE_STATIC && xDel!=SQLITE_TRANSIENT ){
+      xDel((void*)z);
+    }
+  }
+}

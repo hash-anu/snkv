@@ -2419,3 +2419,158 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
 
   return rc;
 }
+
+/* ===== SNKV compatibility functions ===== */
+
+int sqlite3CorruptError(int lineno){
+  sqlite3_log(SQLITE_CORRUPT,
+    "database corruption at line %d of [%.10s]",
+    lineno, SQLITE_SOURCE_ID);
+  return SQLITE_CORRUPT;
+}
+
+int sqlite3CantopenError(int lineno){
+  sqlite3_log(SQLITE_CANTOPEN,
+    "cannot open file at line %d of [%.10s]",
+    lineno, SQLITE_SOURCE_ID);
+  return SQLITE_CANTOPEN;
+}
+
+int sqlite3MisuseError(int lineno){
+  sqlite3_log(SQLITE_MISUSE,
+    "misuse at line %d of [%.10s]",
+    lineno, SQLITE_SOURCE_ID);
+  return SQLITE_MISUSE;
+}
+
+#if defined(SQLITE_DEBUG) || defined(SQLITE_ENABLE_CORRUPT_PGNO)
+int sqlite3CorruptPgnoError(int lineno, Pgno pgno){
+  sqlite3_log(SQLITE_CORRUPT,
+    "database corruption page %u at line %d of [%.10s]",
+    pgno, lineno, SQLITE_SOURCE_ID);
+  return SQLITE_CORRUPT;
+}
+#endif
+
+#ifdef SQLITE_DEBUG
+int sqlite3NomemError(int lineno){
+  return SQLITE_NOMEM;
+}
+int sqlite3IoerrnomemError(int lineno){
+  return SQLITE_IOERR_NOMEM;
+}
+#endif
+
+/*
+** Minimal sqlite3_initialize – sets up mutexes, memory allocator,
+** page cache, and OS (VFS).  Skips SQL-layer registration.
+*/
+int sqlite3_initialize(void){
+  int rc;
+
+  if( sqlite3GlobalConfig.isInit ){
+    return SQLITE_OK;
+  }
+  if( sqlite3GlobalConfig.inProgress ){
+    return SQLITE_OK;
+  }
+  sqlite3GlobalConfig.inProgress = 1;
+
+  rc = sqlite3MutexInit();
+  if( rc ) goto done;
+
+  sqlite3GlobalConfig.isMutexInit = 1;
+  if( !sqlite3GlobalConfig.isMallocInit ){
+    rc = sqlite3MallocInit();
+    if( rc ) goto done;
+    sqlite3GlobalConfig.isMallocInit = 1;
+  }
+
+  if( !sqlite3GlobalConfig.isPCacheInit ){
+    rc = sqlite3PcacheInitialize();
+    if( rc ) goto done;
+    sqlite3GlobalConfig.isPCacheInit = 1;
+  }
+
+  rc = sqlite3OsInit();
+  if( rc ) goto done;
+
+  sqlite3PCacheBufferSetup(
+    sqlite3GlobalConfig.pPage,
+    sqlite3GlobalConfig.szPage,
+    sqlite3GlobalConfig.nPage
+  );
+
+  sqlite3MemoryBarrier();
+  sqlite3GlobalConfig.isInit = 1;
+
+done:
+  sqlite3GlobalConfig.inProgress = 0;
+  return rc;
+}
+
+/*
+** Minimal sqlite3_config – only handle the most common options.
+*/
+int sqlite3_config(int op, ...){
+  int rc = SQLITE_OK;
+  if( sqlite3GlobalConfig.isInit ) return SQLITE_MISUSE_BKPT;
+
+  va_list ap;
+  va_start(ap, op);
+  switch( op ){
+    case SQLITE_CONFIG_SINGLETHREAD:
+      sqlite3GlobalConfig.bCoreMutex = 0;
+      sqlite3GlobalConfig.bFullMutex = 0;
+      break;
+    case SQLITE_CONFIG_MULTITHREAD:
+      sqlite3GlobalConfig.bCoreMutex = 1;
+      sqlite3GlobalConfig.bFullMutex = 0;
+      break;
+    case SQLITE_CONFIG_SERIALIZED:
+      sqlite3GlobalConfig.bCoreMutex = 1;
+      sqlite3GlobalConfig.bFullMutex = 1;
+      break;
+    case SQLITE_CONFIG_MEMSTATUS:
+      sqlite3GlobalConfig.bMemstat = va_arg(ap, int);
+      break;
+    case SQLITE_CONFIG_SMALL_MALLOC:
+      sqlite3GlobalConfig.bSmallMalloc = va_arg(ap, int);
+      break;
+    case SQLITE_CONFIG_MALLOC: {
+      sqlite3_mem_methods *p = va_arg(ap, sqlite3_mem_methods*);
+      if( p ) sqlite3GlobalConfig.m = *p;
+      break;
+    }
+    case SQLITE_CONFIG_GETMALLOC: {
+      sqlite3_mem_methods *p = va_arg(ap, sqlite3_mem_methods*);
+      if( p ) *p = sqlite3GlobalConfig.m;
+      break;
+    }
+    case SQLITE_CONFIG_MUTEX: {
+      sqlite3_mutex_methods *p = va_arg(ap, sqlite3_mutex_methods*);
+      if( p ) sqlite3GlobalConfig.mutex = *p;
+      break;
+    }
+    case SQLITE_CONFIG_GETMUTEX: {
+      sqlite3_mutex_methods *p = va_arg(ap, sqlite3_mutex_methods*);
+      if( p ) *p = sqlite3GlobalConfig.mutex;
+      break;
+    }
+    case SQLITE_CONFIG_PCACHE2: {
+      sqlite3_pcache_methods2 *p = va_arg(ap, sqlite3_pcache_methods2*);
+      if( p ) sqlite3GlobalConfig.pcache2 = *p;
+      break;
+    }
+    case SQLITE_CONFIG_GETPCACHE2: {
+      sqlite3_pcache_methods2 *p = va_arg(ap, sqlite3_pcache_methods2*);
+      if( p ) *p = sqlite3GlobalConfig.pcache2;
+      break;
+    }
+    default:
+      rc = SQLITE_OK;  /* Silently ignore unknown options */
+      break;
+  }
+  va_end(ap);
+  return rc;
+}
