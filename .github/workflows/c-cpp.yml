@@ -31,6 +31,7 @@ jobs:
         make tests/test_json
         make tests/test_wal
         make tests/test_stress
+        make tests/test_prefix
 
     - name: Run test_prod
       run: ./tests/test_prod
@@ -55,6 +56,9 @@ jobs:
 
     - name: Run test_stress
       run: ./tests/test_stress
+
+    - name: Run test_prefix
+      run: ./tests/test_prefix
 
     - name: Clean up
       if: always()
