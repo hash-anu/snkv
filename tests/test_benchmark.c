@@ -9,8 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <sys/time.h>
 #include "kvstore.h"
+#include "platform_compat.h"
 
 #define DB_FILE      "benchmark_kv.db"
 #define NUM_RECORDS  50000
