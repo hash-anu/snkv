@@ -155,10 +155,54 @@ static void example_statistics(void) {
     printf("\n");
 }
 
+static void example_prefix_iteration(void) {
+    KVStore *pKV;
+    KVIterator *pIter;
+
+    printf("=== Prefix Iteration ===\n");
+
+    kvstore_open("prefix.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+
+    /* Populate store */
+    kvstore_put(pKV, "user:alice", 10, "online", 6);
+    kvstore_put(pKV, "user:bob", 8, "offline", 7);
+    kvstore_put(pKV, "user:charlie", 12, "online", 6);
+    kvstore_put(pKV, "admin:root", 10, "active", 6);
+    kvstore_put(pKV, "admin:dba", 9, "inactive", 8);
+
+    /* Create prefix iterator for "user:" */
+    kvstore_prefix_iterator_create(pKV, "user:", 5, &pIter);
+
+    printf("%-15s %s\n", "Key", "Value");
+    printf("-------------------------------\n");
+
+    for (kvstore_iterator_first(pIter);
+         !kvstore_iterator_eof(pIter);
+         kvstore_iterator_next(pIter)) {
+
+        void *pKey, *pValue;
+        int nKey, nValue;
+
+        kvstore_iterator_key(pIter, &pKey, &nKey);
+        kvstore_iterator_value(pIter, &pValue, &nValue);
+
+        printf("%-15.*s %.*s\n",
+               nKey, (char*)pKey,
+               nValue, (char*)pValue);
+    }
+
+    kvstore_iterator_close(pIter);
+    kvstore_close(pKV);
+    remove("prefix.db");
+
+    printf("\n");
+}
+
 int main(void) {
     example_basic_scan();
     example_filtered_iteration();
     example_statistics();
+    example_prefix_iteration();
     printf("All iterator examples passed.\n");
     return 0;
 }
