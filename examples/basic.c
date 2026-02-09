@@ -93,8 +93,8 @@ static void example_existence(void) {
 
     kvstore_open("inventory.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
 
-    kvstore_put(pKV, "item:laptop", 11, "In Stock", 8);
-    kvstore_put(pKV, "item:mouse", 10, "Out of Stock", 12);
+    //kvstore_put(pKV, "item:laptop", 11, "In Stock", 8);
+    //kvstore_put(pKV, "item:mouse", 10, "Out of Stock", 12);
 
     const char *items[] = {"item:laptop", "item:mouse", "item:keyboard"};
     int num_items = 3;
@@ -106,7 +106,7 @@ static void example_existence(void) {
     }
 
     kvstore_close(pKV);
-    remove("inventory.db");
+    //remove("inventory.db");
     printf("\n");
 }
 

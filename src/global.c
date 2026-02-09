@@ -427,3 +427,5 @@ const char *sqlite3StdType[] = {
   "REAL",
   "TEXT"
 };
+
+char* sqlite3_data_directory = 0;

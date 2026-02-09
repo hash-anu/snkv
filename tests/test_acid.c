@@ -25,9 +25,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include <unistd.h>
 #include <time.h>
 #include "kvstore.h"
+#include "platform_compat.h"
 
 /*
 ** Test result structure
