@@ -398,6 +398,48 @@ int kvstore_cf_iterator_create(
 );
 
 /*
+** Create a prefix iterator for the default column family.
+** The iterator is pre-positioned at the first key whose bytes start
+** with (pPrefix, nPrefix).  Subsequent kvstore_iterator_next() calls
+** automatically stop when keys no longer match the prefix.
+**
+** Parameters:
+**   pKV      - KVStore handle
+**   pPrefix  - Prefix bytes to search for
+**   nPrefix  - Length of prefix in bytes
+**   ppIter   - Output pointer to iterator
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise
+**
+** Note: The iterator is already positioned; do NOT call
+**       kvstore_iterator_first() — just read key/value directly.
+*/
+int kvstore_prefix_iterator_create(
+  KVStore *pKV,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+);
+
+/*
+** Create a prefix iterator for a specific column family.
+**
+** Parameters:
+**   pCF      - Column family handle
+**   pPrefix  - Prefix bytes to search for
+**   nPrefix  - Length of prefix in bytes
+**   ppIter   - Output pointer to iterator
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise
+*/
+int kvstore_cf_prefix_iterator_create(
+  KVColumnFamily *pCF,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+);
+
+/*
 ** Move iterator to the first key-value pair.
 **
 ** Parameters:

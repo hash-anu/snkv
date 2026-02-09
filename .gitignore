@@ -9,3 +9,4 @@ tests/test_json
 tests/test_wal
 libsnkv.a
 tests/test_stress
+tests/test_prefix
