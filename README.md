@@ -1,4 +1,4 @@
-# SNKV — SQLite with No query processor Key Value store
+# SNKV — B-tree based Key Value store
 
 ## Overview
 
