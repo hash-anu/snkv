@@ -1,5 +1,17 @@
 CC ?= gcc
-CFLAGS = -g -Wall -Iinclude
+
+# ---- Build mode ----
+BUILD ?= debug
+
+BASE_CFLAGS = -Wall -Iinclude
+
+ifeq ($(BUILD),debug)
+  CFLAGS = $(BASE_CFLAGS) -g -O0 -DDEBUG
+endif
+
+ifeq ($(BUILD),release)
+  CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
+endif
 
 # ---- Platform detection ----
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
