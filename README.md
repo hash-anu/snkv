@@ -65,7 +65,7 @@ Compile (no library needed):
 
 ```bash
 gcc -o myapp myapp.c                          # Linux/macOS
-gcc -o myapp.exe myapp.c -lws2_32             # Windows/MSYS
+gcc -o myapp.exe myapp.c                      # Windows/MSYS
 ```
 
 `#define SNKV_IMPLEMENTATION` must appear in exactly **one** `.c` file. Other `.c` files can `#include "snkv.h"` without the define to get just the API declarations.
