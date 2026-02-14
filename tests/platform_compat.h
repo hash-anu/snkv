@@ -68,11 +68,14 @@
   
   /* ===================================================================
   ** Windows clock_gettime compatibility
+  ** MSYS2/MinGW pthreads already provide clock_gettime, so only
+  ** define our own when it is not already available.
   ** =================================================================== */
   #ifndef CLOCK_MONOTONIC
   #define CLOCK_MONOTONIC 1
   #endif
-  
+
+  #if !defined(HAVE_CLOCK_GETTIME) && !defined(_POSIX_TIMERS) && !defined(__MINGW32__)
   static inline int clock_gettime(int clk_id, struct timespec *ts) {
     (void)clk_id; /* unused */
     LARGE_INTEGER freq, count;
@@ -82,6 +85,7 @@
     ts->tv_nsec = (long)((count.QuadPart % freq.QuadPart) * 1000000000LL / freq.QuadPart);
     return 0;
   }
+  #endif
 
 /* ===================================================================
 ** POSIX Platforms (Mac/Linux)
