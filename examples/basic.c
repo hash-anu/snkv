@@ -4,7 +4,8 @@
 ** Demonstrates: Hello World, CRUD operations, existence checks
 */
 
-#include "kvstore.h"
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -15,7 +16,7 @@ static void print_user(const char *user_id, KVStore *pKV) {
     int rc = kvstore_get(pKV, user_id, strlen(user_id), &pValue, &nValue);
     if (rc == KVSTORE_OK) {
         printf("User %s: %.*s\n", user_id, nValue, (char*)pValue);
-        sqliteFree(pValue);
+        snkv_free(pValue);
     } else if (rc == KVSTORE_NOTFOUND) {
         printf("User %s: Not found\n", user_id);
     }
@@ -47,7 +48,7 @@ static void example_hello_world(void) {
     rc = kvstore_get(pKV, key, strlen(key), &pValue, &nValue);
     if (rc == KVSTORE_OK) {
         printf("Retrieved: %s = %.*s\n", key, nValue, (char*)pValue);
-        sqliteFree(pValue);
+        snkv_free(pValue);
     }
 
     kvstore_close(pKV);
