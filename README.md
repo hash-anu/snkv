@@ -2,7 +2,7 @@
 
 ## Overview
 
-**SNKV** is a lightweight, high‑performance **ACID compliant key–value store** built directly on top of the **SQLite v3.51.200 B‑Tree layer**.
+**SNKV** is a lightweight, high‑performance **ACID compliant key–value store** built directly on top of the **SQLite B‑Tree layer**.
 
 Instead of using SQLite through SQL queries, SNKV **bypasses the entire SQL processing stack** and directly invokes SQLite's **production‑ready B‑Tree APIs** to perform key–value operations.
 
@@ -22,11 +22,12 @@ SNKV removes these layers entirely and keeps only what is essential for a KV sto
 
 ## Building
 
-SNKV builds as a static library (`libsnkv.a`):
+SNKV can be used in two ways: as a **static library** or as a **single-header file**.
 
 ```bash
-make              # builds libsnkv.a
-make examples     # builds example programs in examples/
+make              # builds libsnkv.a (static library)
+make snkv.h       # generates single-header amalgamation
+make examples     # builds example programs (uses snkv.h)
 make run-examples # builds and runs all examples
 make test         # runs all test suites
 make clean        # removes all build artifacts
@@ -35,6 +36,59 @@ make clean        # removes all build artifacts
 ## Usage
 
 SNKV exposes a simple C API for key–value operations without any SQL involvement.
+
+### Option 1: Single-header file (recommended for new projects)
+
+Just drop `snkv.h` into your project — no library to link, no include paths to configure.
+
+```c
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
+
+int main(void) {
+    KVStore *pKV;
+    kvstore_open("mydb.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+
+    kvstore_put(pKV, "key", 3, "value", 5);
+
+    void *pValue; int nValue;
+    kvstore_get(pKV, "key", 3, &pValue, &nValue);
+    printf("%.*s\n", nValue, (char*)pValue);
+    snkv_free(pValue);
+
+    kvstore_close(pKV);
+    return 0;
+}
+```
+
+Compile (no library needed):
+
+```bash
+gcc -o myapp myapp.c                          # Linux/macOS
+gcc -o myapp.exe myapp.c                      # Windows/MSYS
+```
+
+`#define SNKV_IMPLEMENTATION` must appear in exactly **one** `.c` file. Other `.c` files can `#include "snkv.h"` without the define to get just the API declarations.
+
+**C++ projects** — compile the implementation as C, use the API from C++:
+
+```c
+// snkv_impl.c (compile with gcc)
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
+```
+
+```cpp
+// myapp.cpp (compile with g++)
+#include "snkv.h"
+int main() { /* use kvstore_open, kvstore_put, etc. */ }
+```
+
+```bash
+gcc -c snkv_impl.c && g++ myapp.cpp snkv_impl.o -o myapp
+```
+
+### Option 2: Static library
 
 ```c
 #include "kvstore.h"
@@ -281,6 +335,12 @@ All numbers are **operations per second (ops/sec)**.
 - SQLite benchmark source: [https://github.com/hash-anu/sqlite-benchmark-kv](https://github.com/hash-anu/sqlite-benchmark-kv)
 - SNKV benchmark source: `tests/test_benchmark.c`
 
+## Platform Support
+
+SNKV works on **Linux**, **macOS**, **Windows** (MSYS2/MinGW/Cygwin), and other Unix-like systems. Both **C** and **C++** are supported.
+
+The single-header `snkv.h` contains platform-specific code for all targets — the compiler automatically selects the right code path via `SQLITE_OS_UNIX` / `SQLITE_OS_WIN` macros.
+
 ## When to Use SNKV
 
 SNKV is ideal for:
@@ -290,6 +350,7 @@ SNKV is ideal for:
 * Configuration stores
 * Metadata databases
 * C/C++ applications needing fast KV access
+* Projects that want a **single-file dependency** (just drop in `snkv.h`)
 * Systems that do **not** need SQL
 * Many more
 

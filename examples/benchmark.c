@@ -4,7 +4,8 @@
 ** Demonstrates: Auto-commit vs batch transaction performance
 */
 
-#include "kvstore.h"
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>

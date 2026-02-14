@@ -1,5 +1,17 @@
 CC ?= gcc
-CFLAGS = -g -Wall -Iinclude
+
+# ---- Build mode ----
+BUILD ?= debug
+
+BASE_CFLAGS = -Wall -Iinclude
+
+ifeq ($(BUILD),debug)
+  CFLAGS = $(BASE_CFLAGS) -g -O0 -DDEBUG
+endif
+
+ifeq ($(BUILD),release)
+  CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
+endif
 
 # ---- Platform detection ----
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
@@ -62,17 +74,21 @@ EXAMPLE_BIN = $(EXAMPLE_SRC:.c=$(TARGET_EXT))
 
 all: $(LIB)
 
+# ---- Single-header amalgamation ----
+snkv.h: include/*.h src/*.c scripts/gen_snkv_header.sh
+	sh scripts/gen_snkv_header.sh > $@
+
 $(LIB): $(LIB_OBJ)
 	ar rcs $@ $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# ---- Example targets ----
-examples: $(LIB) $(EXAMPLE_BIN)
+# ---- Example targets (header-only via snkv.h) ----
+examples: snkv.h $(EXAMPLE_BIN)
 
-examples/%$(TARGET_EXT): examples/%.c $(LIB)
-	$(CC) $(CFLAGS) -o $@ $< $(LIB) $(LDFLAGS)
+examples/%$(TARGET_EXT): examples/%.c snkv.h
+	$(CC) -g -Wall -I. -o $@ $< $(LDFLAGS)
 
 run-examples: examples
 	@for e in $(EXAMPLE_BIN); do \
@@ -96,6 +112,7 @@ test: tests
 
 clean:
 	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
+	rm -f snkv.h
 	rm -f *.db tests/*.db examples/*.db
 
-.PHONY: all clean tests test examples run-examples
+.PHONY: all clean tests test examples run-examples snkv.h

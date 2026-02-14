@@ -5,7 +5,8 @@
 **               listing and dropping column families
 */
 
-#include "kvstore.h"
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -18,9 +19,9 @@ static void list_column_families(KVStore *pKV) {
         printf("Column Families (%d total):\n", nCount);
         for (int i = 0; i < nCount; i++) {
             printf("  - %s\n", azNames[i]);
-            sqliteFree(azNames[i]);
+            snkv_free(azNames[i]);
         }
-        sqliteFree(azNames);
+        snkv_free(azNames);
     }
 }
 
@@ -57,15 +58,15 @@ static void example_data_organization(void) {
 
     kvstore_cf_get(pUsersCF, "user:1", 6, &pValue, &nValue);
     printf("User 1: %.*s\n", nValue, (char*)pValue);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     kvstore_cf_get(pProductsCF, "prod:100", 8, &pValue, &nValue);
     printf("Product 100: %.*s\n", nValue, (char*)pValue);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     kvstore_cf_get(pOrdersCF, "order:1", 7, &pValue, &nValue);
     printf("Order 1: %.*s\n", nValue, (char*)pValue);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     kvstore_cf_close(pUsersCF);
     kvstore_cf_close(pProductsCF);

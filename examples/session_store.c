@@ -4,7 +4,8 @@
 ** Demonstrates: Real-world web session management with create/get/cleanup
 */
 
-#include "kvstore.h"
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -39,7 +40,7 @@ static int session_get(KVStore *pKV, const char *session_id, Session *pSess) {
 
     if (rc == KVSTORE_OK) {
         memcpy(pSess, pValue, sizeof(Session));
-        sqliteFree(pValue);
+        snkv_free(pValue);
 
         /* Update last access time */
         pSess->last_access = time(NULL);
@@ -76,12 +77,12 @@ static int session_cleanup_expired(KVStore *pKV, int max_age_seconds) {
         if ((int)nValue >= (int)sizeof(Session)) {
             Session *pSess = (Session*)pValue;
             if (now - pSess->last_access > max_age_seconds) {
-                char *key_copy = sqliteMalloc(nKey + 1);
+                char *key_copy = snkv_malloc(nKey + 1);
                 memcpy(key_copy, pKey, nKey);
                 key_copy[nKey] = '\0';
 
                 kvstore_delete(pKV, key_copy, nKey);
-                sqliteFree(key_copy);
+                snkv_free(key_copy);
                 deleted++;
             }
         }

@@ -4,9 +4,11 @@
 ** Demonstrates: Basic scan, filtered iteration, store statistics
 */
 
-#include "kvstore.h"
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 static void example_basic_scan(void) {
     KVStore *pKV;
@@ -146,9 +148,9 @@ static void example_statistics(void) {
     KVStoreStats kstats;
     kvstore_stats(pKV, &kstats);
     printf("\n  Built-in Stats:\n");
-    printf("    Puts: %llu\n", (unsigned long long)kstats.nPuts);
-    printf("    Gets: %llu\n", (unsigned long long)kstats.nGets);
-    printf("    Iterations: %llu\n", (unsigned long long)kstats.nIterations);
+    printf("    Puts: %" PRIu64 "\n", kstats.nPuts);
+    printf("    Gets: %" PRIu64 "\n", kstats.nGets);
+    printf("    Iterations: %" PRIu64 "\n", kstats.nIterations);
 
     kvstore_close(pKV);
     remove("data.db");

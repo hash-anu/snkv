@@ -4,7 +4,8 @@
 ** Demonstrates: Atomic batch operations, rollback
 */
 
-#include "kvstore.h"
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -28,7 +29,7 @@ static int transfer_funds(KVStore *pKV, const char *from, const char *to,
     memcpy(tmp, pValue, nValue);
     tmp[nValue] = '\0';
     int from_balance = atoi(tmp);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     if (from_balance < amount) {
         printf("Insufficient funds!\n");
@@ -45,7 +46,7 @@ static int transfer_funds(KVStore *pKV, const char *from, const char *to,
     memcpy(tmp, pValue, nValue);
     tmp[nValue] = '\0';
     int to_balance = atoi(tmp);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     /* Update balances */
     char balance_str[32];
@@ -84,11 +85,11 @@ static void example_atomic_transfer(void) {
     /* Check final balances */
     kvstore_get(pKV, "account:alice", 13, &pValue, &nValue);
     printf("Alice's balance: $%.*s\n", nValue, (char*)pValue);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     kvstore_get(pKV, "account:bob", 11, &pValue, &nValue);
     printf("Bob's balance: $%.*s\n", nValue, (char*)pValue);
-    sqliteFree(pValue);
+    snkv_free(pValue);
 
     kvstore_close(pKV);
     remove("bank.db");

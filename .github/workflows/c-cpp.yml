@@ -8,58 +8,47 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
+    # ---- Linux ----
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
 
-    - name: Build main target
+    # ---- macOS ----
+    - name: Install macOS dependencies
+      if: runner.os == 'macOS'
+      run: |
+        brew install make || true
+
+    # ---- Windows (MinGW) ----
+    - name: Setup MinGW on Windows
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: mingw-w64-x86_64-gcc make
+
+    - name: Build
+      shell: bash
       run: make
 
-    - name: Build all test executables
-      run: |
-        make tests/test_prod
-        make tests/test_columnfamily
-        make tests/test_benchmark
-        make tests/test_acid
-        make tests/test_mutex_journal
-        make tests/test_json
-        make tests/test_wal
-        make tests/test_stress
-        make tests/test_prefix
+    - name: Run tests
+      shell: bash
+      run: make test
 
-    - name: Run test_prod
-      run: ./tests/test_prod
-
-    - name: Run test_columnfamily
-      run: ./tests/test_columnfamily
-
-    - name: Run test_benchmark
-      run: ./tests/test_benchmark
-
-    - name: Run test_acid
-      run: ./tests/test_acid
-
-    - name: Run test_mutex_journal
-      run: ./tests/test_mutex_journal
-
-    - name: Run test_json
-      run: ./tests/test_json
-
-    - name: Run test_wal
-      run: ./tests/test_wal
-
-    - name: Run test_stress
-      run: ./tests/test_stress
-
-    - name: Run test_prefix
-      run: ./tests/test_prefix
-
-    - name: Clean up
+    - name: Clean
       if: always()
+      shell: bash
       run: make clean
