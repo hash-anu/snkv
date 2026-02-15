@@ -98,12 +98,6 @@ int main(void) {
 }
 ```
 
-Compile:
-
-```bash
-gcc myapp.c -o myapp
-```
-
 ---
 
 ## Features
@@ -136,6 +130,29 @@ Measured on **50,000 records**, averaged across multiple runs.
 
 ---
 
+### ⚔️ SNKV vs RocksDB
+
+```
+READS / SCANS / MIXED
+SNKV      ████████████████████████████
+RocksDB   ███████████
+
+WRITES / BULK INSERT
+SNKV      ███████████
+RocksDB   ████████████████████████████
+
+UPDATES / DELETES
+SNKV      ███████
+RocksDB   █████████████████████
+```
+
+**Interpretation:**
+- SNKV → Faster reads, scans, and mixed workloads
+- RocksDB → Faster writes and heavy ingestion
+- SNKV → More predictable latency (no compaction stalls)
+
+---
+
 ### ⚖️ Comparison (Key–Value Workloads)
 
 | Benchmark       | SQLite | SNKV  | Improvement      |
@@ -164,12 +181,6 @@ No:
 * SQL parsing
 * Query compilation
 * Virtual machine execution
-
-Result:
-
-* Lower latency
-* Reduced CPU overhead
-* Better cache efficiency
 
 ---
 
@@ -207,23 +218,9 @@ Ideal for:
 
 ---
 
-## When to Use SQLite
-
-If you need:
-
-* Complex queries
-* Joins / aggregations
-* Ad-hoc analytics
-
-SQLite remains an excellent choice.
-
----
-
 ## Philosophy
 
 > **Use the right abstraction for the job.**
-
-SNKV focuses on doing one thing extremely well:
 
 ➡️ Fast, reliable, embedded key–value storage
 
@@ -232,13 +229,3 @@ SNKV focuses on doing one thing extremely well:
 ## License
 
 Apache License 2.0 © 2025 Hash Anu
-
----
-
-## Positioning
-
-* Not a wrapper ❌
-* Not a replacement ❌
-* A **focused KV engine built on proven foundations** ✅
-
----
