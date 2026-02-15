@@ -65,7 +65,9 @@ LIB = libsnkv.a
 # ---- Test files ----
 TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_acid.c tests/test_mutex_journal.c tests/test_json.c \
-           tests/test_wal.c tests/test_stress.c tests/test_prefix.c
+           tests/test_wal.c tests/test_stress.c tests/test_prefix.c \
+           tests/test_concurrent.c \
+           tests/test_crash_recovery.c
 TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
 
 # ---- Example files ----
@@ -109,6 +111,7 @@ test: tests
 	  ./$$t || exit 1; \
 	  echo; \
 	done
+	rm -f *.db
 
 clean:
 	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
