@@ -13,7 +13,7 @@
 #include "platform_compat.h"
 
 #define DB_FILE      "benchmark_kv.db"
-#define NUM_RECORDS  50000
+#define NUM_RECORDS  1000000
 #define BATCH_SIZE   1000
 #define NUM_READS    50000
 #define NUM_UPDATES  10000
