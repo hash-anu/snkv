@@ -111,6 +111,7 @@ test: tests
 	  ./$$t || exit 1; \
 	  echo; \
 	done
+	rm -f *.db
 
 clean:
 	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
