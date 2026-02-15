@@ -153,6 +153,31 @@ RocksDB   █████████████████████
 
 ---
 
+### ⚔️ SNKV vs LMDB
+
+    READS / SCANS
+    LMDB      ███████████████████████████████████████████
+    SNKV      ███████████
+
+    WRITES
+    LMDB      ███████████████████
+    SNKV      ███████████
+
+    MIXED WORKLOAD
+    LMDB      ███████████████████████
+    SNKV      ███████████
+
+    MEMORY USAGE
+    LMDB      ███████████████████████████████
+    SNKV      ████
+
+**Interpretation:** 
+- LMDB → Extremely fast reads & scans(memory-mapped)
+- LMDB → Higher memory usage (\~160MB+ observed)
+- SNKV → Lower memory footprint, simpler deployment
+- SNKV → No mmap tuning required
+
+
 ### ⚖️ Comparison (Key–Value Workloads)
 
 | Benchmark       | SQLite | SNKV  | Improvement      |
