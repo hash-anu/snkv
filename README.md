@@ -184,26 +184,6 @@ No:
 
 ---
 
-## Architecture
-
-```
-Application
-     │
-     ▼
- KVStore API
-     │
-     ▼
- B-Tree Engine
-     │
-     ▼
- Pager (ACID, WAL)
-     │
-     ▼
- Disk
-```
-
----
-
 ## When to Use SNKV
 
 Ideal for:
