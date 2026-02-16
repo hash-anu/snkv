@@ -55,7 +55,7 @@ static void test_cf_create_open(void) {
   
   remove(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Get default CF */
@@ -88,7 +88,7 @@ static void test_cf_create_open(void) {
   kvstore_close(kv);
   
   /* Reopen and verify persistence */
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to reopen database");
   
   rc = kvstore_cf_open(kv, "users", &cf_users);
@@ -116,7 +116,7 @@ static void test_cf_isolation(void) {
   
   remove(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   rc = kvstore_cf_create(kv, "users", &cf_users);
@@ -189,7 +189,7 @@ static void test_cf_list(void) {
   
   remove(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   /* Create multiple CFs */
@@ -263,7 +263,7 @@ static void test_cf_iterators(void) {
   
   remove(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   rc = kvstore_cf_create(kv, "cf_a", &cf_a);
@@ -353,7 +353,7 @@ static void test_cf_transactions(void) {
   
   remove(TEST_DB);
   
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "Failed to open database");
   
   rc = kvstore_cf_create(kv, "cf1", &cf1);

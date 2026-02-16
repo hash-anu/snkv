@@ -84,7 +84,7 @@ make clean
 int main(void) {
     KVStore *db;
 
-    kvstore_open("mydb.db", &db, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("mydb.db", &db, KVSTORE_JOURNAL_WAL);
 
     kvstore_put(db, "key", 3, "value", 5);
 

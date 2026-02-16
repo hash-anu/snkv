@@ -158,7 +158,7 @@ void  sqlite3_free(void *);
 
 /* ========== DATABASE OPEN / CLOSE ========== */
 
-int kvstore_open(const char *zFilename, KVStore **ppKV, int flags, int journalMode);
+int kvstore_open(const char *zFilename, KVStore **ppKV, int journalMode);
 int kvstore_close(KVStore *pKV);
 
 /* ========== COLUMN FAMILY OPERATIONS ========== */
@@ -209,6 +209,7 @@ const char *kvstore_errmsg(KVStore *pKV);
 int kvstore_stats(KVStore *pKV, KVStoreStats *pStats);
 int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg);
 int kvstore_sync(KVStore *pKV);
+int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
 
 #ifdef __cplusplus
 }

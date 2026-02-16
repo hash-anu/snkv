@@ -90,7 +90,7 @@ static void test_wal_file_creation(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc == KVSTORE_OK ){
     rc = kvstore_begin(pKV, 1);
     if( rc == KVSTORE_OK ){
@@ -120,7 +120,7 @@ static void test_wal_basic_crud(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL basic CRUD", 0); return; }
 
   /* Put */
@@ -179,7 +179,7 @@ static void test_wal_commit(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL transaction commit", 0); return; }
 
   rc = kvstore_begin(pKV, 1);
@@ -220,7 +220,7 @@ static void test_wal_rollback(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL transaction rollback", 0); return; }
 
   /* Write a baseline value */
@@ -260,7 +260,7 @@ static void test_wal_recovery(void){
   cleanup();
 
   /* Phase 1: write committed value, then start uncommitted txn */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL recovery simulation", 0); return; }
 
   const char *key = "recov_key";
@@ -276,7 +276,7 @@ static void test_wal_recovery(void){
   kvstore_close(pKV);
 
   /* Phase 2: reopen – should see committed value */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc == KVSTORE_OK ){
     void *got = NULL; int glen = 0;
     rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
@@ -302,7 +302,7 @@ static void test_wal_persistence(void){
   cleanup();
 
   /* Write data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL data persistence", 0); return; }
 
   int i;
@@ -315,7 +315,7 @@ static void test_wal_persistence(void){
   kvstore_close(pKV);
 
   /* Reopen and verify */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc == KVSTORE_OK ){
     int ok = 1;
     for(i = 0; i < 50 && ok; i++){
@@ -395,7 +395,7 @@ static void test_wal_concurrent(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL concurrent readers + writer", 0); return; }
 
   /* 1 writer thread + (NUM_THREADS-1) reader threads */
@@ -449,7 +449,7 @@ static void test_wal_column_families(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL column families", 0); return; }
 
   rc = kvstore_cf_create(pKV, "wal_cf_a", &pCF1);
@@ -497,7 +497,7 @@ static void test_wal_large_payload(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL large payload", 0); return; }
 
   /* Create a 1 MB value */
@@ -535,7 +535,7 @@ static void test_wal_integrity(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL integrity check", 0); return; }
 
   /* Write some data first */
@@ -573,7 +573,7 @@ static void test_wal_cross_mode(void){
   cleanup();
 
   /* Phase 1: write data in DELETE (rollback journal) mode */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
 
   const char *key1 = "cross_key1";
@@ -582,7 +582,7 @@ static void test_wal_cross_mode(void){
   kvstore_close(pKV);
 
   /* Phase 2: reopen in WAL mode, verify old data, write new data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
 
   void *got = NULL; int glen = 0;
@@ -601,7 +601,7 @@ static void test_wal_cross_mode(void){
   kvstore_close(pKV);
 
   /* Phase 3: reopen in DELETE mode, verify both keys */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
 
   rc = kvstore_get(pKV, key1, (int)strlen(key1), &got, &glen);
@@ -630,7 +630,7 @@ static void test_wal_batch_performance(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL batch insert performance", 0); return; }
 
   int count = 10000;
@@ -690,7 +690,7 @@ static void test_wal_iterator(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL iterator", 0); return; }
 
   /* Insert known data */
@@ -739,7 +739,7 @@ static void test_wal_shm_file(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL -shm file lifecycle", 0); return; }
 
   /* After open + WAL activation, both -wal and -shm should exist */
@@ -786,7 +786,7 @@ static void test_wal_shm_during_transaction(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL -shm during transaction", 0); return; }
 
   rc = kvstore_begin(pKV, 1);
@@ -828,7 +828,7 @@ static void test_wal_acid_atomicity(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Atomicity (WAL)", 0); return; }
 
   /* Phase 1: Write 50 keys in a transaction, then rollback */
@@ -902,7 +902,7 @@ static void test_wal_acid_consistency(void){
   cleanup();
 
   /* Write data in a transaction */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
 
   rc = kvstore_begin(pKV, 1);
@@ -919,7 +919,7 @@ static void test_wal_acid_consistency(void){
   kvstore_close(pKV);
 
   /* Reopen and run integrity check */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
 
   char *errMsg = NULL;
@@ -963,7 +963,7 @@ static void test_wal_acid_isolation(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Isolation (WAL)", 0); return; }
 
   /* Write baseline data */
@@ -1017,7 +1017,7 @@ static void test_wal_acid_durability(void){
   cleanup();
 
   /* Phase 1: Write committed data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
 
   int i;
@@ -1048,7 +1048,7 @@ static void test_wal_acid_durability(void){
   kvstore_close(pKV);
 
   /* Phase 3: Reopen and verify committed values survived */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
 
   int committed_ok = 1;
@@ -1100,7 +1100,7 @@ static void test_wal_acid_crash_atomicity(void){
   cleanup();
 
   /* Write baseline data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
 
   const char *base_key = "crash_base";
@@ -1109,7 +1109,7 @@ static void test_wal_acid_crash_atomicity(void){
   kvstore_close(pKV);
 
   /* Reopen, start txn, write, close without commit */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
 
   rc = kvstore_begin(pKV, 1);
@@ -1129,7 +1129,7 @@ static void test_wal_acid_crash_atomicity(void){
   kvstore_close(pKV);
 
   /* Reopen: baseline should be original, crash_ keys should not exist */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
 
   void *got = NULL; int glen = 0;
@@ -1170,7 +1170,7 @@ static void test_wal_statistics(void){
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ){ print_result("WAL statistics", 0); return; }
 
   kvstore_put(pKV, "s1", 2, "v1", 2);

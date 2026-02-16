@@ -28,7 +28,7 @@ static void example_hello_world(void) {
 
     printf("=== Hello World ===\n");
 
-    rc = kvstore_open("hello.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open("hello.db", &pKV, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "Failed to open database\n");
         return;
@@ -61,7 +61,7 @@ static void example_crud(void) {
 
     printf("=== CRUD Operations ===\n");
 
-    kvstore_open("users.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("users.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     /* CREATE */
     printf("--- CREATE ---\n");
@@ -92,7 +92,7 @@ static void example_existence(void) {
 
     printf("=== Existence Check ===\n");
 
-    kvstore_open("inventory.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("inventory.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     kvstore_put(pKV, "item:laptop", 11, "In Stock", 8);
     kvstore_put(pKV, "item:mouse", 10, "Out of Stock", 12);

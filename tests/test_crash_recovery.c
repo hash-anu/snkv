@@ -132,7 +132,7 @@ static void test_committed_survives_wal(void) {
     char key[64], value[64];
 
     /* Phase 1: Write 500 keys and commit */
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     kvstore_begin(kv, 1);
@@ -147,7 +147,7 @@ static void test_committed_survives_wal(void) {
     kvstore_close(kv);
 
     /* Phase 2: Reopen and verify */
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int found = count_keys(kv, "committed", 500);
@@ -170,7 +170,7 @@ static void test_committed_survives_delete(void) {
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(DB_FILE_DEL, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE_DEL, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     kvstore_begin(kv, 1);
@@ -184,7 +184,7 @@ static void test_committed_survives_delete(void) {
 
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_FILE_DEL, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE_DEL, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int found = count_keys(kv, "committed", 500);
@@ -219,7 +219,7 @@ static void test_uncommitted_rolled_back(int journalMode, const char *mode_name)
     char key[64], value[64];
 
     /* Phase 1: Write 200 keys and commit */
-    rc = kvstore_open(db, &kv, 0, journalMode);
+    rc = kvstore_open(db, &kv, journalMode);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     kvstore_begin(kv, 1);
@@ -242,7 +242,7 @@ static void test_uncommitted_rolled_back(int journalMode, const char *mode_name)
     kvstore_close(kv);
 
     /* Phase 3: Reopen and verify */
-    rc = kvstore_open(db, &kv, 0, journalMode);
+    rc = kvstore_open(db, &kv, journalMode);
     if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int batch1_count = count_keys(kv, "batch1", 200);
@@ -276,7 +276,7 @@ static void test_explicit_rollback(int journalMode, const char *mode_name) {
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(db, &kv, 0, journalMode);
+    rc = kvstore_open(db, &kv, journalMode);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Commit some data first */
@@ -328,7 +328,7 @@ static void test_multiple_crash_cycles(void) {
 
     for (cycle = 0; cycle < 5; cycle++) {
         KVStore *kv = NULL;
-        rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+        rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
         if (rc != KVSTORE_OK) {
             print_result("Open failed on cycle", 0);
             cleanup(DB_FILE_WAL);
@@ -373,7 +373,7 @@ static void test_multiple_crash_cycles(void) {
 
     /* Final verification */
     KVStore *kv = NULL;
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) {
         print_result("Final reopen", 0);
         cleanup(DB_FILE_WAL);
@@ -431,7 +431,7 @@ static void test_large_txn_recovery(int journalMode, const char *mode_name) {
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(db, &kv, 0, journalMode);
+    rc = kvstore_open(db, &kv, journalMode);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Write and commit 5000 keys */
@@ -455,7 +455,7 @@ static void test_large_txn_recovery(int journalMode, const char *mode_name) {
     kvstore_close(kv);
 
     /* Reopen and verify */
-    rc = kvstore_open(db, &kv, 0, journalMode);
+    rc = kvstore_open(db, &kv, journalMode);
     if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int ok_count = count_keys(kv, "large-ok", 5000);
@@ -488,7 +488,7 @@ static void test_overwrite_recovery(void) {
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Version 1: write original values */
@@ -520,7 +520,7 @@ static void test_overwrite_recovery(void) {
     kvstore_close(kv);
 
     /* Reopen: should see version-2 values (last committed) */
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int v2_correct = 0;
@@ -573,7 +573,7 @@ static void test_delete_recovery(void) {
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Write 300 keys */
@@ -603,7 +603,7 @@ static void test_delete_recovery(void) {
     kvstore_close(kv);
 
     /* Reopen: keys 0-99 should be gone, 100-299 should be present */
-    rc = kvstore_open(DB_FILE_WAL, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int deleted_count = count_keys(kv, "deltest", 100);  /* keys 0-99 */

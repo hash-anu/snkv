@@ -73,7 +73,7 @@ static void example_atomic_transfer(void) {
 
     printf("=== Atomic Transfer ===\n");
 
-    kvstore_open("bank.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("bank.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     /* Initialize accounts */
     kvstore_put(pKV, "account:alice", 13, "1000", 4);
@@ -102,7 +102,7 @@ static void example_batch_insert(void) {
 
     printf("=== Batch Insert with Rollback ===\n");
 
-    kvstore_open("config.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("config.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     const char *keys[] = {"server.host", "server.port", "server.timeout"};
     const char *values[] = {"localhost", "8080", "30"};

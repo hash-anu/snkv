@@ -79,7 +79,6 @@ Open or create a key-value store database.
 int kvstore_open(
   const char *zFilename,
   KVStore **ppKV,
-  int flags,
   int journalMode
 );
 ```
@@ -90,15 +89,17 @@ int kvstore_open(
 |-----------|------|-------------|
 | `zFilename` | `const char *` | Path to database file. Pass `NULL` for in-memory database. |
 | `ppKV` | `KVStore **` | Output pointer to the opened KVStore handle. |
-| `flags` | `int` | B-tree open flags (e.g., `BTREE_OMIT_JOURNAL`). Use `0` for defaults. |
 | `journalMode` | `int` | `KVSTORE_JOURNAL_DELETE` or `KVSTORE_JOURNAL_WAL`. |
 
 **Returns:** `KVSTORE_OK` on success, error code otherwise.
 
+**Notes:**
+- The database is always opened with incremental auto-vacuum enabled. Call `kvstore_incremental_vacuum()` to reclaim unused space after deleting data.
+
 **Example:**
 ```c
 KVStore *kv = NULL;
-int rc = kvstore_open("mydata.db", &kv, 0, KVSTORE_JOURNAL_WAL);
+int rc = kvstore_open("mydata.db", &kv, KVSTORE_JOURNAL_WAL);
 if (rc != KVSTORE_OK) {
     fprintf(stderr, "Failed to open database\n");
 }
@@ -645,6 +646,44 @@ int kvstore_sync(KVStore *pKV);
 ```
 
 If a write transaction is active, this performs a commit-and-reopen cycle to flush the WAL to disk. If no write transaction is active, this is a no-op.
+
+### kvstore_incremental_vacuum
+
+Reclaim unused pages and shrink the database file. All databases are opened with incremental auto-vacuum enabled, so this function can be called at any time after deleting data to reduce file size.
+
+```c
+int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pKV` | `KVStore *` | Database handle. |
+| `nPage` | `int` | Maximum number of pages to free. Pass `0` to free all unused pages. |
+
+**Returns:** `KVSTORE_OK` on success, error code otherwise.
+
+**Notes:**
+- When data is deleted, the freed pages are added to an internal freelist but the database file does not shrink. Call `kvstore_incremental_vacuum()` to actually truncate the file and reclaim disk space.
+- Pass a positive `nPage` to limit the amount of work per call, which is useful for avoiding long pauses in latency-sensitive applications.
+- If no explicit transaction is active, the function automatically begins and commits a write transaction for the vacuum operation.
+
+**Example:**
+```c
+/* Delete a batch of records */
+kvstore_begin(kv, 1);
+for (int i = 0; i < 1000; i++) {
+    kvstore_delete(kv, keys[i], key_lens[i]);
+}
+kvstore_commit(kv);
+
+/* Reclaim all unused space */
+kvstore_incremental_vacuum(kv, 0);
+
+/* Or reclaim incrementally (e.g., 50 pages at a time) */
+kvstore_incremental_vacuum(kv, 50);
+```
 
 ---
 

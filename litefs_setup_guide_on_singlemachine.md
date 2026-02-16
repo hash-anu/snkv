@@ -208,7 +208,6 @@ int main(void) {
     KVStore *kv;
     kvstore_open("./mnt1/snkv.db",
                  &kv,
-                 0,
                  KVSTORE_JOURNAL_WAL);
     
     // Create a 1 MB buffer with repeating pattern
@@ -258,7 +257,6 @@ int main(void) {
     
     kvstore_open("./mnt2/snkv.db",
                  &kv,
-                 KVSTORE_READONLY,
                  KVSTORE_JOURNAL_WAL);
     
     printf("Reading 10 MB of data...\n");

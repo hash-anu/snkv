@@ -67,7 +67,8 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_acid.c tests/test_mutex_journal.c tests/test_json.c \
            tests/test_wal.c tests/test_stress.c tests/test_prefix.c \
            tests/test_concurrent.c \
-           tests/test_crash_recovery.c
+           tests/test_crash_recovery.c \
+           tests/test_autovacuum.c
 TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
 
 # ---- Example files ----

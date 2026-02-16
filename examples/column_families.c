@@ -33,7 +33,7 @@ static void example_data_organization(void) {
 
     printf("=== Organizing Data with Column Families ===\n");
 
-    kvstore_open("ecommerce.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("ecommerce.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     /* Create column families */
     printf("Creating column families...\n");
@@ -81,7 +81,7 @@ static void example_cf_management(void) {
 
     printf("=== Listing and Managing Column Families ===\n");
 
-    kvstore_open("multi_cf.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("multi_cf.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     printf("--- Initial State ---\n");
     list_column_families(pKV);
