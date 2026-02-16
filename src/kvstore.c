@@ -466,7 +466,6 @@ static int createDefaultCF(KVStore *pKV){
 int kvstore_open(
   const char *zFilename,
   KVStore **ppKV,
-  int flags,
   int journalMode
 ){
   KVStore *pKV;
@@ -504,13 +503,13 @@ int kvstore_open(
   pKV->db->mutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
   pKV->db->aLimit[SQLITE_LIMIT_LENGTH] = SQLITE_MAX_LENGTH;
 
-  /* Open the btree (new signature: pVfs, filename, db, ppBt, flags, vfsFlags) */
+  /* Open the btree (pVfs, filename, db, ppBt, flags, vfsFlags) */
   rc = sqlite3BtreeOpen(
     sqlite3_vfs_find(0),       /* default VFS */
     zFilename,
     pKV->db,
     &pKV->pBt,
-    flags,                     /* btree flags */
+    0,                         /* no btree flags */
     SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB
   );
   if( rc != SQLITE_OK ){
@@ -524,6 +523,26 @@ int kvstore_open(
 
   /* Set cache size for better performance */
   sqlite3BtreeSetCacheSize(pKV->pBt, KVSTORE_DEFAULT_CACHE_SIZE);
+
+  /* Always enable incremental auto-vacuum.  Must happen before any
+  ** transaction (including SetVersion below) so that BTS_PAGESIZE_FIXED
+  ** is not yet set.  For existing databases the mode is already stored
+  ** in the header and this call returns SQLITE_READONLY which we
+  ** silently ignore — the header value wins. */
+  {
+    int avRc = sqlite3BtreeSetAutoVacuum(pKV->pBt, BTREE_AUTOVACUUM_INCR);
+    /* SQLITE_READONLY means the DB already has data — mode is fixed.
+    ** This is expected for existing databases, so ignore it. */
+    if( avRc != SQLITE_OK && avRc != SQLITE_READONLY ){
+      kvstoreSetError(pKV, "failed to set auto-vacuum mode: error %d", avRc);
+      sqlite3BtreeClose(pKV->pBt);
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
+      kvstore_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return avRc;
+    }
+  }
 
   /* Set journal mode (rollback-delete or WAL).
   ** sqlite3BtreeSetVersion(pBt, 2) writes the WAL format marker into the
@@ -2289,6 +2308,90 @@ int kvstore_sync(KVStore *pKV){
     }else{
       kvstoreCheckCorruption(pKV, rc);
       kvstoreSetError(pKV, "failed to sync database: error %d", rc);
+    }
+  }
+
+  kvstore_mutex_leave(pKV->pMutex);
+  return rc;
+}
+
+/*
+** Run incremental vacuum, freeing up to nPage pages.
+** Pass nPage=0 to free all unused pages.
+*/
+int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
+  int rc;
+
+  if( !pKV ){
+    return KVSTORE_ERROR;
+  }
+
+  kvstore_mutex_enter(pKV->pMutex);
+
+  if( pKV->isCorrupted ){
+    kvstoreSetError(pKV, "cannot vacuum: database is corrupted");
+    kvstore_mutex_leave(pKV->pMutex);
+    return KVSTORE_CORRUPT;
+  }
+
+  /* Begin a write transaction if none is active */
+  int autoTrans = 0;
+  if( pKV->inTrans == 0 ){
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 2, 0);
+    if( rc != SQLITE_OK ){
+      kvstoreCheckCorruption(pKV, rc);
+      kvstoreSetError(pKV, "failed to begin transaction for vacuum: error %d", rc);
+      kvstore_mutex_leave(pKV->pMutex);
+      return rc;
+    }
+    pKV->inTrans = 2;
+    autoTrans = 1;
+  }else if( pKV->inTrans == 1 ){
+    /* Upgrade read transaction to write */
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 2, 0);
+    if( rc != SQLITE_OK ){
+      kvstoreCheckCorruption(pKV, rc);
+      kvstoreSetError(pKV, "failed to upgrade transaction for vacuum: error %d", rc);
+      kvstore_mutex_leave(pKV->pMutex);
+      return rc;
+    }
+    pKV->inTrans = 2;
+    autoTrans = 1;
+  }
+
+  /* Run incremental vacuum steps */
+  if( nPage <= 0 ){
+    /* Free all unused pages */
+    do {
+      rc = sqlite3BtreeIncrVacuum(pKV->pBt);
+    } while( rc == SQLITE_OK );
+    if( rc == SQLITE_DONE ) rc = SQLITE_OK;
+  }else{
+    int i;
+    for( i = 0; i < nPage; i++ ){
+      rc = sqlite3BtreeIncrVacuum(pKV->pBt);
+      if( rc != SQLITE_OK ) break;
+    }
+    if( rc == SQLITE_DONE ) rc = SQLITE_OK;
+  }
+
+  if( rc != SQLITE_OK ){
+    kvstoreCheckCorruption(pKV, rc);
+    kvstoreSetError(pKV, "incremental vacuum failed: error %d", rc);
+    if( autoTrans ){
+      sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
+      pKV->inTrans = 0;
+    }
+    kvstore_mutex_leave(pKV->pMutex);
+    return rc;
+  }
+
+  if( autoTrans ){
+    rc = sqlite3BtreeCommit(pKV->pBt);
+    pKV->inTrans = 0;
+    if( rc != SQLITE_OK ){
+      kvstoreCheckCorruption(pKV, rc);
+      kvstoreSetError(pKV, "failed to commit vacuum: error %d", rc);
     }
   }
 

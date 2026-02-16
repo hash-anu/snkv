@@ -121,7 +121,7 @@ static void make_value(char* buf, int buflen, int idx, int vallen) {
 static void test_edge_empty_value(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -142,7 +142,7 @@ static void test_edge_empty_value(void) {
 static void test_edge_binary_key_with_nulls(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -165,7 +165,7 @@ static void test_edge_binary_key_with_nulls(void) {
 static void test_edge_single_byte_key(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -188,7 +188,7 @@ static void test_edge_single_byte_key(void) {
 static void test_edge_large_key_value(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -221,7 +221,7 @@ static void test_edge_large_key_value(void) {
 static void test_edge_overwrite_same_key(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -249,7 +249,7 @@ static void test_edge_overwrite_same_key(void) {
 static void test_edge_get_nonexistent(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -265,7 +265,7 @@ static void test_edge_get_nonexistent(void) {
 static void test_edge_delete_nonexistent(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -280,7 +280,7 @@ static void test_edge_delete_nonexistent(void) {
 static void test_edge_put_after_delete(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -308,7 +308,7 @@ static void test_write_storm(int journalMode, const char* label) {
     const char* db = (journalMode == KVSTORE_JOURNAL_WAL) ? DB_WAL_FILE : DB_FILE;
     cleanup(db);
     KVStore* kv = NULL;
-    int rc = kvstore_open(db, &kv, 0, journalMode);
+    int rc = kvstore_open(db, &kv, journalMode);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -386,7 +386,7 @@ static void test_write_storm(int journalMode, const char* label) {
 static void test_large_dataset(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -493,18 +493,18 @@ static void test_crash_recovery_uncommitted(void) {
     KVStore* kv = NULL;
     int rc;
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Crash recovery: uncommitted txn", 0); return; }
     kvstore_put(kv, "safe", 4, "committed_data", 14);
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Crash recovery: uncommitted txn", 0); return; }
     kvstore_begin(kv, 1);
     kvstore_put(kv, "unsafe", 6, "uncommitted_data", 16);
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Crash recovery: uncommitted txn", 0); return; }
 
     void* got = NULL; int glen = 0;
@@ -530,18 +530,18 @@ static void test_crash_recovery_wal(void) {
     KVStore* kv = NULL;
     int rc;
 
-    rc = kvstore_open(DB_WAL_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_WAL_FILE, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Crash recovery WAL: uncommitted txn", 0); return; }
     kvstore_put(kv, "wal_safe", 8, "wal_committed", 13);
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_WAL_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_WAL_FILE, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Crash recovery WAL: uncommitted txn", 0); return; }
     kvstore_begin(kv, 1);
     kvstore_put(kv, "wal_unsafe", 10, "wal_uncommitted", 15);
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_WAL_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_WAL_FILE, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Crash recovery WAL: uncommitted txn", 0); return; }
 
     void* got = NULL; int glen = 0;
@@ -573,14 +573,14 @@ static void test_rapid_open_close(void) {
     int ok = 1;
     int cycles = 200;
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Rapid open/close (200 cycles)", 0); return; }
     kvstore_put(kv, "persist", 7, "survives", 8);
     kvstore_close(kv);
 
     int i;
     for (i = 0; i < cycles; i++) {
-        rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+        rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
         if (rc != KVSTORE_OK) { ok = 0; break; }
 
         void* got = NULL; int glen = 0;
@@ -603,7 +603,7 @@ static void test_rapid_open_close(void) {
     }
 
     if (ok) {
-        rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+        rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
         if (rc == KVSTORE_OK) {
             char* errMsg = NULL;
             int ic = kvstore_integrity_check(kv, &errMsg);
@@ -635,7 +635,7 @@ static void test_cross_config(void) {
     for (m = 0; m < 2; m++) {
         cleanup(dbs[m]);
         KVStore* kv = NULL;
-        int rc = kvstore_open(dbs[m], &kv, 0, modes[m]);
+        int rc = kvstore_open(dbs[m], &kv, modes[m]);
         if (rc != KVSTORE_OK) { allOk = 0; continue; }
 
         const char* k = "xconfig";
@@ -713,7 +713,7 @@ typedef struct {
 static int open_with_retry(const char* db, KVStore** ppKV, int journalMode) {
     int rc, retries = 0;
     do {
-        rc = kvstore_open(db, ppKV, 0, journalMode);
+        rc = kvstore_open(db, ppKV, journalMode);
         if (rc == KVSTORE_OK) return KVSTORE_OK;
         if (IS_BUSY(rc)) {
             usleep(5000 + (rand() % 10000));
@@ -800,7 +800,7 @@ static void test_concurrent_stress(void) {
     cleanup(DB_WAL_FILE);
 
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_WAL_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    int rc = kvstore_open(DB_WAL_FILE, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Concurrent stress (WAL, 8 threads)", 0); return; }
     kvstore_put(kv, "seed", 4, "initial", 7);
     kvstore_close(kv);
@@ -885,7 +885,7 @@ static void test_concurrent_stress(void) {
 static void test_iterator_correctness(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
     int N = 1000;
 
@@ -930,7 +930,7 @@ static void test_iterator_correctness(void) {
 static void test_iterator_empty_db(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -954,7 +954,7 @@ static void test_iterator_empty_db(void) {
 static void test_transaction_cycling(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -1001,7 +1001,7 @@ static void test_transaction_cycling(void) {
 static void test_rollback_cycling(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -1044,7 +1044,7 @@ static void test_rollback_cycling(void) {
 static void test_mixed_workload(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -1119,7 +1119,7 @@ static void test_mixed_workload(void) {
 static void test_cf_stress(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -1191,7 +1191,7 @@ static void test_cf_stress(void) {
 static void test_growing_values(void) {
     cleanup(DB_FILE);
     KVStore* kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
     int ok = 0;
 
     if (rc == KVSTORE_OK) {
@@ -1246,12 +1246,12 @@ static void test_mode_switch_persistence(void) {
     int rc;
     int ok = 0;
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Mode switch persistence (DELETE<->WAL)", 0); return; }
     kvstore_put(kv, "del_key", 7, "del_value", 9);
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) { print_result("Mode switch persistence (DELETE<->WAL)", 0); return; }
 
     void* got = NULL; int glen = 0;
@@ -1262,7 +1262,7 @@ static void test_mode_switch_persistence(void) {
     kvstore_put(kv, "wal_key", 7, "wal_value", 9);
     kvstore_close(kv);
 
-    rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_DELETE);
+    rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_DELETE);
     if (rc != KVSTORE_OK) { print_result("Mode switch persistence (DELETE<->WAL)", 0); return; }
 
     rc = kvstore_get(kv, "del_key", 7, &got, &glen);

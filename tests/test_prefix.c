@@ -71,7 +71,7 @@ static void test_basic_prefix_search(void){
   TEST_START("Basic prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   /* Insert keys in non-sorted order */
@@ -129,7 +129,7 @@ static void test_sorted_order(void){
   TEST_START("Sorted key order in prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   /* Insert keys in reverse order */
@@ -184,7 +184,7 @@ static void test_empty_prefix_results(void){
   TEST_START("Empty prefix results (no matching keys)");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   kvstore_begin(kv, 1);
@@ -229,7 +229,7 @@ static void test_empty_prefix_results(void){
   /* Empty database */
   kvstore_close(kv);
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open empty db failed");
 
   rc = kvstore_prefix_iterator_create(kv, "any", 3, &pIter);
@@ -257,7 +257,7 @@ static void test_single_char_prefix(void){
   TEST_START("Single-character prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   kvstore_begin(kv, 1);
@@ -323,7 +323,7 @@ static void test_exact_key_as_prefix(void){
   TEST_START("Prefix that exactly matches an existing key");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   kvstore_begin(kv, 1);
@@ -393,7 +393,7 @@ static void test_cf_prefix_search(void){
   TEST_START("Column family prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   rc = kvstore_cf_create(kv, "logs", &pCF);
@@ -460,7 +460,7 @@ static void test_prefix_with_values(void){
   TEST_START("Prefix search with value verification");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   kvstore_begin(kv, 1);
@@ -512,7 +512,7 @@ static void test_binary_key_prefix(void){
   TEST_START("Binary key prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   /* Use binary prefixes: 0x01 0x02 ... */
@@ -569,7 +569,7 @@ static void test_prefix_wal_mode(void){
   TEST_START("Prefix search in WAL mode");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ) TEST_FAIL("open WAL failed");
 
   kvstore_begin(kv, 1);
@@ -619,7 +619,7 @@ static void test_large_scale_prefix(void){
   TEST_START("Large-scale prefix search (10K keys)");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_WAL);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_WAL);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   /* Insert 10K keys across 10 namespaces */
@@ -683,7 +683,7 @@ static void test_prefix_after_mutations(void){
   TEST_START("Prefix search after updates and deletes");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   kvstore_begin(kv, 1);
@@ -754,7 +754,7 @@ static void test_prefix_iterator_first_reseek(void){
   TEST_START("Prefix iterator first() re-seek");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, 0, KVSTORE_JOURNAL_DELETE);
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
 
   kvstore_begin(kv, 1);

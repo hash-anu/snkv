@@ -71,7 +71,7 @@ static void make_value(char *buf, int buflen, int writer_id, int seq) {
 static int open_with_retry(const char *db, KVStore **ppKV) {
     int rc, retries = 0;
     do {
-        rc = kvstore_open(db, ppKV, 0, KVSTORE_JOURNAL_WAL);
+        rc = kvstore_open(db, ppKV, KVSTORE_JOURNAL_WAL);
         if (rc == KVSTORE_OK) return KVSTORE_OK;
         if (IS_BUSY(rc)) {
             usleep(5000 + (rand() % 10000));
@@ -268,7 +268,7 @@ static void test_concurrent_write_read(void) {
 
     /* Create the database in WAL mode with a seed record */
     KVStore *kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, 0, KVSTORE_JOURNAL_WAL);
+    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
     if (rc != KVSTORE_OK) {
         printf("  Failed to create DB: rc=%d\n", rc);
         print_result("Concurrent write/read", 0);

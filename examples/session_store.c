@@ -98,7 +98,7 @@ int main(void) {
 
     printf("=== Session Store ===\n\n");
 
-    kvstore_open("sessions.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("sessions.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     /* Create sessions */
     printf("Creating sessions...\n");

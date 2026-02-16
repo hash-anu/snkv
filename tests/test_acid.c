@@ -72,7 +72,7 @@ static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
   printf("  Testing Atomicity (%s)...\n", journal_mode_name(journal_mode));
 
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
+  rc = kvstore_open(dbfile, &pKV, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -187,7 +187,7 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   printf("  Testing Consistency (%s)...\n", journal_mode_name(journal_mode));
 
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
+  rc = kvstore_open(dbfile, &pKV, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -354,7 +354,7 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   printf("  Testing Isolation (%s)...\n", journal_mode_name(journal_mode));
 
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
+  rc = kvstore_open(dbfile, &pKV, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -455,7 +455,7 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
   /* Test 1: Data survives normal close/reopen */
   printf("    Test 4.1: Data survives close/reopen\n");
 
-  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
+  rc = kvstore_open(dbfile, &pKV, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
@@ -484,7 +484,7 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
   pKV = NULL;
   
   /* Reopen and verify data exists */
-  rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
+  rc = kvstore_open(dbfile, &pKV, journal_mode);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Failed to reopen database: %d", rc);
     return 0;
@@ -526,7 +526,7 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
     kvstore_close(pKV);
     
     /* Reopen */
-    rc = kvstore_open(dbfile, &pKV, 0, journal_mode);
+    rc = kvstore_open(dbfile, &pKV, journal_mode);
     if(rc != KVSTORE_OK) {
       snprintf(err_msg, 1024, "Failed to reopen in cycle %d: %d", cycle, rc);
       return 0;

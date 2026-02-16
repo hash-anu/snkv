@@ -68,16 +68,17 @@ typedef struct KVColumnFamily KVColumnFamily;
 ** Parameters:
 **   zFilename   - Path to the database file (NULL for in-memory)
 **   ppKV        - Output pointer to KVStore handle
-**   flags       - Same flags as sqlite3BtreeOpen (BTREE_OMIT_JOURNAL, etc.)
 **   journalMode - KVSTORE_JOURNAL_DELETE or KVSTORE_JOURNAL_WAL
 **
 ** Returns:
 **   KVSTORE_OK on success, error code otherwise
+**
+** Note: The database is always opened with incremental auto-vacuum enabled.
+**       Call kvstore_incremental_vacuum() to reclaim unused space on demand.
 */
 int kvstore_open(
   const char *zFilename,
   KVStore **ppKV,
-  int flags,
   int journalMode
 );
 
@@ -606,6 +607,22 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg);
 **   KVSTORE_OK on success, error code otherwise
 */
 int kvstore_sync(KVStore *pKV);
+
+/*
+** Run an incremental vacuum step, freeing up to nPage pages.
+**
+** Reclaims unused pages and shrinks the database file.
+** Databases are always opened with incremental auto-vacuum enabled,
+** so this function can be called at any time to reclaim space.
+**
+** Parameters:
+**   pKV    - KVStore handle
+**   nPage  - Maximum number of pages to free (0 = free all)
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise
+*/
+int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
 
 #ifdef __cplusplus
 }

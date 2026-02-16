@@ -43,7 +43,7 @@ int main(void) {
 
     /* Test without transaction (auto-commit each operation) */
     printf("Without transaction (auto-commit):\n");
-    kvstore_open("bench_auto.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("bench_auto.db", &pKV, KVSTORE_JOURNAL_WAL);
     time_no_tx = benchmark_inserts(pKV, num_ops, 0);
     printf("  Time: %.3f seconds\n", time_no_tx);
     if (time_no_tx > 0) {
@@ -53,7 +53,7 @@ int main(void) {
 
     /* Test with single transaction */
     printf("\nWith transaction (batch commit):\n");
-    kvstore_open("bench_batch.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("bench_batch.db", &pKV, KVSTORE_JOURNAL_WAL);
     time_with_tx = benchmark_inserts(pKV, num_ops, 1);
     printf("  Time: %.3f seconds\n", time_with_tx);
     if (time_with_tx > 0) {

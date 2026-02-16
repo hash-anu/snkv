@@ -16,7 +16,7 @@ static void example_basic_scan(void) {
 
     printf("=== Basic Iteration ===\n");
 
-    kvstore_open("inventory.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("inventory.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     kvstore_put(pKV, "apple", 5, "50", 2);
     kvstore_put(pKV, "banana", 6, "30", 2);
@@ -53,7 +53,7 @@ static void example_filtered_iteration(void) {
 
     printf("=== Filtered Iteration ===\n");
 
-    kvstore_open("roles.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("roles.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     kvstore_put(pKV, "user:alice", 10, "Regular User", 12);
     kvstore_put(pKV, "user:bob", 8, "Regular User", 12);
@@ -125,7 +125,7 @@ static void example_statistics(void) {
 
     printf("=== Store Statistics ===\n");
 
-    kvstore_open("data.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("data.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     kvstore_put(pKV, "a", 1, "short", 5);
     kvstore_put(pKV, "longer_key", 10, "medium value", 12);
@@ -163,7 +163,7 @@ static void example_prefix_iteration(void) {
 
     printf("=== Prefix Iteration ===\n");
 
-    kvstore_open("prefix.db", &pKV, 0, KVSTORE_JOURNAL_WAL);
+    kvstore_open("prefix.db", &pKV, KVSTORE_JOURNAL_WAL);
 
     /* Populate store */
     kvstore_put(pKV, "user:alice", 10, "online", 6);
