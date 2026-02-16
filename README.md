@@ -104,6 +104,7 @@ int main(void) {
 
 * **ACID Transactions** — commit / rollback safety
 * **WAL Mode** — concurrent readers + writer
+* **SSD-Friendly Writes** — WAL appends data sequentially, reducing random writes
 * **Column Families** — logical namespaces
 * **Iterators** — ordered traversal
 * **Thread Safe** — built-in synchronization
