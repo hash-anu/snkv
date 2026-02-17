@@ -54,8 +54,8 @@ jobs:
       run: make clean
 
   # ==================================================================
-  # Valgrind memory leak check + stress test memory profiling
-  # Runs only on Linux (valgrind is Linux-only in CI)
+  # Valgrind + memory profiling + test counting + badge publishing
+  # Runs only on Linux. Publishes badge JSON to 'badges' branch.
   # ==================================================================
   valgrind:
     runs-on: ubuntu-latest
@@ -87,7 +87,6 @@ jobs:
           TOTAL=$((TOTAL + 1))
           echo "=== Valgrind: $TNAME ==="
 
-          # Run under valgrind, capture exit code
           valgrind \
             --leak-check=full \
             --show-leak-kinds=all \
@@ -96,7 +95,6 @@ jobs:
             --log-file="valgrind-${TNAME}.log" \
             ./"$t" 2>&1 || true
 
-          # Check valgrind log for leaks
           if grep -q "ERROR SUMMARY: 0 errors" "valgrind-${TNAME}.log"; then
             echo "  PASS: No memory leaks"
             PASSED=$((PASSED + 1))
@@ -132,7 +130,6 @@ jobs:
       run: |
         echo "=== Stress test under Valgrind massif ==="
 
-        # Run stress test under massif for peak memory
         valgrind \
           --tool=massif \
           --pages-as-heap=no \
@@ -146,7 +143,6 @@ jobs:
         # Extract peak memory from massif output
         PEAK_BYTES=$(grep "mem_heap_B=" massif.out | sed 's/mem_heap_B=//' | sort -n | tail -1)
         if [ -z "$PEAK_BYTES" ] || [ "$PEAK_BYTES" = "0" ]; then
-          # Fallback: use valgrind memcheck total allocs
           valgrind --tool=memcheck --log-file=memcheck.log ./tests/test_stress 2>&1 || true
           rm -f *.db
           PEAK_BYTES=$(grep "total heap usage" memcheck.log | grep -oP '[\d,]+ bytes allocated' | tr -d ', bytesalloced' | head -1)
@@ -179,7 +175,6 @@ jobs:
           TNAME=$(basename "$t")
           TOTAL_SUITES=$((TOTAL_SUITES + 1))
 
-          # Capture test output to count passed/failed
           OUTPUT=$(./"$t" 2>&1) || true
           rm -f *.db
 
@@ -213,13 +208,6 @@ jobs:
 
         echo "{\"schemaVersion\":1,\"label\":\"tests\",\"message\":\"${TOTAL_PASSED} passed\",\"color\":\"${COLOR}\"}" > badge-data/tests.json
 
-    # ---- Upload badge data as artifact ----
-    - name: Upload badge data
-      uses: actions/upload-artifact@v4
-      with:
-        name: badge-data
-        path: badge-data/
-
     # ---- Upload valgrind logs on failure ----
     - name: Upload valgrind logs
       if: failure()
@@ -228,42 +216,31 @@ jobs:
         name: valgrind-logs
         path: valgrind-*.log
 
-  # ==================================================================
-  # Publish badges to a gist (for shields.io endpoint badges)
-  # Only runs on push to master (not on PRs)
-  # ==================================================================
-  badges:
-    runs-on: ubuntu-latest
-    needs: valgrind
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    permissions:
-      contents: write
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Download badge data
-      uses: actions/download-artifact@v4
-      with:
-        name: badge-data
-        path: badge-data/
-
-    - name: Publish badges to gist
-      env:
-        GIST_SECRET: ${{ secrets.GIST_SECRET }}
-        BADGE_GIST_ID: ${{ vars.BADGE_GIST_ID }}
+    # ---- Publish badge JSON files to 'badges' branch ----
+    - name: Publish badges to badges branch
+      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
       run: |
-        for f in badge-data/*.json; do
-          FNAME=$(basename "$f")
-          # Escape JSON content for the gist API payload
-          CONTENT=$(python3 -c "import sys,json; print(json.dumps(open(sys.argv[1]).read()))" "$f")
+        # Configure git
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          echo "Uploading badge: $FNAME"
-          curl -s -X PATCH \
-            -H "Authorization: token ${GIST_SECRET}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/gists/${BADGE_GIST_ID}" \
-            -d "{\"files\":{\"${FNAME}\":{\"content\":${CONTENT}}}}" \
-            > /dev/null
-        done
-        echo "Badges published!"
+        # Save badge data
+        cp -r badge-data /tmp/badge-data
+
+        # Create or switch to orphan 'badges' branch
+        git fetch origin badges 2>/dev/null || true
+        if git rev-parse --verify origin/badges >/dev/null 2>&1; then
+          git checkout badges
+        else
+          git checkout --orphan badges
+          git rm -rf . 2>/dev/null || true
+        fi
+
+        # Copy badge JSON files
+        cp /tmp/badge-data/*.json .
+
+        # Commit and push
+        git add valgrind.json tests.json memory.json
+        git diff --cached --quiet && echo "No badge changes" && exit 0
+        git commit -m "Update badges [skip ci]"
+        git push origin badges
