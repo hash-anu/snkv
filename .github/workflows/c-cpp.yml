@@ -128,39 +128,92 @@ jobs:
     # ---- Stress test with memory profiling ----
     - name: Stress test memory profiling
       run: |
-        echo "=== Stress test under Valgrind massif ==="
+        echo "=== Stress test memory profiling ==="
 
-        valgrind \
-          --tool=massif \
-          --pages-as-heap=no \
-          --max-snapshots=100 \
-          --detailed-freq=10 \
-          --massif-out-file=massif.out \
-          ./tests/test_stress 2>&1 || true
+        # Run stress test under valgrind memcheck with --log-file
+        # This gives us "total heap usage: X allocs, Y frees, Z bytes allocated"
+        # which is the total bytes allocated over the lifetime of the process.
+        # We also get peak RSS via /proc/self or /usr/bin/time.
 
+        # Step 1: Get peak RSS via /usr/bin/time -v
+        # Redirect test stdout to /dev/null, time writes stats to fd 2
+        # but test also writes to fd 2, so separate them:
+        {
+          /usr/bin/time -v ./tests/test_stress > /dev/null 2>&1
+        } 2> time_output.txt || true
+
+        # That won't work because the inner 2>&1 eats time's output.
+        # Correct approach: let time write to a specific fd
+        rm -f time_output.txt
+        /usr/bin/time -v -o time_output.txt ./tests/test_stress || true
         rm -f *.db
 
-        # Extract peak memory from massif output
-        PEAK_BYTES=$(grep "mem_heap_B=" massif.out | sed 's/mem_heap_B=//' | sort -n | tail -1)
-        if [ -z "$PEAK_BYTES" ] || [ "$PEAK_BYTES" = "0" ]; then
-          valgrind --tool=memcheck --log-file=memcheck.log ./tests/test_stress 2>&1 || true
+        echo "--- /usr/bin/time -o output ---"
+        cat time_output.txt 2>/dev/null || echo "(no output)"
+        echo "-------------------------------"
+
+        PEAK_KB=$(grep -i "maximum resident set size" time_output.txt 2>/dev/null | awk '{print $NF}')
+        echo "Peak RSS from /usr/bin/time: [${PEAK_KB}] KB"
+
+        # Step 2: Fallback — valgrind memcheck total heap
+        if [ -z "$PEAK_KB" ] || [ "$PEAK_KB" = "0" ]; then
+          echo "Falling back to valgrind memcheck..."
+          valgrind \
+            --tool=memcheck \
+            --log-file=memcheck.log \
+            ./tests/test_stress > /dev/null 2>&1 || true
           rm -f *.db
-          PEAK_BYTES=$(grep "total heap usage" memcheck.log | grep -oP '[\d,]+ bytes allocated' | tr -d ', bytesalloced' | head -1)
-          [ -z "$PEAK_BYTES" ] && PEAK_BYTES=0
+
+          echo "--- valgrind memcheck log ---"
+          cat memcheck.log 2>/dev/null | tail -5
+          echo "-----------------------------"
+
+          # Extract: "total heap usage: 1,234 allocs, 1,234 frees, 5,678,901 bytes allocated"
+          HEAP_LINE=$(grep "total heap usage" memcheck.log 2>/dev/null || true)
+          echo "Heap line: [${HEAP_LINE}]"
+
+          if [ -n "$HEAP_LINE" ]; then
+            # Get the "bytes allocated" number, remove commas
+            ALLOC_BYTES=$(echo "$HEAP_LINE" | sed 's/.*frees, *//; s/ bytes allocated.*//' | tr -d ',')
+            echo "Parsed alloc bytes: [${ALLOC_BYTES}]"
+            if [ -n "$ALLOC_BYTES" ] && [ "$ALLOC_BYTES" -gt 0 ] 2>/dev/null; then
+              PEAK_KB=$((ALLOC_BYTES / 1024))
+            fi
+          fi
         fi
 
-        # Convert to human-readable
-        if [ "$PEAK_BYTES" -ge 1073741824 ] 2>/dev/null; then
-          PEAK_HR="$(echo "scale=1; $PEAK_BYTES / 1073741824" | bc) GB"
-        elif [ "$PEAK_BYTES" -ge 1048576 ] 2>/dev/null; then
-          PEAK_HR="$(echo "scale=1; $PEAK_BYTES / 1048576" | bc) MB"
-        elif [ "$PEAK_BYTES" -ge 1024 ] 2>/dev/null; then
-          PEAK_HR="$(echo "scale=1; $PEAK_BYTES / 1024" | bc) KB"
+        # Step 3: Last fallback — /proc peak RSS (if available)
+        if [ -z "$PEAK_KB" ] || [ "$PEAK_KB" = "0" ]; then
+          echo "Falling back to /proc/self/status..."
+          # Run test and capture VmPeak from /proc
+          ./tests/test_stress &
+          TEST_PID=$!
+          sleep 1
+          if [ -f "/proc/${TEST_PID}/status" ]; then
+            VM_PEAK=$(grep VmPeak "/proc/${TEST_PID}/status" 2>/dev/null | awk '{print $2}')
+            [ -n "$VM_PEAK" ] && PEAK_KB="$VM_PEAK"
+          fi
+          wait $TEST_PID 2>/dev/null || true
+          rm -f *.db
+        fi
+
+        [ -z "$PEAK_KB" ] && PEAK_KB=0
+        echo "Final PEAK_KB: ${PEAK_KB}"
+
+        # Convert KB to human-readable
+        if [ "$PEAK_KB" -ge 1048576 ] 2>/dev/null; then
+          PEAK_HR="$(awk "BEGIN {printf \"%.1f\", $PEAK_KB / 1048576}") GB"
+        elif [ "$PEAK_KB" -ge 1024 ] 2>/dev/null; then
+          PEAK_HR="$(awk "BEGIN {printf \"%.1f\", $PEAK_KB / 1024}") MB"
         else
-          PEAK_HR="${PEAK_BYTES} B"
+          PEAK_HR="${PEAK_KB} KB"
         fi
 
-        echo "Peak heap memory: ${PEAK_HR} (${PEAK_BYTES} bytes)"
+        echo ""
+        echo "=============================="
+        echo "Peak memory: ${PEAK_HR}"
+        echo "=============================="
+
         echo "{\"schemaVersion\":1,\"label\":\"peak memory (stress)\",\"message\":\"${PEAK_HR}\",\"color\":\"blue\"}" > badge-data/memory.json
 
     # ---- Count total tests passed ----
