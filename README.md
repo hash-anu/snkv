@@ -1,4 +1,4 @@
-# SNKV — Embedded Key–Value Engine Built on Proven B-Tree Technology
+# SNKV — a simple, crash-safe embedded key-value store
 
 ## Overview
 
