@@ -52,3 +52,218 @@ jobs:
       if: always()
       shell: bash
       run: make clean
+
+  # ==================================================================
+  # Valgrind memory leak check + stress test memory profiling
+  # Runs only on Linux (valgrind is Linux-only in CI)
+  # ==================================================================
+  valgrind:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential valgrind jq bc
+
+    - name: Build (debug mode)
+      run: make BUILD=debug
+
+    # ---- Run all tests under Valgrind ----
+    - name: Valgrind memory leak check
+      run: |
+        mkdir -p badge-data
+        TOTAL=0
+        PASSED=0
+        LEAKED=0
+        LEAK_DETAILS=""
+
+        for t in tests/test_*; do
+          [ -x "$t" ] || continue
+          TNAME=$(basename "$t")
+          TOTAL=$((TOTAL + 1))
+          echo "=== Valgrind: $TNAME ==="
+
+          # Run under valgrind, capture exit code
+          valgrind \
+            --leak-check=full \
+            --show-leak-kinds=all \
+            --errors-for-leak-kinds=definite,indirect \
+            --error-exitcode=99 \
+            --log-file="valgrind-${TNAME}.log" \
+            ./"$t" 2>&1 || true
+
+          # Check valgrind log for leaks
+          if grep -q "ERROR SUMMARY: 0 errors" "valgrind-${TNAME}.log"; then
+            echo "  PASS: No memory leaks"
+            PASSED=$((PASSED + 1))
+          else
+            echo "  FAIL: Memory leaks detected"
+            LEAKED=$((LEAKED + 1))
+            LEAK_DETAILS="${LEAK_DETAILS}\n--- ${TNAME} ---\n$(grep -A5 'LEAK SUMMARY' "valgrind-${TNAME}.log")"
+          fi
+          rm -f *.db
+        done
+
+        echo ""
+        echo "=============================="
+        echo "Valgrind Summary: ${PASSED}/${TOTAL} clean (${LEAKED} with leaks)"
+        echo "=============================="
+
+        if [ -n "$LEAK_DETAILS" ]; then
+          echo -e "\nLeak details:${LEAK_DETAILS}"
+        fi
+
+        # Write badge data
+        if [ "$LEAKED" -eq 0 ]; then
+          echo '{"schemaVersion":1,"label":"memory leaks","message":"0 leaks","color":"brightgreen"}' > badge-data/valgrind.json
+        else
+          echo "{\"schemaVersion\":1,\"label\":\"memory leaks\",\"message\":\"${LEAKED} leaks\",\"color\":\"red\"}" > badge-data/valgrind.json
+        fi
+
+        # Fail the job if any test leaked
+        [ "$LEAKED" -eq 0 ]
+
+    # ---- Stress test with memory profiling ----
+    - name: Stress test memory profiling
+      run: |
+        echo "=== Stress test under Valgrind massif ==="
+
+        # Run stress test under massif for peak memory
+        valgrind \
+          --tool=massif \
+          --pages-as-heap=no \
+          --max-snapshots=100 \
+          --detailed-freq=10 \
+          --massif-out-file=massif.out \
+          ./tests/test_stress 2>&1 || true
+
+        rm -f *.db
+
+        # Extract peak memory from massif output
+        PEAK_BYTES=$(grep "mem_heap_B=" massif.out | sed 's/mem_heap_B=//' | sort -n | tail -1)
+        if [ -z "$PEAK_BYTES" ] || [ "$PEAK_BYTES" = "0" ]; then
+          # Fallback: use valgrind memcheck total allocs
+          valgrind --tool=memcheck --log-file=memcheck.log ./tests/test_stress 2>&1 || true
+          rm -f *.db
+          PEAK_BYTES=$(grep "total heap usage" memcheck.log | grep -oP '[\d,]+ bytes allocated' | tr -d ', bytesalloced' | head -1)
+          [ -z "$PEAK_BYTES" ] && PEAK_BYTES=0
+        fi
+
+        # Convert to human-readable
+        if [ "$PEAK_BYTES" -ge 1073741824 ] 2>/dev/null; then
+          PEAK_HR="$(echo "scale=1; $PEAK_BYTES / 1073741824" | bc) GB"
+        elif [ "$PEAK_BYTES" -ge 1048576 ] 2>/dev/null; then
+          PEAK_HR="$(echo "scale=1; $PEAK_BYTES / 1048576" | bc) MB"
+        elif [ "$PEAK_BYTES" -ge 1024 ] 2>/dev/null; then
+          PEAK_HR="$(echo "scale=1; $PEAK_BYTES / 1024" | bc) KB"
+        else
+          PEAK_HR="${PEAK_BYTES} B"
+        fi
+
+        echo "Peak heap memory: ${PEAK_HR} (${PEAK_BYTES} bytes)"
+        echo "{\"schemaVersion\":1,\"label\":\"peak memory (stress)\",\"message\":\"${PEAK_HR}\",\"color\":\"blue\"}" > badge-data/memory.json
+
+    # ---- Count total tests passed ----
+    - name: Count tests passed
+      run: |
+        TOTAL_PASSED=0
+        TOTAL_FAILED=0
+        TOTAL_SUITES=0
+
+        for t in tests/test_*; do
+          [ -x "$t" ] || continue
+          TNAME=$(basename "$t")
+          TOTAL_SUITES=$((TOTAL_SUITES + 1))
+
+          # Capture test output to count passed/failed
+          OUTPUT=$(./"$t" 2>&1) || true
+          rm -f *.db
+
+          # Count lines with "PASS" or "OK" patterns
+          P=$(echo "$OUTPUT" | grep -ciE '(passed|pass |✓|ok )' || echo 0)
+          F=$(echo "$OUTPUT" | grep -ciE '(failed|fail |✗|error)' || echo 0)
+
+          # If no individual counts, count suite as 1 pass if exit code 0
+          if [ "$P" -eq 0 ] && [ "$F" -eq 0 ]; then
+            if ./"$t" > /dev/null 2>&1; then
+              P=1
+            else
+              F=1
+            fi
+            rm -f *.db
+          fi
+
+          TOTAL_PASSED=$((TOTAL_PASSED + P))
+          TOTAL_FAILED=$((TOTAL_FAILED + F))
+        done
+
+        echo "=============================="
+        echo "Tests: ${TOTAL_PASSED} passed, ${TOTAL_FAILED} failed (${TOTAL_SUITES} suites)"
+        echo "=============================="
+
+        if [ "$TOTAL_FAILED" -eq 0 ]; then
+          COLOR="brightgreen"
+        else
+          COLOR="red"
+        fi
+
+        echo "{\"schemaVersion\":1,\"label\":\"tests\",\"message\":\"${TOTAL_PASSED} passed\",\"color\":\"${COLOR}\"}" > badge-data/tests.json
+
+    # ---- Upload badge data as artifact ----
+    - name: Upload badge data
+      uses: actions/upload-artifact@v4
+      with:
+        name: badge-data
+        path: badge-data/
+
+    # ---- Upload valgrind logs on failure ----
+    - name: Upload valgrind logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: valgrind-logs
+        path: valgrind-*.log
+
+  # ==================================================================
+  # Publish badges to a gist (for shields.io endpoint badges)
+  # Only runs on push to master (not on PRs)
+  # ==================================================================
+  badges:
+    runs-on: ubuntu-latest
+    needs: valgrind
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download badge data
+      uses: actions/download-artifact@v4
+      with:
+        name: badge-data
+        path: badge-data/
+
+    - name: Publish badges to gist
+      env:
+        GIST_SECRET: ${{ secrets.GIST_SECRET }}
+        BADGE_GIST_ID: ${{ vars.BADGE_GIST_ID }}
+      run: |
+        for f in badge-data/*.json; do
+          FNAME=$(basename "$f")
+          # Escape JSON content for the gist API payload
+          CONTENT=$(python3 -c "import sys,json; print(json.dumps(open(sys.argv[1]).read()))" "$f")
+
+          echo "Uploading badge: $FNAME"
+          curl -s -X PATCH \
+            -H "Authorization: token ${GIST_SECRET}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/gists/${BADGE_GIST_ID}" \
+            -d "{\"files\":{\"${FNAME}\":{\"content\":${CONTENT}}}}" \
+            > /dev/null
+        done
+        echo "Badges published!"
