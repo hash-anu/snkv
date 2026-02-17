@@ -135,16 +135,7 @@ jobs:
         # which is the total bytes allocated over the lifetime of the process.
         # We also get peak RSS via /proc/self or /usr/bin/time.
 
-        # Step 1: Get peak RSS via /usr/bin/time -v
-        # Redirect test stdout to /dev/null, time writes stats to fd 2
-        # but test also writes to fd 2, so separate them:
-        {
-          /usr/bin/time -v ./tests/test_stress > /dev/null 2>&1
-        } 2> time_output.txt || true
-
-        # That won't work because the inner 2>&1 eats time's output.
-        # Correct approach: let time write to a specific fd
-        rm -f time_output.txt
+        # Step 1: Get peak RSS via /usr/bin/time -v -o (writes to file directly)
         /usr/bin/time -v -o time_output.txt ./tests/test_stress || true
         rm -f *.db
 
@@ -228,27 +219,68 @@ jobs:
           TNAME=$(basename "$t")
           TOTAL_SUITES=$((TOTAL_SUITES + 1))
 
-          OUTPUT=$(./"$t" 2>&1) || true
+          # Run test and strip ANSI color codes from output
+          OUTPUT=$(./"$t" 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
+          EXIT_CODE=$?
           rm -f *.db
 
-          # Count lines with "PASS" or "OK" patterns
-          P=$(echo "$OUTPUT" | grep -ciE '(passed|pass |✓|ok )' || echo 0)
-          F=$(echo "$OUTPUT" | grep -ciE '(failed|fail |✗|error)' || echo 0)
+          echo "=== $TNAME ==="
 
-          # If no individual counts, count suite as 1 pass if exit code 0
-          if [ "$P" -eq 0 ] && [ "$F" -eq 0 ]; then
-            if ./"$t" > /dev/null 2>&1; then
+          # Parse the passed count from summary lines.
+          # Formats seen in our test suites:
+          #   "Passed: 12"             (test_prod, test_stress, test_wal, etc.)
+          #   "Passed:       13"       (test_mutex_journal)
+          #   "Results: 5/5 passed"    (test_autovacuum)
+          #   "Results: 4 passed"      (test_concurrent)
+          #   "52 passed"              (test_crash_recovery)
+          P=0
+          F=0
+
+          # Try "Passed: N" format first
+          PASSED_LINE=$(echo "$OUTPUT" | grep -iE '^[[:space:]]*Passed:' | tail -1)
+          if [ -n "$PASSED_LINE" ]; then
+            P=$(echo "$PASSED_LINE" | grep -oE '[0-9]+' | head -1)
+          fi
+
+          # Try "N/N passed" format
+          if [ "$P" = "0" ] || [ -z "$P" ]; then
+            RESULTS_LINE=$(echo "$OUTPUT" | grep -iE '[0-9]+(/[0-9]+)? passed' | tail -1)
+            if [ -n "$RESULTS_LINE" ]; then
+              P=$(echo "$RESULTS_LINE" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
+            fi
+          fi
+
+          # Try "Failed: N" or "N failed" format
+          # Extract only the number directly before "failed" or after "Failed:"
+          FAILED_LINE=$(echo "$OUTPUT" | grep -iE '(^[[:space:]]*Failed:|[0-9]+ failed)' | tail -1)
+          if [ -n "$FAILED_LINE" ]; then
+            # Try "N failed" first
+            F_MATCH=$(echo "$FAILED_LINE" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' || true)
+            if [ -z "$F_MATCH" ]; then
+              # Try "Failed: N"
+              F_MATCH=$(echo "$FAILED_LINE" | sed -n 's/.*[Ff]ailed:[[:space:]]*//p' | grep -oE '[0-9]+' | head -1 || true)
+            fi
+            [ -n "$F_MATCH" ] && F="$F_MATCH"
+          fi
+
+          # Fallback: if no summary line found, count by exit code
+          if [ "$P" = "0" ] || [ -z "$P" ]; then
+            if [ "$EXIT_CODE" = "0" ]; then
               P=1
             else
               F=1
             fi
-            rm -f *.db
           fi
 
+          [ -z "$P" ] && P=0
+          [ -z "$F" ] && F=0
+
+          echo "  passed=$P failed=$F"
           TOTAL_PASSED=$((TOTAL_PASSED + P))
           TOTAL_FAILED=$((TOTAL_FAILED + F))
         done
 
+        echo ""
         echo "=============================="
         echo "Tests: ${TOTAL_PASSED} passed, ${TOTAL_FAILED} failed (${TOTAL_SUITES} suites)"
         echo "=============================="
