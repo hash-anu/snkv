@@ -8,65 +8,42 @@
 [![GitHub Closed Issues](https://img.shields.io/github/issues-closed/hash-anu/snkv?label=closed%20issues&color=green)](https://github.com/hash-anu/snkv/issues?q=is%3Aissue+is%3Aclosed)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/hash-anu/snkv/blob/master/LICENSE)
 
-## Overview
+---
 
-**SNKV** is a lightweight, high-performance **ACID-compliant key–value database** designed for systems that need **speed, simplicity, and reliability**.
+## What is SNKV?
 
-It is built directly on top of SQLite’s battle-tested **B-Tree storage engine**, while exposing a **native key–value API** — without SQL.
+**SNKV** is a lightweight, **ACID-compliant embedded key-value store** built directly on SQLite's B-Tree storage engine — without SQL.
 
-> ⚡ Think: *SQLite-grade reliability with a KV-first design*
+It was born from a simple observation: RocksDB consumed ~121 MB RSS for a 1M record workload, even when tuned for small deployments. That felt like too much overhead for embedded or resource-constrained use cases.
 
-By removing unnecessary layers and focusing purely on key–value operations, SNKV delivers **significantly higher throughput and lower latency** for real-world workloads.
+The idea: bypass the SQL layer entirely and talk directly to SQLite's storage engine. No SQL parser. No query planner. No virtual machine. Just a clean KV API on top of a proven, battle-tested storage core.
+
+> *SQLite-grade reliability. KV-first design. 11x less memory than RocksDB on small workloads.*
 
 ---
 
-## Why SNKV?
+## Quick Start
 
-General-purpose databases optimize for flexibility.
-SNKV optimizes for **focus**.
+Single-header integration — drop it in and go:
 
-When your workload is key–value:
+```c
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
 
-* No SQL parsing needed
-* No query planning needed
-* No virtual machine execution
+int main(void) {
+    KVStore *db;
+    kvstore_open("mydb.db", &db, KVSTORE_JOURNAL_WAL);
 
-SNKV removes that overhead — while keeping the **proven storage core intact**.
+    kvstore_put(db, "key", 3, "value", 5);
 
-### What You Get
+    void *val; int len;
+    kvstore_get(db, "key", 3, &val, &len);
+    printf("%.*s\n", len, (char*)val);
+    snkv_free(val);
 
-* ⚡ **Up to ~3–5× faster operations**
-* 🚀 **~4× higher throughput in mixed workloads**
-* 💾 **Lower memory footprint**
-* 🔒 **Full ACID guarantees**
-* 📦 **Single-header drop-in integration**
-
----
-
-## What Makes SNKV Different?
-
-SNKV is **not a wrapper**.
-
-It is a **purpose-built KV engine** that directly integrates with SQLite’s internal storage layer.
-
-| Layer         | SQLite | SNKV |
-| ------------- | ------ | ---- |
-| SQL Parser    | ✅      | ❌    |
-| Query Planner | ✅      | ❌    |
-| VDBE (VM)     | ✅      | ❌    |
-| B-Tree Engine | ✅      | ✅    |
-| Pager / WAL   | ✅      | ✅    |
-
-> SNKV keeps the **engine**, removes the **overhead**, and exposes a **clean KV interface**.
-
----
-
-## Design Principles
-
-* **Minimalism wins** — fewer layers, less overhead
-* **Proven foundations** — reuse battle-tested storage
-* **Predictable performance** — no hidden query costs
-* **Developer-first** — simple, embeddable API
+    kvstore_close(db);
+}
+```
 
 ---
 
@@ -83,160 +60,135 @@ make clean
 
 ---
 
-## Quick Start (Single Header)
+## How It Works
 
-```c
-#define SNKV_IMPLEMENTATION
-#include "snkv.h"
-
-int main(void) {
-    KVStore *db;
-
-    kvstore_open("mydb.db", &db, KVSTORE_JOURNAL_WAL);
-
-    kvstore_put(db, "key", 3, "value", 5);
-
-    void *val; int len;
-    kvstore_get(db, "key", 3, &val, &len);
-
-    printf("%.*s\n", len, (char*)val);
-    snkv_free(val);
-
-    kvstore_close(db);
-}
-```
-
----
-
-## Features
-
-* **ACID Transactions** — commit / rollback safety
-* **WAL Mode** — concurrent readers + writer
-* **SSD-Friendly Writes** — WAL appends data sequentially, reducing random writes
-* **Column Families** — logical namespaces
-* **Iterators** — ordered traversal
-* **Thread Safe** — built-in synchronization
-* **Zero Memory Leaks** — verified
-
----
-
-## Performance (Latest Benchmarks)
-
-Measured on **50,000 records**, averaged across multiple runs.
-
-### 🔥 SNKV Performance
-
-| Operation         | Throughput        |
-| ----------------- | ----------------- |
-| Sequential Writes | ~260K ops/sec     |
-| Random Reads      | ~340K ops/sec     |
-| Sequential Scan   | **~12M ops/sec**  |
-| Random Updates    | ~330K ops/sec     |
-| Random Deletes    | ~210K ops/sec     |
-| Exists Checks     | ~350K ops/sec     |
-| Mixed Workload    | **~500K ops/sec** |
-| Bulk Insert       | **~880K ops/sec** |
-
----
-
-### ⚔️ SNKV vs RocksDB
+Standard database path:
 
 ```
-READS / SCANS / MIXED
-SNKV      ████████████████████████████
-RocksDB   ███████████
-
-WRITES / BULK INSERT
-SNKV      ███████████
-RocksDB   ████████████████████████████
-
-UPDATES / DELETES
-SNKV      ███████
-RocksDB   █████████████████████
+Application → SQL Parser → Query Planner → VDBE (VM) → B-Tree → Disk
 ```
 
-**Interpretation:**
-- SNKV → Faster reads, scans, and mixed workloads
-- RocksDB → Faster writes and heavy ingestion
-- SNKV → More predictable latency (no compaction stalls)
-
----
-
-### ⚔️ SNKV vs LMDB
-
-    READS / SCANS
-    LMDB      ███████████████████████████████████████████
-    SNKV      ███████████
-
-    WRITES
-    LMDB      ███████████████████
-    SNKV      ███████████
-
-    MIXED WORKLOAD
-    LMDB      ███████████████████████
-    SNKV      ███████████
-
-    MEMORY USAGE
-    LMDB      ███████████████████████████████
-    SNKV      ████
-
-**Interpretation:** 
-- LMDB → Extremely fast reads & scans(memory-mapped)
-- LMDB → Higher memory usage (\~160MB+ observed)
-- SNKV → Lower memory footprint, simpler deployment
-- SNKV → No mmap tuning required
-
-
-### ⚖️ Comparison (Key–Value Workloads)
-
-| Benchmark       | SQLite | SNKV  | Improvement      |
-| --------------- | ------ | ----- | ---------------- |
-| Random Reads    | ~165K  | ~345K | **~2× faster**   |
-| Sequential Scan | ~2.2M  | ~12M  | **~5× faster**   |
-| Random Updates  | ~115K  | ~330K | **~3× faster**   |
-| Random Deletes  | ~60K   | ~210K | **~3.5× faster** |
-| Mixed Workload  | ~130K  | ~500K | **~4× faster**   |
-| Bulk Insert     | ~240K  | ~880K | **~3.5× faster** |
-
-> 📈 SNKV consistently delivers **significant gains in real-world KV scenarios**
-
----
-
-## Why It’s Fast
-
-SNKV interacts **directly with the storage engine**:
+SNKV path:
 
 ```
 Application → KV API → B-Tree → Disk
 ```
 
-No:
+By removing the layers you don't need for key-value workloads, SNKV keeps the proven storage core and cuts the overhead.
 
-* SQL parsing
-* Query compilation
-* Virtual machine execution
+| Layer         | SQLite | SNKV |
+| ------------- | ------ | ---- |
+| SQL Parser    | ✅      | ❌    |
+| Query Planner | ✅      | ❌    |
+| VDBE (VM)     | ✅      | ❌    |
+| B-Tree Engine | ✅      | ✅    |
+| Pager / WAL   | ✅      | ✅    |
+
+---
+
+## Benchmarks
+
+> All benchmarks: 1M records, sync-on-commit enabled for all engines, Linux. Peak memory from `/usr/bin/time -v` (Maximum RSS).
+
+### SNKV vs RocksDB
+
+RocksDB configured conservatively for small workloads: 2MB block cache, 2MB write buffer, compression disabled, sync-on-commit enabled.
+
+| Benchmark         | RocksDB     | SNKV        | Notes                         |
+| ----------------- | ----------- | ----------- | ----------------------------- |
+| Sequential writes | 237K ops/s  | 181K ops/s  | RocksDB faster (LSM-tree)     |
+| Random reads      | 95K ops/s   | 154K ops/s  | **SNKV 1.6x faster**          |
+| Sequential scan   | 1.78M ops/s | 5.95M ops/s | **SNKV 3.3x faster**          |
+| Random updates    | 177K ops/s  | 48K ops/s   | RocksDB faster (LSM-tree)     |
+| Random deletes    | 161K ops/s  | 41K ops/s   | RocksDB faster                |
+| Mixed workload    | 51K ops/s   | 97K ops/s   | **SNKV 1.9x faster**          |
+| Bulk insert       | 675K ops/s  | 494K ops/s  | RocksDB faster                |
+| **Peak RSS**      | **121 MB**  | **10.8 MB** | **SNKV uses 11x less memory** |
+
+RocksDB's LSM-tree design gives it a clear edge on write-heavy workloads — that's by design and expected. The memory gap is structural: even at minimum configuration, RocksDB carries significantly more overhead. If your workload is read-heavy or memory-constrained, SNKV is worth considering.
+
+---
+
+### SNKV vs LMDB
+
+LMDB uses memory-mapped I/O, which makes it exceptionally fast — especially for reads and scans. These numbers reflect that honestly.
+
+| Benchmark         | LMDB        | SNKV        | Notes                          |
+| ----------------- | ----------- | ----------- | ------------------------------ |
+| Sequential writes | 245K ops/s  | 181K ops/s  | LMDB faster                    |
+| Random reads      | 779K ops/s  | 154K ops/s  | LMDB 5x faster (mmap)          |
+| Sequential scan   | 37.9M ops/s | 5.95M ops/s | LMDB 6x faster (mmap)          |
+| Random updates    | 119K ops/s  | 48K ops/s   | LMDB faster                    |
+| Random deletes    | 120K ops/s  | 41K ops/s   | LMDB faster                    |
+| Mixed workload    | 173K ops/s  | 97K ops/s   | LMDB 1.8x faster               |
+| Bulk insert       | 1.5M ops/s  | 494K ops/s  | LMDB faster                    |
+| **Peak RSS**      | **170 MB**  | **10.8 MB** | **SNKV uses 16x less memory**  |
+
+LMDB wins on raw throughput across the board — that's the nature of memory-mapped storage. The tradeoff: LMDB maps the entire database into virtual address space, so memory usage scales with database size and requires upfront `mmap` size configuration. SNKV avoids that entirely — fixed, low overhead regardless of database size, and no tuning required.
+
+---
+
+### SNKV vs SQLite (KV workloads)
+
+Since SNKV is built on SQLite's internals, this shows what the SQL layer actually costs for pure KV operations.
+
+| Benchmark       | SQLite      | SNKV        | Delta            |
+| --------------- | ----------- | ----------- | ---------------- |
+| Random reads    | ~165K ops/s | ~345K ops/s | **~2x faster**   |
+| Sequential scan | ~2.2M ops/s | ~12M ops/s  | **~5x faster**   |
+| Random updates  | ~115K ops/s | ~330K ops/s | **~3x faster**   |
+| Random deletes  | ~60K ops/s  | ~210K ops/s | **~3.5x faster** |
+| Mixed workload  | ~130K ops/s | ~500K ops/s | **~4x faster**   |
+| Bulk insert     | ~240K ops/s | ~880K ops/s | **~3.5x faster** |
 
 ---
 
 ## When to Use SNKV
 
-Ideal for:
+**SNKV is a good fit if:**
+- Your workload is read-heavy or mixed (reads + writes)
+- You're running in a memory-constrained or embedded environment
+- You want ACID guarantees without managing a full database engine
+- You need single-header C integration with no external dependencies
+- You want predictable latency — no compaction stalls, no mmap tuning
 
-* Embedded systems
-* High-performance services
-* Configuration storage
-* Metadata databases
-* Session stores
-* C/C++ applications
-* Systems that **don’t require SQL**
+**Consider alternatives if:**
+- You need maximum write/update throughput → **RocksDB**
+- You need maximum read/scan speed and memory isn't a constraint → **LMDB**
+- You already use SQL elsewhere and want to consolidate → **SQLite directly**
 
 ---
 
-## Philosophy
+## Features
 
-> **Use the right abstraction for the job.**
+- **ACID Transactions** — commit / rollback safety
+- **WAL Mode** — concurrent readers + single writer
+- **Column Families** — logical namespaces within a single database
+- **Iterators** — ordered key traversal
+- **Thread Safe** — built-in synchronization
+- **Single-header** — drop `snkv.h` into any C/C++ project
+- **Zero memory leaks** — verified with Valgrind
+- **SSD-friendly** — WAL appends sequentially, reducing random writes
 
-➡️ Fast, reliable, embedded key–value storage
+---
+
+## Internals & Documentation
+
+I documented the SQLite internals explored while building this:
+
+- [B-Tree operations](https://github.com/hash-anu/snkv/blob/master/internal/BTREE_OPERATIONS.md)
+- [Pager operations](https://github.com/hash-anu/snkv/blob/master/internal/PAGER_OPERATIONS.md)
+- [OS layer operations](https://github.com/hash-anu/snkv/blob/master/internal/OS_LAYER_OPERATIONS.md)
+- [KV layer design](https://github.com/hash-anu/snkv/blob/master/internal/KVSTORE_OPERATIONS.md)
+
+---
+
+## Design Principles
+
+- **Minimalism wins** — fewer layers, less overhead
+- **Proven foundations** — reuse battle-tested storage, don't reinvent it
+- **Predictable performance** — no hidden query costs, no compaction stalls
+- **Honest tradeoffs** — SNKV is not the fastest at everything; it's optimized for its target use case
 
 ---
 
