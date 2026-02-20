@@ -88,7 +88,11 @@ By removing the layers you don't need for key-value workloads, SNKV keeps the pr
 
 ## Benchmarks
 
-> All benchmarks: 1M records, sync-on-commit enabled for all engines, Linux. Peak memory from `/usr/bin/time -v` (Maximum RSS).
+> All benchmarks: 1M records, sync-on-commit enabled for all engines, Linux. Numbers averaged across 3 runs. Peak memory from `/usr/bin/time -v` (Maximum RSS).
+>
+> Benchmark source code: [SNKV](https://github.com/hash-anu/snkv/blob/master/tests/test_benchmark.c) · [RocksDB](https://github.com/hash-anu/rocksdb-benchmark) · [LMDB](https://github.com/hash-anu/lmdb-benchmark) · [SQLite](https://github.com/hash-anu/sqllite-benchmark-kv)
+
+---
 
 ### SNKV vs RocksDB
 
@@ -130,25 +134,32 @@ LMDB wins on raw throughput across the board — that's the nature of memory-map
 
 ### SNKV vs SQLite (KV workloads)
 
-Since SNKV is built on SQLite's internals, this shows what the SQL layer actually costs for pure KV operations.
+SQLite benchmark uses `WITHOUT ROWID` and no redundant indexes — the fairest possible comparison, both using a single B-tree keyed on the same field. This isolates the cost of the SQL layer for pure KV operations.
 
-| Benchmark       | SQLite      | SNKV        | Delta            |
-| --------------- | ----------- | ----------- | ---------------- |
-| Random reads    | ~165K ops/s | ~345K ops/s | **~2x faster**   |
-| Sequential scan | ~2.2M ops/s | ~12M ops/s  | **~5x faster**   |
-| Random updates  | ~115K ops/s | ~330K ops/s | **~3x faster**   |
-| Random deletes  | ~60K ops/s  | ~210K ops/s | **~3.5x faster** |
-| Mixed workload  | ~130K ops/s | ~500K ops/s | **~4x faster**   |
-| Bulk insert     | ~240K ops/s | ~880K ops/s | **~3.5x faster** |
+> Note: Both SNKV and SQLite (`WITHOUT ROWID`) use identical peak RSS (~10.8 MB) since they share the same underlying pager and page cache infrastructure.
+
+| Benchmark         | SQLite       | SNKV         | Notes                        |
+| ----------------- | ------------ | ------------ | ---------------------------- |
+| Sequential writes | 123K ops/s   | 134K ops/s   | **SNKV 1.1x faster**         |
+| Random reads      | 82K ops/s    | 76K ops/s    | SQLite slightly faster       |
+| Sequential scan   | 1.63M ops/s  | 2.99M ops/s  | **SNKV 1.8x faster**         |
+| Random updates    | 15K ops/s    | 22K ops/s    | **SNKV 1.5x faster**         |
+| Random deletes    | 17K ops/s    | 19K ops/s    | SNKV slightly faster         |
+| Exists checks     | 85K ops/s    | 76K ops/s    | SQLite faster                |
+| Mixed workload    | 34K ops/s    | 43K ops/s    | **SNKV 1.3x faster**         |
+| Bulk insert       | 211K ops/s   | 217K ops/s   | SNKV slightly faster         |
+
+With `WITHOUT ROWID`, SQLite uses the same single B-tree storage pattern as SNKV. The remaining differences come from SQL layer overhead — parsing, planning, and VM execution on every operation. SNKV wins on scan, updates, and mixed workloads. SQLite wins on random reads and exists checks where its query optimizer shines.
 
 ---
 
 ## When to Use SNKV
 
 **SNKV is a good fit if:**
+- You're currently using RocksDB or LMDB and memory is a constraint
 - Your workload is read-heavy or mixed (reads + writes)
 - You're running in a memory-constrained or embedded environment
-- You want ACID guarantees without managing a full database engine
+- You want a clean KV API without writing SQL strings, preparing statements, and binding parameters
 - You need single-header C integration with no external dependencies
 - You want predictable latency — no compaction stalls, no mmap tuning
 
@@ -156,6 +167,7 @@ Since SNKV is built on SQLite's internals, this shows what the SQL layer actuall
 - You need maximum write/update throughput → **RocksDB**
 - You need maximum read/scan speed and memory isn't a constraint → **LMDB**
 - You already use SQL elsewhere and want to consolidate → **SQLite directly**
+- You have exists-check heavy workloads → **SQLite directly**
 
 ---
 
@@ -169,6 +181,19 @@ Since SNKV is built on SQLite's internals, this shows what the SQL layer actuall
 - **Single-header** — drop `snkv.h` into any C/C++ project
 - **Zero memory leaks** — verified with Valgrind
 - **SSD-friendly** — WAL appends sequentially, reducing random writes
+
+---
+
+## Backup & Tooling Compatibility
+
+Because SNKV uses SQLite's file format and pager layer, backup tools that operate at the WAL or page level work out of the box:
+
+- ✅ **LiteFS** — distributed SQLite replication works with SNKV databases
+- ✅ **SQLite Online Backup API** — operates at the page level, fully compatible
+- ✅ **WAL-based backup tools** — any tool consuming WAL files works correctly
+- ✅ **Rollback journal tools** — journal mode is fully supported
+
+**Note:** Tools that rely on SQLite's schema layer — like the `sqlite3` CLI or DB Browser for SQLite — won't work. SNKV bypasses the schema layer entirely by design.
 
 ---
 
