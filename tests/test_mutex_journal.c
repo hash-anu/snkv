@@ -95,37 +95,38 @@ static void cleanup_test_files(void) {
 }
 
 /*
-** Test 1: Basic mutex allocation and free
+** Test 1: Basic mutex allocation and free (using sqlite3_mutex)
 */
 static void test_mutex_allocation(void) {
-    kvstore_mutex *mutex = kvstore_mutex_alloc();
-    
+    sqlite3_mutex *mutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
+
     int passed = (mutex != NULL);
-    
+
     if (mutex) {
-        kvstore_mutex_free(mutex);
+        sqlite3_mutex_free(mutex);
     }
-    
+
     print_test_result("Mutex allocation and free", passed);
 }
 
 /*
-** Test 2: Mutex enter/leave basic functionality
+** Test 2: Mutex enter/leave basic functionality (using sqlite3_mutex)
 */
 static void test_mutex_enter_leave(void) {
-    kvstore_mutex *mutex = kvstore_mutex_alloc();
+    sqlite3_mutex *mutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
     int passed = 0;
-    
+
     if (mutex) {
-        kvstore_mutex_enter(mutex);
-        /* If we get here, enter succeeded */
-        kvstore_mutex_leave(mutex);
-        /* If we get here, leave succeeded */
+        sqlite3_mutex_enter(mutex);
+        /* Recursive: re-enter on same thread must not deadlock */
+        sqlite3_mutex_enter(mutex);
+        sqlite3_mutex_leave(mutex);
+        sqlite3_mutex_leave(mutex);
         passed = 1;
-        kvstore_mutex_free(mutex);
+        sqlite3_mutex_free(mutex);
     }
-    
-    print_test_result("Mutex enter/leave", passed);
+
+    print_test_result("Mutex enter/leave (recursive)", passed);
 }
 
 /*
@@ -752,7 +753,10 @@ int main(void) {
     
     /* Seed random number generator */
     srand(time(NULL));
-    
+
+    /* Initialize SQLite subsystems (required before sqlite3MutexAlloc) */
+    sqlite3_initialize();
+
     /* Mutex tests */
     print_section("Mutex Lock Tests");
     test_mutex_allocation();

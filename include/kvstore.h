@@ -14,7 +14,6 @@
 
 #include "sqliteInt.h"
 #include "btree.h"
-#include "kvstore_mutex.h"
 
 /*
 ** Compatibility macros: map old SQLite 3.3.0 memory function names
