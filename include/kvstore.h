@@ -77,6 +77,15 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_SYNC_FULL    2
 
 /*
+** Checkpoint modes for kvstore_checkpoint().
+** These map directly to SQLITE_CHECKPOINT_* values.
+*/
+#define KVSTORE_CHECKPOINT_PASSIVE   0  /* Copy frames w/o blocking; may not flush all */
+#define KVSTORE_CHECKPOINT_FULL      1  /* Wait for writers, then copy all frames       */
+#define KVSTORE_CHECKPOINT_RESTART   2  /* Like FULL, then reset WAL write position     */
+#define KVSTORE_CHECKPOINT_TRUNCATE  3  /* Like RESTART, then truncate the WAL file     */
+
+/*
 ** Configuration structure for kvstore_open_v2.
 **
 ** Zero-initialize and set only the fields you need; unset fields use the
@@ -131,6 +140,14 @@ struct KVStoreConfig {
   ** Useful for multi-process access patterns.
   */
   int busyTimeout;
+
+  /*
+  ** walSizeLimit — WAL auto-checkpoint threshold in committed write transactions.
+  **   0 (default) — no auto-checkpoint.
+  **   N > 0       — after every N committed write transactions a PASSIVE checkpoint
+  **                 is attempted automatically. Only effective in WAL journal mode.
+  */
+  int walSizeLimit;
 };
 
 /*
@@ -723,6 +740,32 @@ int kvstore_sync(KVStore *pKV);
 **   KVSTORE_OK on success, error code otherwise
 */
 int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
+
+/*
+** Run a WAL checkpoint on the database.
+**
+** Copies WAL frames back into the main database file. Any open write
+** transaction must be committed or rolled back before calling; calling
+** while a write transaction is active returns KVSTORE_BUSY.
+**
+** The persistent read transaction is temporarily released and restored
+** around the checkpoint call (required by the btree layer).
+**
+** Parameters:
+**   pKV    - KVStore handle
+**   mode   - KVSTORE_CHECKPOINT_PASSIVE / FULL / RESTART / TRUNCATE
+**   pnLog  - Output: WAL frames total after checkpoint (may be NULL)
+**   pnCkpt - Output: frames successfully written to DB (may be NULL)
+**
+** Returns:
+**   KVSTORE_OK    on success
+**   KVSTORE_BUSY  if a write transaction is currently open
+**   KVSTORE_ERROR on other failure
+**
+** Note: On non-WAL (DELETE journal) databases this is a no-op that
+**       returns KVSTORE_OK with *pnLog = *pnCkpt = 0.
+*/
+int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt);
 
 #ifdef __cplusplus
 }

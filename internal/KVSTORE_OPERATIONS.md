@@ -33,7 +33,7 @@ key-value interface with column families, iterators, and transactions.
  └────────────────────┬────────────────────┘
                       │ OsRead / OsWrite / OsSync / ...
  ┌────────────────────▼────────────────────┐
- │        os.c / os_unix.c  (VFS)          │
+ │        os.c / os_unix.c / os_windows.c (VFS) │
  └────────────────────┬────────────────────┘
                       │ read() / write() / fsync()
                    [ Disk ]
@@ -70,6 +70,7 @@ key-value interface with column families, iterators, and transactions.
 25. [kvstore_errmsg](#25-kvstore_errmsg)
 26. [Thread Safety Model & Mutex Migration](#26-thread-safety-model)
 27. [Persistent Read Transaction & Auto-Transaction Pattern](#27-persistent-read-transaction--auto-transaction-pattern)
+28. [kvstore_checkpoint + WAL Auto-Checkpoint](#28-kvstore_checkpoint--wal-auto-checkpoint)
 
 ---
 
@@ -90,6 +91,8 @@ key-value interface with column families, iterators, and transactions.
   │   pDefaultCF   → KVColumnFamily*   default column family │
   │   apCF[]       → KVColumnFamily**  open named CFs        │
   │   stats        → KVStoreStats      {nPuts nGets nDel ...}│
+  │   walSizeLimit → int               auto-ckpt every N commits (0=off)│
+  │   walCommits   → int               commits since last auto-ckpt     │
   │                                                          │
   │   db->busyHandler.xBusyHandler → kvstoreBusyHandler()   │
   │   db->busyHandler.pBusyArg     → KVBusyCtx* (or NULL)   │
@@ -224,6 +227,7 @@ wrapper that delegates to `kvstore_open_v2`.
           │     │ pageSize    == 0   → 4096 bytes (B-tree default)   │
           │     │ readOnly    == 0   → read-write                    │
           │     │ busyTimeout == 0   → no busy retry                 │
+          │     │ walSizeLimit== 0   → no WAL auto-checkpoint        │
           │     └────────────────────────────────────────────────────┘
           │
           ├── Step 3: Allocate structures
@@ -343,7 +347,16 @@ wrapper that delegates to `kvstore_open_v2`.
           │     │ Used by ALL BLOBKEY cursor comparisons  │
           │     └────────────────────────────────────────┘
           │
-          └── Step 13: Open persistent read transaction
+          ├── Step 13: Init WAL auto-checkpoint config
+          │     pKV->walSizeLimit = pConfig ? pConfig->walSizeLimit : 0
+          │     pKV->walCommits   = 0
+          │     ┌────────────────────────────────────────────────────┐
+          │     │ walSizeLimit == 0 → auto-checkpoint disabled       │
+          │     │ walSizeLimit == N → checkpoint every N commits     │
+          │     │   (only effective in WAL journal mode)             │
+          │     └────────────────────────────────────────────────────┘
+          │
+          └── Step 14: Open persistent read transaction
                 sqlite3BtreeBeginTrans(pBt, 0, 0)
                 pKV->inTrans = 1   ← held for lifetime of store
                 *ppKV = pKV
@@ -518,9 +531,21 @@ immediately restores the persistent read transaction.
           │           CommitPhaseTwo:
           │             release WAL write lock
           │
-          ├── pKV->inTrans = 0
+          ├── pKV->inTrans = 0        ← TRANS_NONE window begins
           │
-          ├── Restore persistent read transaction
+          ├── WAL auto-checkpoint (TRANS_NONE window)
+          │     kvstoreAutoCheckpoint(pKV)
+          │     ┌────────────────────────────────────────────────────┐
+          │     │ if walSizeLimit == 0 → skip (disabled)             │
+          │     │ walCommits++                                        │
+          │     │ if walCommits < walSizeLimit → skip                │
+          │     │ walCommits = 0                                      │
+          │     │ sqlite3BtreeCheckpoint(PASSIVE, NULL, NULL)        │
+          │     │   copies committed WAL frames into DB file         │
+          │     │   safe here: write lock already released by commit │
+          │     └────────────────────────────────────────────────────┘
+          │
+          ├── Restore persistent read transaction ← TRANS_NONE window ends
           │     if sqlite3BtreeBeginTrans(pBt, 0, 0) == SQLITE_OK:
           │       pKV->inTrans = 1
           │
@@ -1704,7 +1729,8 @@ persistent read afterward:
           │
           ├── [SUCCESS + autoTrans]:
           │     sqlite3BtreeCommit(pBt)
-          │     inTrans = 0
+          │     inTrans = 0                ← TRANS_NONE window
+          │     kvstoreAutoCheckpoint(pKV) ← optional PASSIVE ckpt in window
           │     Restore persistent read:
           │       sqlite3BtreeBeginTrans(pBt, 0, 0) → inTrans = 1
           │
@@ -1717,13 +1743,182 @@ persistent read afterward:
 
   Benefit: single operations need no explicit begin/commit:
     kvstore_put(kv, "k", 1, "v", 1)
-    // internally: commit_read → begin_write → insert → commit → begin_read
+    // internally: commit_read → begin_write → insert → commit
+    //             → [auto-ckpt if walSizeLimit hit] → begin_read
 
   Batched operations use explicit transaction (one commit for all):
     kvstore_begin(kv, 1)                // commit_read → begin_write
     kvstore_put(kv, "k1", 2, "v1", 2)  // no autoTrans
     kvstore_put(kv, "k2", 2, "v2", 2)  // no autoTrans
     kvstore_commit(kv)                  // commit → begin_read
+```
+
+---
+
+## 28. kvstore_checkpoint + WAL Auto-Checkpoint
+
+### Background: Why the WAL grows unboundedly by default
+
+SNKV opens the B-tree layer directly via `sqlite3BtreeOpen` and never calls
+`sqlite3Open`. SQLite's default 1000-frame auto-checkpoint hook is registered
+inside `sqlite3OpenTail` → `sqlite3_wal_hook`. Because `sqlite3Open` is never
+called, that hook is never installed. The WAL grows without bound until
+`kvstore_close()` triggers `sqlite3WalClose` on the last connection, which
+performs a final checkpoint.
+
+```
+  Default SQLite (via sqlite3Open):          SNKV (via sqlite3BtreeOpen):
+  ┌───────────────────────────────┐          ┌───────────────────────────────┐
+  │ sqlite3Open()                 │          │ sqlite3BtreeOpen()            │
+  │  └── sqlite3OpenTail()        │          │   (no OpenTail, no wal hook)  │
+  │        └── sqlite3_wal_hook() │          │                               │
+  │              registers auto-  │          │  WAL grows freely until       │
+  │              checkpoint at    │          │  kvstore_close() calls        │
+  │              1000 frames      │          │  sqlite3WalClose()            │
+  └───────────────────────────────┘          └───────────────────────────────┘
+```
+
+### kvstoreAutoCheckpoint() — static helper
+
+Called in the TRANS_NONE window after every committed write transaction.
+The write lock is already released by `sqlite3BtreeCommit` at this point,
+so `sqlite3BtreeCheckpoint` can acquire it safely.
+
+Why commit counter (not WAL frame count)?
+- `Btree` is an opaque typedef in `kvstore.c` (only `btree.h` is included,
+  not `btreeInt.h`). Accessing `pKV->pBt->pBt->pPager` would be a compile
+  error ("invalid use of incomplete typedef 'Btree'").
+- A commit counter is sufficient: `walCommits` cannot overflow because it
+  resets to 0 whenever a checkpoint fires (max value is `walSizeLimit - 1`).
+
+```
+  kvstoreAutoCheckpoint(pKV)
+          │
+          ├── if walSizeLimit == 0 → return immediately (disabled)
+          │
+          ├── walCommits++
+          │     ┌──────────────────────────────────────────────────┐
+          │     │  walCommits tracks committed write transactions   │
+          │     │  since the last auto-checkpoint.                  │
+          │     │  Range: 0 .. walSizeLimit-1  (never overflows)   │
+          │     └──────────────────────────────────────────────────┘
+          │
+          ├── if walCommits < walSizeLimit → return (threshold not reached)
+          │
+          ├── walCommits = 0         ← reset counter
+          │
+          └── sqlite3BtreeCheckpoint(pKV->pBt,
+                  SQLITE_CHECKPOINT_PASSIVE, NULL, NULL)
+                │
+                ├── Acquire WAL write lock (non-blocking)
+                ├── Copy committed WAL frames → DB file pages
+                ├── Advance the checkpoint watermark
+                └── Release WAL write lock
+
+  Timeline with walSizeLimit=3:
+
+  commit #1 → walCommits=1  (no checkpoint)
+  commit #2 → walCommits=2  (no checkpoint)
+  commit #3 → walCommits=3  ≥ limit → PASSIVE checkpoint → walCommits=0
+  commit #4 → walCommits=1  (no checkpoint)
+  ...
+```
+
+### kvstore_checkpoint() — public API
+
+Exposes manual checkpoint control. Callers can use any of the four SQLite
+checkpoint modes. An active write transaction causes an immediate `BUSY`
+return; the persistent read transaction is silently released and restored
+around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
+
+```
+  kvstore_checkpoint(pKV, mode, pnLog, pnCkpt)
+          │
+          ├── sqlite3_mutex_enter(pKV->pMutex)
+          │
+          ├── if closing → return KVSTORE_ERROR
+          │
+          ├── if inTrans == 2  (write transaction active)
+          │     kvstoreSetError("commit or rollback the write transaction first")
+          │     return KVSTORE_BUSY
+          │
+          ├── zero-init output params
+          │     if pnLog  → *pnLog  = 0
+          │     if pnCkpt → *pnCkpt = 0
+          │
+          ├── Release persistent read transaction (required for TRANS_NONE)
+          │     if inTrans == 1:
+          │       sqlite3BtreeCommit(pBt)
+          │       inTrans = 0
+          │
+          ├── Run checkpoint
+          │     ┌──────────────────────────────────────────────────────────────┐
+          │     │ #ifndef SQLITE_OMIT_WAL                                      │
+          │     │   sqlite3BtreeCheckpoint(pBt, mode, pnLog, pnCkpt)          │
+          │     │ #else                                                        │
+          │     │   rc = SQLITE_OK  (no-op on non-WAL build)                  │
+          │     │ #endif                                                       │
+          │     │                                                              │
+          │     │ mode meanings:                                               │
+          │     │   PASSIVE  (0) — copy frames w/o blocking readers/writers   │
+          │     │                  may not copy all if a reader is active      │
+          │     │   FULL     (1) — wait for all readers, then copy all frames  │
+          │     │   RESTART  (2) — like FULL + reset WAL write position        │
+          │     │                  WAL file not truncated                      │
+          │     │   TRUNCATE (3) — like RESTART + truncate WAL file to 0 bytes│
+          │     │                                                              │
+          │     │ Output semantics (WAL mode):                                │
+          │     │   pnLog  = mxFrame (total frames written to WAL ever)       │
+          │     │   pnCkpt = number of frames successfully copied to DB file  │
+          │     │   pnLog == pnCkpt → no frames stuck, WAL fully checkpointed │
+          │     │   pnLog == 0      → WAL was truncated (TRUNCATE mode only)  │
+          │     │                                                              │
+          │     │ Non-WAL database (DELETE journal mode):                     │
+          │     │   returns KVSTORE_OK, pnLog=0, pnCkpt=0  (no-op)           │
+          │     └──────────────────────────────────────────────────────────────┘
+          │
+          ├── Restore persistent read transaction
+          │     if sqlite3BtreeBeginTrans(pBt, 0, 0) == SQLITE_OK:
+          │       inTrans = 1
+          │
+          ├── if rc != SQLITE_OK:
+          │     kvstoreSetError("checkpoint failed: error %d", rc)
+          │
+          ├── sqlite3_mutex_leave(pKV->pMutex)
+          └── return rc  (KVSTORE_OK | KVSTORE_BUSY | KVSTORE_ERROR)
+
+  State diagram around checkpoint:
+
+    inTrans=1                     inTrans=0               inTrans=1
+  (persistent read)    BtreeCommit    │   BtreeCheckpoint    │   BtreeBeginTrans(0)
+       ─────────────────────────────►─┼──────────────────────┼─────────────────────►
+                                      │   TRANS_NONE window   │
+
+  Write transaction guard:
+
+    kvstore_begin(kv, 1)  →  inTrans=2
+    kvstore_checkpoint(kv, PASSIVE, NULL, NULL)
+        → returns KVSTORE_BUSY immediately (write txn not committed)
+    kvstore_rollback(kv)  →  inTrans=1
+    kvstore_checkpoint(kv, PASSIVE, NULL, NULL)
+        → succeeds: releases read, checkpoints, restores read
+```
+
+### Choosing between walSizeLimit and kvstore_checkpoint
+
+```
+  ┌──────────────────────┬──────────────────────────────────────────────────┐
+  │ Mechanism            │ Use when                                          │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ walSizeLimit=N       │ Set-and-forget. Every N committed writes trigger  │
+  │ (auto, PASSIVE)      │ a PASSIVE checkpoint automatically. No caller     │
+  │                      │ involvement needed. Suitable for most workloads.  │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ kvstore_checkpoint() │ Explicit control: run at shutdown, after a large  │
+  │ (any mode)           │ batch, or to shrink the WAL (TRUNCATE mode).      │
+  │                      │ Combine with walSizeLimit=0 for full manual       │
+  │                      │ control of when checkpoints occur.                │
+  └──────────────────────┴──────────────────────────────────────────────────┘
 ```
 
 ---
@@ -1736,7 +1931,7 @@ persistent read afterward:
 | `kvstore_open`               | delegates to `kvstore_open_v2` (sets `journalMode`; all other fields default) |
 | `kvstore_close`              | `BtreeRollback` (if txn active), `BtreeClose`                                          |
 | `kvstore_begin`              | `BtreeCommit` (if inTrans=1) + `BtreeBeginTrans(wrflag)`                               |
-| `kvstore_commit`             | `BtreeCommit` + `BtreeBeginTrans(0)` (restore persistent read)                         |
+| `kvstore_commit`             | `BtreeCommit` + `kvstoreAutoCheckpoint` (TRANS_NONE window) + `BtreeBeginTrans(0)`     |
 | `kvstore_rollback`           | `BtreeRollback` + `BtreeBeginTrans(0)` (restore persistent read)                       |
 | `kvstore_put`                | `BtreeCursor(write)`, `BtreeInsert`, `BtreeCloseCursor`                                |
 | `kvstore_get`                | `kvstoreGetReadCursor` (cached, no open/close), `BtreeIndexMoveto`, `BtreePayload` ×2  |
@@ -1754,6 +1949,8 @@ persistent read afterward:
 | `kvstore_incremental_vacuum` | `BtreeIncrVacuum` (loop)                                                               |
 | `kvstore_integrity_check`    | `BtreeIntegrityCheck`                                                                   |
 | `kvstore_sync`               | `BtreeCommit` + `BtreeBeginTrans(0)`                                                   |
+| `kvstore_checkpoint`         | `BtreeCommit` (release read) + `BtreeCheckpoint(mode)` + `BtreeBeginTrans(0)` (restore read) |
+| `kvstoreAutoCheckpoint`      | `BtreeCheckpoint(PASSIVE)` — called in TRANS_NONE window after each committed write    |
 
 ---
 
