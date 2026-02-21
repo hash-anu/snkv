@@ -24,3 +24,4 @@ examples/column_families
 examples/iterators
 examples/session_store
 examples/transactions
+examples/checkpoint_demo

@@ -93,7 +93,8 @@ $(LIB): $(LIB_OBJ)
 examples: snkv.h $(EXAMPLE_BIN)
 
 examples/%$(TARGET_EXT): examples/%.c snkv.h
-	$(CC) -g -Wall -I. -o $@ $< $(LDFLAGS)
+	cp snkv.h examples/snkv.h
+	$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
 
 run-examples: examples
 	@for e in $(EXAMPLE_BIN); do \
@@ -121,7 +122,7 @@ clean:
 	rm -f snkv.h
 	rm -f *.db *.db-wal *.db-shm
 	rm -f tests/*.db tests/*.db-wal tests/*.db-shm
-	rm -f examples/*.db examples/*.db-wal examples/*.db-shm
+	rm -f examples/*.db examples/*.db-wal examples/*.db-shm examples/snkv.h
 	rm -f tests/test_crash_10gb$(TARGET_EXT)
 	rm -f tests/crash_10gb.db tests/crash_10gb.db-wal tests/crash_10gb.db-shm
 
