@@ -109,6 +109,28 @@ typedef struct KVIterator KVIterator;
 #define KVSTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
 #define KVSTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode */
 
+/* Sync levels for KVStoreConfig.syncLevel */
+#define KVSTORE_SYNC_OFF     0  /* No fsync — fastest, risk on power loss */
+#define KVSTORE_SYNC_NORMAL  1  /* WAL-safe — default */
+#define KVSTORE_SYNC_FULL    2  /* fsync every commit — power-safe */
+
+/* ========== CONFIGURATION ========== */
+
+/*
+** Configuration structure passed to kvstore_open_v2().
+** Zero-initialise and set only the fields you need.
+** Unset fields (value == 0) resolve to the documented defaults.
+*/
+typedef struct KVStoreConfig KVStoreConfig;
+struct KVStoreConfig {
+  int journalMode;  /* KVSTORE_JOURNAL_WAL (default) or _DELETE        */
+  int syncLevel;    /* KVSTORE_SYNC_NORMAL (default), _OFF, or _FULL   */
+  int cacheSize;    /* Pages in page cache (0 = 2000 pages ≈ 8 MB)     */
+  int pageSize;     /* DB page size in bytes (0 = 4096, new DBs only)   */
+  int readOnly;     /* 1 = open read-only; default 0                    */
+  int busyTimeout;  /* ms to retry on SQLITE_BUSY (0 = fail immediately)*/
+};
+
 /* ========== STATISTICS ========== */
 
 typedef struct KVStoreStats KVStoreStats;
@@ -134,6 +156,7 @@ void  sqlite3_free(void *);
 
 /* ========== DATABASE OPEN / CLOSE ========== */
 
+int kvstore_open_v2(const char *zFilename, KVStore **ppKV, const KVStoreConfig *pConfig);
 int kvstore_open(const char *zFilename, KVStore **ppKV, int journalMode);
 int kvstore_close(KVStore *pKV);
 

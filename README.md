@@ -47,6 +47,37 @@ int main(void) {
 
 ---
 
+## Configuration
+
+Use `kvstore_open_v2` to control how the store is opened. Zero-initialise the
+config and set only what you need — unset fields resolve to safe defaults.
+
+```c
+KVStoreConfig cfg = {0};
+cfg.journalMode = KVSTORE_JOURNAL_WAL;   /* WAL mode (default) */
+cfg.syncLevel   = KVSTORE_SYNC_NORMAL;   /* survives process crash (default) */
+cfg.cacheSize   = 4000;                  /* ~16 MB page cache (default 2000 ≈ 8 MB) */
+cfg.pageSize    = 4096;                  /* DB page size, new DBs only (default 4096) */
+cfg.busyTimeout = 5000;                  /* retry 5 s on SQLITE_BUSY (default 0) */
+cfg.readOnly    = 0;                     /* read-write (default) */
+
+KVStore *db;
+kvstore_open_v2("mydb.db", &db, &cfg);
+```
+
+| Field | Default | Options |
+|-------|---------|---------|
+| `journalMode` | `KVSTORE_JOURNAL_WAL` | `KVSTORE_JOURNAL_DELETE` |
+| `syncLevel` | `KVSTORE_SYNC_NORMAL` | `KVSTORE_SYNC_OFF`, `KVSTORE_SYNC_FULL` |
+| `cacheSize` | 2000 pages (~8 MB) | Any positive integer |
+| `pageSize` | 4096 bytes | Power of 2, 512–65536; new DBs only |
+| `readOnly` | 0 | 1 to open read-only |
+| `busyTimeout` | 0 (fail immediately) | Milliseconds; useful for multi-process use |
+
+`kvstore_open` remains fully supported and uses all defaults except `journalMode`.
+
+---
+
 ## Installation & Build
 
 ```bash

@@ -40,15 +40,17 @@ typedef struct KVStore KVStore;
 typedef struct KVColumnFamily KVColumnFamily;
 
 /*
-** Error codes (in addition to standard SQLite error codes)
+** Error codes (aliases for the corresponding SQLITE_* codes)
 */
-#define KVSTORE_OK           SQLITE_OK
-#define KVSTORE_ERROR        SQLITE_ERROR
-#define KVSTORE_NOTFOUND     SQLITE_NOTFOUND
-#define KVSTORE_NOMEM        SQLITE_NOMEM
-#define KVSTORE_READONLY     SQLITE_READONLY
-#define KVSTORE_LOCKED       SQLITE_LOCKED
-#define KVSTORE_CORRUPT      SQLITE_CORRUPT
+#define KVSTORE_OK           SQLITE_OK        /* 0  — success */
+#define KVSTORE_ERROR        SQLITE_ERROR     /* 1  — generic error */
+#define KVSTORE_BUSY         SQLITE_BUSY      /* 5  — database locked by another connection */
+#define KVSTORE_LOCKED       SQLITE_LOCKED    /* 6  — database locked within same connection */
+#define KVSTORE_NOMEM        SQLITE_NOMEM     /* 7  — malloc() failed */
+#define KVSTORE_READONLY     SQLITE_READONLY  /* 8  — attempt to write a read-only database */
+#define KVSTORE_CORRUPT      SQLITE_CORRUPT   /* 11 — database file is malformed */
+#define KVSTORE_NOTFOUND     SQLITE_NOTFOUND  /* 12 — key or column family not found */
+#define KVSTORE_PROTOCOL     SQLITE_PROTOCOL  /* 15 — database lock protocol error */
 
 /*
 ** Maximum number of column families
@@ -56,13 +58,112 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_MAX_COLUMN_FAMILIES 64
 
 /*
-** Journal modes for kvstore_open
+** Journal modes for kvstore_open / KVStoreConfig.journalMode
 */
 #define KVSTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
-#define KVSTORE_JOURNAL_WAL    1   /* Write-Ahead Logging mode */
+#define KVSTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode */
 
 /*
-** Open a key-value store database file.
+** Sync levels for KVStoreConfig.syncLevel
+**
+** KVSTORE_SYNC_OFF    — no fsync; fastest, but data may be lost on power
+**                       failure (process crash is still safe in WAL mode).
+** KVSTORE_SYNC_NORMAL — (default) WAL checkpoint syncs once; survives process
+**                       crash, not necessarily power loss.
+** KVSTORE_SYNC_FULL   — fsync on every commit; power-safe, slower writes.
+*/
+#define KVSTORE_SYNC_OFF     0
+#define KVSTORE_SYNC_NORMAL  1
+#define KVSTORE_SYNC_FULL    2
+
+/*
+** Configuration structure for kvstore_open_v2.
+**
+** Zero-initialize and set only the fields you need; unset fields use the
+** documented defaults.
+**
+**   KVStoreConfig cfg = {0};
+**   cfg.journalMode = KVSTORE_JOURNAL_WAL;  // already the default
+**   cfg.busyTimeout = 5000;                 // retry up to 5 seconds
+**   kvstore_open_v2("mydb.db", &kv, &cfg);
+*/
+typedef struct KVStoreConfig KVStoreConfig;
+struct KVStoreConfig {
+  /*
+  ** journalMode — KVSTORE_JOURNAL_WAL (default) or KVSTORE_JOURNAL_DELETE.
+  ** WAL mode allows concurrent readers with a single writer and is strongly
+  ** recommended for most workloads.
+  */
+  int journalMode;
+
+  /*
+  ** syncLevel — KVSTORE_SYNC_NORMAL (default), KVSTORE_SYNC_OFF, or
+  ** KVSTORE_SYNC_FULL.  Controls how aggressively the pager fsyncs.
+  ** In WAL mode NORMAL and FULL have nearly identical performance.
+  */
+  int syncLevel;
+
+  /*
+  ** cacheSize — page cache size in pages (0 = use built-in default: 2000
+  ** pages ≈ 8 MB with 4096-byte pages).  Larger caches improve read-heavy
+  ** workloads at the cost of RSS.
+  */
+  int cacheSize;
+
+  /*
+  ** pageSize — database page size in bytes (0 = use built-in default: 4096).
+  ** Must be a power of two between 512 and 65536.
+  ** Ignored for existing databases (the stored page size wins).
+  ** Must be set before the first write; has no effect on existing databases.
+  */
+  int pageSize;
+
+  /*
+  ** readOnly — set to 1 to open the database read-only.  All write
+  ** operations (put, delete, begin(wrflag=1), etc.) will return
+  ** KVSTORE_READONLY.  Default: 0 (read-write).
+  */
+  int readOnly;
+
+  /*
+  ** busyTimeout — milliseconds to keep retrying when the database is locked
+  ** by another connection (SQLITE_BUSY).  0 (default) means fail immediately.
+  ** Useful for multi-process access patterns.
+  */
+  int busyTimeout;
+};
+
+/*
+** Open a key-value store with full configuration control.
+**
+** Parameters:
+**   zFilename - Path to the database file (NULL for in-memory)
+**   ppKV      - Output pointer to KVStore handle
+**   pConfig   - Configuration (NULL uses all defaults, same as kvstore_open
+**               with KVSTORE_JOURNAL_WAL)
+**
+** Default values when pConfig is NULL or a field is 0:
+**   journalMode  KVSTORE_JOURNAL_WAL
+**   syncLevel    KVSTORE_SYNC_NORMAL
+**   cacheSize    2000 pages (~8 MB)
+**   pageSize     4096 bytes (new databases only)
+**   readOnly     0 (read-write)
+**   busyTimeout  0 ms (fail immediately on lock)
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise
+*/
+int kvstore_open_v2(
+  const char *zFilename,
+  KVStore **ppKV,
+  const KVStoreConfig *pConfig
+);
+
+/*
+** Open a key-value store database file (simplified interface).
+**
+** Equivalent to kvstore_open_v2 with pConfig->journalMode = journalMode
+** and all other fields at their defaults.
 **
 ** Parameters:
 **   zFilename   - Path to the database file (NULL for in-memory)
