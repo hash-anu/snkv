@@ -56,7 +56,7 @@ SQLITE_CORE = src/btree.c src/btmutex.c \
               src/fault.c src/mem1.c src/rowset.c
 
 # Library objects
-LIB_SRC = src/kvstore.c src/kvstore_mutex.c $(SQLITE_CORE)
+LIB_SRC = src/kvstore.c $(SQLITE_CORE)
 LIB_OBJ = $(LIB_SRC:.c=.o)
 
 # Static library

@@ -80,12 +80,6 @@ cat << 'PREAMBLE'
 #include <stdint.h>
 #include <inttypes.h>
 
-#if defined(_WIN32) || defined(WIN32)
-# include <windows.h>
-#else
-# include <pthread.h>
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -95,24 +89,6 @@ extern "C" {
 typedef struct KVStore KVStore;
 typedef struct KVColumnFamily KVColumnFamily;
 typedef struct KVIterator KVIterator;
-
-/* ========== MUTEX ========== */
-
-typedef struct kvstore_mutex kvstore_mutex;
-
-struct kvstore_mutex {
-#if defined(_WIN32) || defined(WIN32)
-  CRITICAL_SECTION cs;
-#else
-  pthread_mutex_t mutex;
-#endif
-  int isValid;
-};
-
-kvstore_mutex *kvstore_mutex_alloc(void);
-void kvstore_mutex_free(kvstore_mutex *p);
-void kvstore_mutex_enter(kvstore_mutex *p);
-void kvstore_mutex_leave(kvstore_mutex *p);
 
 /* ========== ERROR CODES ========== */
 
@@ -299,11 +275,10 @@ for h in btreeInt.h wal.h os_common.h os_win.h; do
   emit "include/$h" "$INCDIR/$h"
 done
 
-# kvstore_mutex.h and kvstore.h are already covered by the preamble.
-# Set their include guards so they're skipped if any .c file tries to
-# include them.  Then emit the internal compatibility macros that
+# kvstore.h is already covered by the preamble.
+# Set its include guard so it's skipped if any .c file tries to
+# include it.  Then emit the internal compatibility macros that
 # kvstore.c needs (sqliteMalloc, sqliteFree, sqliteRealloc, sqliteStrDup).
-echo "#define KVSTORE_MUTEX_H"
 echo "#define _KVSTORE_H_"
 echo ""
 cat << 'COMPAT'
@@ -344,7 +319,6 @@ SOURCES="
   btmutex.c
   status.c
   threads.c
-  kvstore_mutex.c
   kvstore.c
 "
 
