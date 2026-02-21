@@ -14,11 +14,11 @@
 
 **SNKV** is a lightweight, **ACID-compliant embedded key-value store** built directly on SQLite's B-Tree storage engine — without SQL.
 
-It was born from a simple observation: RocksDB consumed ~121 MB RSS for a 1M record workload, even when tuned for small deployments. That felt like too much overhead for embedded or resource-constrained use cases.
+It was born from a simple observation: even conservatively tuned RocksDB (8MB block cache, 2MB write buffer, no compression) consumed ~27 MB RSS for a 1M record workload — 2.5x more than SNKV — while being slower on reads, scans, and mixed workloads. That felt like the wrong tradeoff for embedded or resource-constrained use cases where write throughput isn't the bottleneck.
 
 The idea: bypass the SQL layer entirely and talk directly to SQLite's storage engine. No SQL parser. No query planner. No virtual machine. Just a clean KV API on top of a proven, battle-tested storage core.
 
-> *SQLite-grade reliability. KV-first design. 11x less memory than RocksDB on small workloads.*
+> *SQLite-grade reliability. KV-first design. Lower memory footprint and faster reads than RocksDB on small workloads.*
 
 ---
 
@@ -88,7 +88,8 @@ By removing the layers you don't need for key-value workloads, SNKV keeps the pr
 
 ## Benchmarks
 
-> All benchmarks: 1M records, sync-on-commit enabled for all engines, Linux. Numbers averaged across 3 runs. Peak memory from `/usr/bin/time -v` (Maximum RSS).
+> All benchmarks: 1M records, Linux. Numbers averaged across 3 runs. Peak memory from `/usr/bin/time -v` (Maximum RSS).
+> SNKV vs SQLite use identical settings: WAL journal mode, `synchronous=NORMAL`, 2000-page (8 MB) page cache, 4096-byte pages.
 >
 > Benchmark source code: [SNKV](https://github.com/hash-anu/snkv/blob/master/tests/test_benchmark.c) · [RocksDB](https://github.com/hash-anu/rocksdb-benchmark) · [LMDB](https://github.com/hash-anu/lmdb-benchmark) · [SQLite](https://github.com/hash-anu/sqllite-benchmark-kv)
 
@@ -96,20 +97,23 @@ By removing the layers you don't need for key-value workloads, SNKV keeps the pr
 
 ### SNKV vs RocksDB
 
-RocksDB configured conservatively for small workloads: 2MB block cache, 2MB write buffer, compression disabled, sync-on-commit enabled.
+RocksDB configured to match SNKV's durability level: 8MB block cache, 2MB write buffer, 4KB block size, compression disabled, bloom filters disabled, `sync=false` (matching SNKV's `synchronous=NORMAL`).
 
-| Benchmark         | RocksDB     | SNKV        | Notes                         |
-| ----------------- | ----------- | ----------- | ----------------------------- |
-| Sequential writes | 237K ops/s  | 181K ops/s  | RocksDB faster (LSM-tree)     |
-| Random reads      | 95K ops/s   | 154K ops/s  | **SNKV 1.6x faster**          |
-| Sequential scan   | 1.78M ops/s | 5.95M ops/s | **SNKV 3.3x faster**          |
-| Random updates    | 177K ops/s  | 48K ops/s   | RocksDB faster (LSM-tree)     |
-| Random deletes    | 161K ops/s  | 41K ops/s   | RocksDB faster                |
-| Mixed workload    | 51K ops/s   | 97K ops/s   | **SNKV 1.9x faster**          |
-| Bulk insert       | 675K ops/s  | 494K ops/s  | RocksDB faster                |
-| **Peak RSS**      | **121 MB**  | **10.8 MB** | **SNKV uses 11x less memory** |
+| Benchmark         | RocksDB     | SNKV        | Notes                                        |
+| ----------------- | ----------- | ----------- | -------------------------------------------- |
+| Sequential writes | 387K ops/s  | 147K ops/s  | RocksDB **2.6x faster** (LSM-tree)           |
+| Random reads      | 50K ops/s   | 142K ops/s  | **SNKV 2.8x faster**                         |
+| Sequential scan   | 937K ops/s  | 3.13M ops/s | **SNKV 3.3x faster**                         |
+| Random updates    | 108K ops/s  | 23K ops/s   | RocksDB **4.6x faster** (LSM-tree)           |
+| Random deletes    | 97K ops/s   | 20K ops/s   | RocksDB **4.8x faster** (LSM tombstones)     |
+| Exists checks     | 37K ops/s†  | 156K ops/s  | **SNKV 4.2x faster**                         |
+| Mixed workload    | 40K ops/s   | 50K ops/s   | **SNKV 1.25x faster** (read-heavy 70%)       |
+| Bulk insert       | 362K ops/s  | 241K ops/s  | RocksDB **1.5x faster**                      |
+| **Peak RSS**      | **~27 MB**  | **10.8 MB** | **SNKV uses 2.5x less memory**               |
 
-RocksDB's LSM-tree design gives it a clear edge on write-heavy workloads — that's by design and expected. The memory gap is structural: even at minimum configuration, RocksDB carries significantly more overhead. If your workload is read-heavy or memory-constrained, SNKV is worth considering.
+† RocksDB exists uses `KeyMayExist()` (bloom filter, may have false positives). SNKV uses an exact B-tree seek. Architecturally different operations.
+
+RocksDB's LSM-tree design dominates write-heavy operations — sequential writes, updates, deletes, and bulk insert. That's the fundamental LSM advantage: writes are append-only to a memtable, no in-place B-tree rebalancing. SNKV's B-tree wins on reads and scans: random reads are 2.8x faster and sequential scan is 3.3x faster because the data is already ordered on disk with no SST file merging overhead. Mixed workload (70% reads) goes to SNKV for the same reason. Memory usage is 2.5x lower — RocksDB's internal structures (block cache, memtables, table readers, compaction state) add up even at minimum configuration.
 
 ---
 
@@ -134,22 +138,22 @@ LMDB wins on raw throughput across the board — that's the nature of memory-map
 
 ### SNKV vs SQLite (KV workloads)
 
-SQLite benchmark uses `WITHOUT ROWID` and no redundant indexes — the fairest possible comparison, both using a single B-tree keyed on the same field. This isolates the cost of the SQL layer for pure KV operations.
+SQLite benchmark uses `WITHOUT ROWID` with a BLOB primary key — the fairest possible comparison, both using a single B-tree keyed on the same field. Both run with identical settings: WAL mode, `synchronous=NORMAL`, 2000-page (8 MB) cache, 4096-byte pages. This isolates the pure cost of the SQL layer for KV operations.
 
 > Note: Both SNKV and SQLite (`WITHOUT ROWID`) use identical peak RSS (~10.8 MB) since they share the same underlying pager and page cache infrastructure.
 
 | Benchmark         | SQLite       | SNKV         | Notes                        |
 | ----------------- | ------------ | ------------ | ---------------------------- |
-| Sequential writes | 123K ops/s   | 134K ops/s   | **SNKV 1.1x faster**         |
-| Random reads      | 82K ops/s    | 76K ops/s    | SQLite slightly faster       |
-| Sequential scan   | 1.63M ops/s  | 2.99M ops/s  | **SNKV 1.8x faster**         |
-| Random updates    | 15K ops/s    | 22K ops/s    | **SNKV 1.5x faster**         |
-| Random deletes    | 17K ops/s    | 19K ops/s    | SNKV slightly faster         |
-| Exists checks     | 85K ops/s    | 76K ops/s    | SQLite faster                |
-| Mixed workload    | 34K ops/s    | 43K ops/s    | **SNKV 1.3x faster**         |
-| Bulk insert       | 211K ops/s   | 217K ops/s   | SNKV slightly faster         |
+| Sequential writes | 140K ops/s   | 146K ops/s   | **SNKV 1.05x faster**        |
+| Random reads      | 87K ops/s    | 139K ops/s   | **SNKV 1.6x faster**         |
+| Sequential scan   | 1.61M ops/s  | 3.16M ops/s  | **SNKV 2x faster**           |
+| Random updates    | 17K ops/s    | 24K ops/s    | **SNKV 1.4x faster**         |
+| Random deletes    | 17K ops/s    | 20K ops/s    | **SNKV 1.2x faster**         |
+| Exists checks     | 87K ops/s    | 149K ops/s   | **SNKV 1.7x faster**         |
+| Mixed workload    | 35K ops/s    | 50K ops/s    | **SNKV 1.4x faster**         |
+| Bulk insert       | 211K ops/s   | 240K ops/s   | **SNKV 1.1x faster**         |
 
-With `WITHOUT ROWID`, SQLite uses the same single B-tree storage pattern as SNKV. The remaining differences come from SQL layer overhead — parsing, planning, and VM execution on every operation. SNKV wins on scan, updates, and mixed workloads. SQLite wins on random reads and exists checks where its query optimizer shines.
+With identical storage configuration, SNKV wins across every benchmark. The gains come from two sources: bypassing the SQL layer (no parsing, no query planner, no VDBE) and a per-column-family cached read cursor that eliminates repeated cursor open/close overhead on the hot read path. The biggest wins are on read-heavy operations — random reads (+60%), exists checks (+70%), and sequential scan (+100%) — exactly where the cursor caching pays off most.
 
 ---
 
@@ -164,10 +168,9 @@ With `WITHOUT ROWID`, SQLite uses the same single B-tree storage pattern as SNKV
 - You want predictable latency — no compaction stalls, no mmap tuning
 
 **Consider alternatives if:**
-- You need maximum write/update throughput → **RocksDB**
+- You need maximum write/update/delete throughput → **RocksDB**
 - You need maximum read/scan speed and memory isn't a constraint → **LMDB**
 - You already use SQL elsewhere and want to consolidate → **SQLite directly**
-- You have exists-check heavy workloads → **SQLite directly**
 
 ---
 
