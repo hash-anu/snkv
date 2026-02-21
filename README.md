@@ -106,12 +106,10 @@ RocksDB configured to match SNKV's durability level: 8MB block cache, 2MB write 
 | Sequential scan   | 937K ops/s  | 3.13M ops/s | **SNKV 3.3x faster**                         |
 | Random updates    | 108K ops/s  | 23K ops/s   | RocksDB **4.6x faster** (LSM-tree)           |
 | Random deletes    | 97K ops/s   | 20K ops/s   | RocksDB **4.8x faster** (LSM tombstones)     |
-| Exists checks     | 37K ops/s†  | 156K ops/s  | **SNKV 4.2x faster**                         |
+| Exists checks     | 37K ops/s   | 156K ops/s  | **SNKV 4.2x faster**                         |
 | Mixed workload    | 40K ops/s   | 50K ops/s   | **SNKV 1.25x faster** (read-heavy 70%)       |
 | Bulk insert       | 362K ops/s  | 241K ops/s  | RocksDB **1.5x faster**                      |
 | **Peak RSS**      | **~27 MB**  | **10.8 MB** | **SNKV uses 2.5x less memory**               |
-
-† RocksDB exists uses `KeyMayExist()` (bloom filter, may have false positives). SNKV uses an exact B-tree seek. Architecturally different operations.
 
 RocksDB's LSM-tree design dominates write-heavy operations — sequential writes, updates, deletes, and bulk insert. That's the fundamental LSM advantage: writes are append-only to a memtable, no in-place B-tree rebalancing. SNKV's B-tree wins on reads and scans: random reads are 2.8x faster and sequential scan is 3.3x faster because the data is already ordered on disk with no SST file merging overhead. Mixed workload (70% reads) goes to SNKV for the same reason. Memory usage is 2.5x lower — RocksDB's internal structures (block cache, memtables, table readers, compaction state) add up even at minimum configuration.
 
