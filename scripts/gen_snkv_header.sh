@@ -18,10 +18,21 @@ CDIR="$SRCDIR/src"
 
 # Strip lines that include internal project headers.
 # Keeps all system <...> includes except <sqliteInt.h> (used by os_kv.c).
+# Exception: #include "windows.h" (used by os_win.h) is converted to a
+# platform-guarded #include <windows.h> so it is included on Windows but
+# silently skipped on Linux/macOS.
 strip_local_includes() {
-  sed \
-    -e '/^[[:space:]]*#[[:space:]]*include[[:space:]]*".*"/d' \
-    -e '/^[[:space:]]*#[[:space:]]*include[[:space:]]*<sqliteInt\.h>/d'
+  awk '
+    /^[[:space:]]*#[[:space:]]*include[[:space:]]*"windows\.h"/ {
+      print "#ifdef _WIN32"
+      print "#include <windows.h>"
+      print "#endif"
+      next
+    }
+    /^[[:space:]]*#[[:space:]]*include[[:space:]]*"[^"]*"/ { next }
+    /^[[:space:]]*#[[:space:]]*include[[:space:]]*<sqliteInt\.h>/    { next }
+    { print }
+  '
 }
 
 emit() {
@@ -36,10 +47,27 @@ emit_lines() {
   sed -n "${2},${3}p" "$1" | strip_local_includes
 }
 
+# Emit the public API from kvstore.h, stripping its own _KVSTORE_H_ include
+# guards.  All other transformations (local-include removal, windows.h quoting)
+# are handled by strip_local_includes.  Nothing API-related is hardcoded here:
+# add a new constant, struct field, or function to kvstore.h and it
+# automatically appears in snkv.h on the next `make snkv.h`.
+emit_kvstore_public() {
+  sed \
+    -e '/^#ifndef _KVSTORE_H_$/d' \
+    -e '/^#define _KVSTORE_H_$/d' \
+    -e '/^#endif \/\* _KVSTORE_H_ \*\/$/d' \
+    < "$1" | strip_local_includes
+}
+
 # ============================================================
-# Part 1: File preamble + public API
+# Part 1: File preamble (snkv.h-specific) + public API from kvstore.h.
+#
+# Only the snkv.h include guard, _GNU_SOURCE guard, and the usage comment
+# are hardcoded here.  Every type, constant, struct, and function
+# declaration is derived directly from include/kvstore.h.
 # ============================================================
-cat << 'PREAMBLE'
+cat << 'FILE_HEADER'
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
 ** snkv.h — Single-file amalgamation for the SNKV key-value store.
@@ -56,7 +84,7 @@ cat << 'PREAMBLE'
 **     int main() { ... }
 **
 ** Compile (Linux/macOS):  gcc myapp.c -o myapp
-** Compile (Windows/MSYS): gcc myapp.c -o myapp.exe -lws2_32
+** Compile (Windows/MSYS): gcc myapp.c -o myapp.exe
 **
 ** Usage (C++) — compile the implementation as C, use the API from C++:
 **
@@ -77,144 +105,11 @@ cat << 'PREAMBLE'
 # define _GNU_SOURCE
 #endif
 
-#include <stdint.h>
-#include <inttypes.h>
+FILE_HEADER
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+emit_kvstore_public "$INCDIR/kvstore.h"
 
-/* ========== OPAQUE TYPES ========== */
-
-typedef struct KVStore KVStore;
-typedef struct KVColumnFamily KVColumnFamily;
-typedef struct KVIterator KVIterator;
-
-/* ========== ERROR CODES ========== */
-
-#define KVSTORE_OK        0   /* Success */
-#define KVSTORE_ERROR     1   /* Generic error */
-#define KVSTORE_BUSY      5   /* Database file is locked (retry) */
-#define KVSTORE_LOCKED    6   /* Database is locked */
-#define KVSTORE_NOMEM     7   /* malloc() failed */
-#define KVSTORE_READONLY  8   /* Attempt to write a read-only database */
-#define KVSTORE_CORRUPT   11  /* Database file is malformed */
-#define KVSTORE_NOTFOUND  12  /* Key not found */
-#define KVSTORE_PROTOCOL  15  /* Database lock protocol error */
-
-/* ========== CONSTANTS ========== */
-
-#define KVSTORE_MAX_COLUMN_FAMILIES 64
-
-#define KVSTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
-#define KVSTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode */
-
-/* Sync levels for KVStoreConfig.syncLevel */
-#define KVSTORE_SYNC_OFF     0  /* No fsync — fastest, risk on power loss */
-#define KVSTORE_SYNC_NORMAL  1  /* WAL-safe — default */
-#define KVSTORE_SYNC_FULL    2  /* fsync every commit — power-safe */
-
-/* ========== CONFIGURATION ========== */
-
-/*
-** Configuration structure passed to kvstore_open_v2().
-** Zero-initialise and set only the fields you need.
-** Unset fields (value == 0) resolve to the documented defaults.
-*/
-typedef struct KVStoreConfig KVStoreConfig;
-struct KVStoreConfig {
-  int journalMode;  /* KVSTORE_JOURNAL_WAL (default) or _DELETE        */
-  int syncLevel;    /* KVSTORE_SYNC_NORMAL (default), _OFF, or _FULL   */
-  int cacheSize;    /* Pages in page cache (0 = 2000 pages ≈ 8 MB)     */
-  int pageSize;     /* DB page size in bytes (0 = 4096, new DBs only)   */
-  int readOnly;     /* 1 = open read-only; default 0                    */
-  int busyTimeout;  /* ms to retry on SQLITE_BUSY (0 = fail immediately)*/
-};
-
-/* ========== STATISTICS ========== */
-
-typedef struct KVStoreStats KVStoreStats;
-struct KVStoreStats {
-  uint64_t nPuts;       /* Number of put operations */
-  uint64_t nGets;       /* Number of get operations */
-  uint64_t nDeletes;    /* Number of delete operations */
-  uint64_t nIterations; /* Number of iterators created */
-  uint64_t nErrors;     /* Number of errors encountered */
-};
-
-/* ========== MEMORY HELPERS ========== */
-
-/* Forward-declare memory functions for use in the public API macros.
-** The full definitions come from the implementation section. */
-#ifndef SNKV_IMPLEMENTATION
-void *sqlite3MallocZero(unsigned long long);
-void  sqlite3_free(void *);
-#endif
-
-#define snkv_malloc(n)  sqlite3MallocZero((unsigned long long)(n))
-#define snkv_free(p)    sqlite3_free((p))
-
-/* ========== DATABASE OPEN / CLOSE ========== */
-
-int kvstore_open_v2(const char *zFilename, KVStore **ppKV, const KVStoreConfig *pConfig);
-int kvstore_open(const char *zFilename, KVStore **ppKV, int journalMode);
-int kvstore_close(KVStore *pKV);
-
-/* ========== COLUMN FAMILY OPERATIONS ========== */
-
-int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF);
-int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF);
-int kvstore_cf_get_default(KVStore *pKV, KVColumnFamily **ppCF);
-int kvstore_cf_drop(KVStore *pKV, const char *zName);
-int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount);
-void kvstore_cf_close(KVColumnFamily *pCF);
-
-/* ========== KEY-VALUE OPERATIONS (DEFAULT CF) ========== */
-
-int kvstore_put(KVStore *pKV, const void *pKey, int nKey, const void *pValue, int nValue);
-int kvstore_get(KVStore *pKV, const void *pKey, int nKey, void **ppValue, int *pnValue);
-int kvstore_delete(KVStore *pKV, const void *pKey, int nKey);
-int kvstore_exists(KVStore *pKV, const void *pKey, int nKey, int *pExists);
-
-/* ========== KEY-VALUE OPERATIONS (SPECIFIC CF) ========== */
-
-int kvstore_cf_put(KVColumnFamily *pCF, const void *pKey, int nKey, const void *pValue, int nValue);
-int kvstore_cf_get(KVColumnFamily *pCF, const void *pKey, int nKey, void **ppValue, int *pnValue);
-int kvstore_cf_delete(KVColumnFamily *pCF, const void *pKey, int nKey);
-int kvstore_cf_exists(KVColumnFamily *pCF, const void *pKey, int nKey, int *pExists);
-
-/* ========== ITERATORS ========== */
-
-int kvstore_iterator_create(KVStore *pKV, KVIterator **ppIter);
-int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter);
-int kvstore_prefix_iterator_create(KVStore *pKV, const void *pPrefix, int nPrefix, KVIterator **ppIter);
-int kvstore_cf_prefix_iterator_create(KVColumnFamily *pCF, const void *pPrefix, int nPrefix, KVIterator **ppIter);
-int  kvstore_iterator_first(KVIterator *pIter);
-int  kvstore_iterator_next(KVIterator *pIter);
-int  kvstore_iterator_eof(KVIterator *pIter);
-int kvstore_iterator_key(KVIterator *pIter, void **ppKey, int *pnKey);
-int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue);
-void kvstore_iterator_close(KVIterator *pIter);
-
-/* ========== TRANSACTIONS ========== */
-
-int kvstore_begin(KVStore *pKV, int wrflag);
-int kvstore_commit(KVStore *pKV);
-int kvstore_rollback(KVStore *pKV);
-
-/* ========== UTILITIES ========== */
-
-const char *kvstore_errmsg(KVStore *pKV);
-int kvstore_stats(KVStore *pKV, KVStoreStats *pStats);
-int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg);
-int kvstore_sync(KVStore *pKV);
-int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
-
-#ifdef __cplusplus
-}
-#endif
-
-PREAMBLE
+echo ""
 
 # ============================================================
 # Part 2: Implementation — all internal headers then all sources.
@@ -298,20 +193,11 @@ for h in btreeInt.h wal.h os_common.h os_win.h; do
   emit "include/$h" "$INCDIR/$h"
 done
 
-# kvstore.h is already covered by the preamble.
-# Set its include guard so it's skipped if any .c file tries to
-# include it.  Then emit the internal compatibility macros that
-# kvstore.c needs (sqliteMalloc, sqliteFree, sqliteRealloc, sqliteStrDup).
+# kvstore.h public API (including compat macros and snkv_malloc/snkv_free)
+# was already emitted in Part 1.  Define its include guard so that the
+# stripped #include "kvstore.h" inside kvstore.c becomes a no-op.
 echo "#define _KVSTORE_H_"
 echo ""
-cat << 'COMPAT'
-/****** kvstore internal compat macros ******/
-#define sqliteMalloc(n)     sqlite3MallocZero((n))
-#define sqliteFree(p)       sqlite3_free((p))
-#define sqliteRealloc(p,n)  sqlite3Realloc((p),(u64)(n))
-#define sqliteStrDup(s)     sqlite3_mprintf("%s",(s))
-
-COMPAT
 
 # --- Phase D: All .c source files ---
 SOURCES="

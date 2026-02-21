@@ -43,13 +43,13 @@ static int tests_failed = 0;
 #define TEST_PASS() \
   do { \
     tests_passed++; \
-    printf(COLOR_GREEN "  ✓ PASSED" COLOR_RESET "\n\n"); \
+    printf(COLOR_GREEN "  [OK] PASSED" COLOR_RESET "\n\n"); \
   } while(0)
 
 #define TEST_FAIL(msg) \
   do { \
     tests_failed++; \
-    printf(COLOR_RED "  ✗ FAILED: %s" COLOR_RESET "\n\n", msg); \
+    printf(COLOR_RED "  [X] FAILED: %s" COLOR_RESET "\n\n", msg); \
     return; \
   } while(0)
 
@@ -615,10 +615,10 @@ int main(void){
   printf("========================================\n\n");
   
   if( tests_failed == 0 ){
-    printf(COLOR_GREEN "✓ All tests passed!" COLOR_RESET "\n\n");
+    printf(COLOR_GREEN "[OK] All tests passed!" COLOR_RESET "\n\n");
     return 0;
   }else{
-    printf(COLOR_RED "✗ Some tests failed!" COLOR_RESET "\n\n");
+    printf(COLOR_RED "[X] Some tests failed!" COLOR_RESET "\n\n");
     return 1;
   }
 }

@@ -1298,17 +1298,17 @@ int main(void) {
 #endif
 
     printf("\n" CLR_CYAN
-        "╔══════════════════════════════════════════════════════════════╗\n"
-        "║       SNKV Integration & Stress Test Suite                  ║\n"
-        "║                                                              ║\n"
-        "║  Modeled after SQLite's storage-engine validation:          ║\n"
-        "║   • Edge cases & boundary values                            ║\n"
-        "║   • High-volume write storms + integrity checks             ║\n"
-        "║   • Large dataset fill/scan/delete                          ║\n"
-        "║   • Crash-recovery simulation                               ║\n"
-        "║   • Concurrent reader/writer stress                         ║\n"
-        "║   • Cross-configuration (DELETE + WAL)                      ║\n"
-        "╚══════════════════════════════════════════════════════════════╝\n"
+        "+==============================================================+\n"
+        "|       SNKV Integration & Stress Test Suite                  |\n"
+        "|                                                              |\n"
+        "|  Modeled after SQLite's storage-engine validation:          |\n"
+        "|   - Edge cases & boundary values                            |\n"
+        "|   - High-volume write storms + integrity checks             |\n"
+        "|   - Large dataset fill/scan/delete                          |\n"
+        "|   - Crash-recovery simulation                               |\n"
+        "|   - Concurrent reader/writer stress                         |\n"
+        "|   - Cross-configuration (DELETE + WAL)                      |\n"
+        "+==============================================================+\n"
         CLR_RESET "\n");
 
     printf(CLR_BLUE "=== 1. Edge Cases & Boundary Values ===" CLR_RESET "\n");

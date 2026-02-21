@@ -24,16 +24,16 @@ ifeq ($(UNAME_S),Darwin)
 endif
 ifeq ($(UNAME_S),Windows)
   # Native Windows / MSYS2 / MinGW
-  LDFLAGS = -lws2_32
+  LDFLAGS = 
   TARGET_EXT = .exe
 endif
 # Fallback for MSYS/Cygwin reporting MINGW/MSYS
 ifneq (,$(findstring MINGW,$(UNAME_S)))
-  LDFLAGS = -lws2_32
+  LDFLAGS =
   TARGET_EXT = .exe
 endif
 ifneq (,$(findstring MSYS,$(UNAME_S)))
-  LDFLAGS = -lws2_32
+  LDFLAGS =
   TARGET_EXT = .exe
 endif
 
@@ -93,7 +93,8 @@ $(LIB): $(LIB_OBJ)
 examples: snkv.h $(EXAMPLE_BIN)
 
 examples/%$(TARGET_EXT): examples/%.c snkv.h
-	$(CC) -g -Wall -I. -o $@ $< $(LDFLAGS)
+	cp snkv.h examples/snkv.h
+	$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
 
 run-examples: examples
 	@for e in $(EXAMPLE_BIN); do \
@@ -121,7 +122,7 @@ clean:
 	rm -f snkv.h
 	rm -f *.db *.db-wal *.db-shm
 	rm -f tests/*.db tests/*.db-wal tests/*.db-shm
-	rm -f examples/*.db examples/*.db-wal examples/*.db-shm
+	rm -f examples/*.db examples/*.db-wal examples/*.db-shm examples/snkv.h
 	rm -f tests/test_crash_10gb$(TARGET_EXT)
 	rm -f tests/crash_10gb.db tests/crash_10gb.db-wal tests/crash_10gb.db-shm
 

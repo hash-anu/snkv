@@ -235,7 +235,7 @@ static void test_wal_rollback(void){
     kvstore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
     kvstore_rollback(pKV);
 
-    /* Read back – should see original */
+    /* Read back -- should see original */
     void *got = NULL; int glen = 0;
     rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
     if( rc == KVSTORE_OK && got ){
@@ -271,11 +271,11 @@ static void test_wal_recovery(void){
   if( rc == KVSTORE_OK ){
     const char *val2 = "uncommitted_val";
     kvstore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
-    /* Don't commit – simulate crash */
+    /* Don't commit -- simulate crash */
   }
   kvstore_close(pKV);
 
-  /* Phase 2: reopen – should see committed value */
+  /* Phase 2: reopen -- should see committed value */
   rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
   if( rc == KVSTORE_OK ){
     void *got = NULL; int glen = 0;
@@ -746,14 +746,14 @@ static void test_wal_shm_file(void){
   int wal_after_open = file_exists(WAL_WAL_FILE);
   int shm_after_open = file_exists(WAL_SHM_FILE);
 
-  /* Write data — files should still be present */
+  /* Write data -- files should still be present */
   const char *k = "shm_test_key";
   const char *v = "shm_test_val";
   kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   int wal_after_write = file_exists(WAL_WAL_FILE);
   int shm_after_write = file_exists(WAL_SHM_FILE);
 
-  /* Close — auto-checkpoint should remove -wal and -shm */
+  /* Close -- auto-checkpoint should remove -wal and -shm */
   kvstore_close(pKV);
   int wal_after_close = file_exists(WAL_WAL_FILE);
   int shm_after_close = file_exists(WAL_SHM_FILE);

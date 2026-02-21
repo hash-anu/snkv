@@ -118,7 +118,7 @@ static int check_integrity(KVStore *kv) {
 ** TEST 1: Committed data survives unclean close
 **
 ** Write N keys and commit, then close WITHOUT calling kvstore_close
-** (simulate crash by just freeing — but since we can't do that safely,
+** (simulate crash by just freeing -- but since we can't do that safely,
 ** we close normally, which is the minimum recovery path).
 ** Reopen and verify all committed data is present.
 ** ================================================================ */
@@ -367,7 +367,7 @@ static void test_multiple_crash_cycles(void) {
             make_value(value, sizeof(value), prefix, i);
             kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
         }
-        /* Close without committing — uncommitted data should be lost */
+        /* Close without committing -- uncommitted data should be lost */
         kvstore_close(kv);
     }
 
@@ -657,9 +657,9 @@ static void test_delete_recovery(void) {
 /* ==================== Main ==================== */
 int main(void) {
     printf("\n" CLR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  SNKV Crash Recovery & Transaction Durability Tests\n");
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf(CLR_RESET);
 
     /* Test 1: Committed data survives */
@@ -689,10 +689,10 @@ int main(void) {
 
     /* Summary */
     printf("\n" CLR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  Results: " CLR_GREEN "%d passed" CLR_RESET ", "
            CLR_RED "%d failed" CLR_RESET "\n", g_passed, g_failed);
-    printf(CLR_CYAN "════════════════════════════════════════════════════════\n");
+    printf(CLR_CYAN "========================================================\n");
     printf(CLR_RESET "\n");
 
     return g_failed > 0 ? 1 : 0;

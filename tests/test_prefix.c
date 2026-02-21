@@ -39,13 +39,13 @@ static int tests_failed = 0;
 #define TEST_PASS() \
   do { \
     tests_passed++; \
-    printf(COLOR_GREEN "  ✓ PASSED" COLOR_RESET "\n\n"); \
+    printf(COLOR_GREEN "  [OK] PASSED" COLOR_RESET "\n\n"); \
   } while(0)
 
 #define TEST_FAIL(msg) \
   do { \
     tests_failed++; \
-    printf(COLOR_RED "  ✗ FAILED: %s" COLOR_RESET "\n\n", msg); \
+    printf(COLOR_RED "  [X] FAILED: %s" COLOR_RESET "\n\n", msg); \
     return; \
   } while(0)
 
@@ -90,7 +90,7 @@ static void test_basic_prefix_search(void){
   }
   kvstore_commit(kv);
 
-  /* Prefix search for "user:" — should find 4 keys */
+  /* Prefix search for "user:" -- should find 4 keys */
   rc = kvstore_prefix_iterator_create(kv, "user:", 5, &pIter);
   if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
@@ -111,7 +111,7 @@ static void test_basic_prefix_search(void){
     printf("  Expected 4 user: keys, got %d\n", count);
     TEST_FAIL("wrong count for 'user:' prefix");
   }
-  printf("  ✓ Found %d keys with prefix 'user:'\n", count);
+  printf("  [OK] Found %d keys with prefix 'user:'\n", count);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -157,7 +157,7 @@ static void test_sorted_order(void){
       printf("  Expected '%s', got '%.*s'\n", expected[idx], nk, (char*)k);
       TEST_FAIL("wrong key order");
     }
-    printf("  ✓ Key %d: %.*s\n", idx, nk, (char*)k);
+    printf("  [OK] Key %d: %.*s\n", idx, nk, (char*)k);
     idx++;
     kvstore_iterator_next(pIter);
   }
@@ -207,7 +207,7 @@ static void test_empty_prefix_results(void){
     printf("  Expected 0 keys, got %d\n", count);
     TEST_FAIL("should find no keys for non-existent prefix");
   }
-  printf("  ✓ Correctly returned 0 keys for non-existent prefix\n");
+  printf("  [OK] Correctly returned 0 keys for non-existent prefix\n");
 
   /* Search for prefix between existing keys */
   rc = kvstore_prefix_iterator_create(kv, "abc", 3, &pIter);
@@ -224,7 +224,7 @@ static void test_empty_prefix_results(void){
     printf("  Expected 0 keys for 'abc' prefix, got %d\n", count);
     TEST_FAIL("should find no keys for 'abc' prefix");
   }
-  printf("  ✓ Correctly returned 0 keys for 'abc' prefix\n");
+  printf("  [OK] Correctly returned 0 keys for 'abc' prefix\n");
 
   /* Empty database */
   kvstore_close(kv);
@@ -238,7 +238,7 @@ static void test_empty_prefix_results(void){
   if( !kvstore_iterator_eof(pIter) ){
     TEST_FAIL("should be eof on empty database");
   }
-  printf("  ✓ Correctly returned eof on empty database\n");
+  printf("  [OK] Correctly returned eof on empty database\n");
   kvstore_iterator_close(pIter);
 
   kvstore_close(kv);
@@ -279,7 +279,7 @@ static void test_single_char_prefix(void){
     if( nk < 1 || ((char*)k)[0] != 'a' ){
       TEST_FAIL("key doesn't start with 'a'");
     }
-    printf("  ✓ Found: %.*s\n", nk, (char*)k);
+    printf("  [OK] Found: %.*s\n", nk, (char*)k);
     count++;
     kvstore_iterator_next(pIter);
   }
@@ -305,7 +305,7 @@ static void test_single_char_prefix(void){
     printf("  Expected 2 keys for prefix 'b', got %d\n", count);
     TEST_FAIL("wrong count for prefix 'b'");
   }
-  printf("  ✓ Prefix 'b' matched %d keys\n", count);
+  printf("  [OK] Prefix 'b' matched %d keys\n", count);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -342,7 +342,7 @@ static void test_exact_key_as_prefix(void){
   while( !kvstore_iterator_eof(pIter) ){
     void *k; int nk;
     kvstore_iterator_key(pIter, &k, &nk);
-    printf("  ✓ Found: %.*s\n", nk, (char*)k);
+    printf("  [OK] Found: %.*s\n", nk, (char*)k);
     count++;
     kvstore_iterator_next(pIter);
   }
@@ -374,7 +374,7 @@ static void test_exact_key_as_prefix(void){
     printf("  Expected 1 key for prefix 'apple', got %d\n", count);
     TEST_FAIL("wrong count for 'apple' prefix");
   }
-  printf("  ✓ Prefix 'apple' matched exactly 1 key\n");
+  printf("  [OK] Prefix 'apple' matched exactly 1 key\n");
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -414,7 +414,7 @@ static void test_cf_prefix_search(void){
   while( !kvstore_iterator_eof(pIter) ){
     void *k; int nk;
     kvstore_iterator_key(pIter, &k, &nk);
-    printf("  ✓ Found: %.*s\n", nk, (char*)k);
+    printf("  [OK] Found: %.*s\n", nk, (char*)k);
     count++;
     kvstore_iterator_next(pIter);
   }
@@ -441,7 +441,7 @@ static void test_cf_prefix_search(void){
     printf("  Expected 1 key in default CF, got %d\n", count);
     TEST_FAIL("CF isolation broken");
   }
-  printf("  ✓ Column family isolation verified\n");
+  printf("  [OK] Column family isolation verified\n");
 
   kvstore_cf_close(pCF);
   kvstore_close(kv);
@@ -480,7 +480,7 @@ static void test_prefix_with_values(void){
     int nk, nv;
     kvstore_iterator_key(pIter, &k, &nk);
     kvstore_iterator_value(pIter, &v, &nv);
-    printf("  ✓ %.*s = %.*s\n", nk, (char*)k, nv, (char*)v);
+    printf("  [OK] %.*s = %.*s\n", nk, (char*)k, nv, (char*)v);
 
     /* Verify value is a 6-char hex color */
     if( nv != 6 ){
@@ -551,7 +551,7 @@ static void test_binary_key_prefix(void){
     printf("  Expected 3 keys with binary prefix, got %d\n", count);
     TEST_FAIL("wrong count for binary prefix");
   }
-  printf("  ✓ Found %d keys with binary prefix [0x01, 0x02]\n", count);
+  printf("  [OK] Found %d keys with binary prefix [0x01, 0x02]\n", count);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -596,12 +596,12 @@ static void test_prefix_wal_mode(void){
   }
   kvstore_iterator_close(pIter);
 
-  /* 100 keys, modulo 3 → ns1 gets keys 1,4,7,...,97 = 33 keys */
+  /* 100 keys, modulo 3 -> ns1 gets keys 1,4,7,...,97 = 33 keys */
   if( count != 33 ){
     printf("  Expected 33 ns1: keys, got %d\n", count);
     TEST_FAIL("wrong count in WAL mode");
   }
-  printf("  ✓ Found %d keys with prefix 'ns1:' in WAL mode\n", count);
+  printf("  [OK] Found %d keys with prefix 'ns1:' in WAL mode\n", count);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -648,9 +648,9 @@ static void test_large_scale_prefix(void){
     printf("  Expected 1000 keys in namespace5, got %d\n", count);
     TEST_FAIL("wrong count for large-scale prefix");
   }
-  printf("  ✓ Found %d keys in namespace5 out of 10K total\n", count);
+  printf("  [OK] Found %d keys in namespace5 out of 10K total\n", count);
 
-  /* Narrower prefix: "namespace5:record:050" → 10 keys (05000-05009) */
+  /* Narrower prefix: "namespace5:record:050" -> 10 keys (05000-05009) */
   rc = kvstore_prefix_iterator_create(kv, "namespace5:record:050", 21, &pIter);
   if( rc != KVSTORE_OK ) TEST_FAIL("narrow prefix iterator failed");
 
@@ -665,7 +665,7 @@ static void test_large_scale_prefix(void){
     printf("  Expected 10 keys for narrow prefix, got %d\n", count);
     TEST_FAIL("wrong count for narrow prefix");
   }
-  printf("  ✓ Narrow prefix matched %d keys\n", count);
+  printf("  [OK] Narrow prefix matched %d keys\n", count);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -713,7 +713,7 @@ static void test_prefix_after_mutations(void){
     kvstore_iterator_key(pIter, &k, &nk);
     kvstore_iterator_value(pIter, &v, &nv);
 
-    printf (" ✓ Found: %.*s = %.*s\n", nk, (char*)k, nv, (char*)v);
+    printf (" [OK] Found: %.*s = %.*s\n", nk, (char*)k, nv, (char*)v);
     /* Verify tag:beta is gone */
     if( nk == 8 && memcmp(k, "tag:beta", 8) == 0 ){
       TEST_FAIL("deleted key tag:beta should not appear");
@@ -724,7 +724,7 @@ static void test_prefix_after_mutations(void){
       if( nv != 10 || memcmp(v, "updated_v3", 10) != 0 ){
         TEST_FAIL("tag:gamma should have updated value");
       }
-      printf("  ✓ tag:gamma has updated value\n");
+      printf("  [OK] tag:gamma has updated value\n");
     }
 
     count++;
@@ -736,7 +736,7 @@ static void test_prefix_after_mutations(void){
     printf("  Expected 3 keys after delete, got %d\n", count);
     TEST_FAIL("wrong count after mutations");
   }
-  printf("  ✓ Found %d keys after delete+update\n", count);
+  printf("  [OK] Found %d keys after delete+update\n", count);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -788,7 +788,7 @@ static void test_prefix_iterator_first_reseek(void){
     printf("  Expected 3 keys on re-seek, got %d\n", count);
     TEST_FAIL("re-seek returned wrong count");
   }
-  printf("  ✓ Re-seek with first() returned %d keys again\n", count);
+  printf("  [OK] Re-seek with first() returned %d keys again\n", count);
 
   kvstore_iterator_close(pIter);
   kvstore_close(kv);
@@ -830,7 +830,7 @@ int main(void){
   printf("========================================\n\n");
 
   if( tests_failed == 0 ){
-    printf(COLOR_GREEN "✓ All prefix search tests passed!" COLOR_RESET "\n\n");
+    printf(COLOR_GREEN "[OK] All prefix search tests passed!" COLOR_RESET "\n\n");
   }
 
   return tests_failed > 0 ? 1 : 0;

@@ -15,6 +15,9 @@
 #include "sqliteInt.h"
 #include "btree.h"
 
+#include <stdint.h>
+#include <inttypes.h>
+
 /*
 ** Compatibility macros: map old SQLite 3.3.0 memory function names
 ** to their SQLite 3.51.200 equivalents so tests and examples compile
@@ -22,7 +25,7 @@
 */
 #define sqliteMalloc(n)     sqlite3MallocZero((n))
 #define sqliteFree(p)       sqlite3_free((p))
-#define sqliteRealloc(p,n)  sqlite3Realloc((p),(u64)(n))
+#define sqliteRealloc(p,n)  sqlite3Realloc((p),(uint64_t)(n))
 #define sqliteStrDup(s)     sqlite3_mprintf("%s",(s))
 
 #ifdef __cplusplus
@@ -40,17 +43,18 @@ typedef struct KVStore KVStore;
 typedef struct KVColumnFamily KVColumnFamily;
 
 /*
-** Error codes (aliases for the corresponding SQLITE_* codes)
+** Error codes — numeric values match the corresponding SQLITE_* codes so
+** that KVSTORE_* and SQLITE_* comparisons are always consistent.
 */
-#define KVSTORE_OK           SQLITE_OK        /* 0  — success */
-#define KVSTORE_ERROR        SQLITE_ERROR     /* 1  — generic error */
-#define KVSTORE_BUSY         SQLITE_BUSY      /* 5  — database locked by another connection */
-#define KVSTORE_LOCKED       SQLITE_LOCKED    /* 6  — database locked within same connection */
-#define KVSTORE_NOMEM        SQLITE_NOMEM     /* 7  — malloc() failed */
-#define KVSTORE_READONLY     SQLITE_READONLY  /* 8  — attempt to write a read-only database */
-#define KVSTORE_CORRUPT      SQLITE_CORRUPT   /* 11 — database file is malformed */
-#define KVSTORE_NOTFOUND     SQLITE_NOTFOUND  /* 12 — key or column family not found */
-#define KVSTORE_PROTOCOL     SQLITE_PROTOCOL  /* 15 — database lock protocol error */
+#define KVSTORE_OK        0   /* success */
+#define KVSTORE_ERROR     1   /* generic error */
+#define KVSTORE_BUSY      5   /* database locked by another connection */
+#define KVSTORE_LOCKED    6   /* database locked within same connection */
+#define KVSTORE_NOMEM     7   /* malloc() failed */
+#define KVSTORE_READONLY  8   /* attempt to write a read-only database */
+#define KVSTORE_CORRUPT   11  /* database file is malformed */
+#define KVSTORE_NOTFOUND  12  /* key or column family not found */
+#define KVSTORE_PROTOCOL  15  /* database lock protocol error */
 
 /*
 ** Maximum number of column families
@@ -149,6 +153,24 @@ struct KVStoreConfig {
   */
   int walSizeLimit;
 };
+
+/*
+** Memory helpers — wrappers around the SQLite allocator.
+**
+** snkv_malloc(n) — allocate n bytes, zero-initialised.
+** snkv_free(p)   — free a pointer returned by snkv_malloc or kvstore_get.
+**
+** When including snkv.h without SNKV_IMPLEMENTATION (header-only use),
+** the sqlite3 allocator functions are forward-declared here so the
+** macros compile without the full implementation present.
+*/
+#ifndef SNKV_IMPLEMENTATION
+void *sqlite3MallocZero(unsigned long long);
+void  sqlite3_free(void *);
+#endif
+
+#define snkv_malloc(n)  sqlite3MallocZero((unsigned long long)(n))
+#define snkv_free(p)    sqlite3_free((p))
 
 /*
 ** Open a key-value store with full configuration control.
@@ -682,11 +704,11 @@ const char *kvstore_errmsg(KVStore *pKV);
 */
 typedef struct KVStoreStats KVStoreStats;
 struct KVStoreStats {
-  u64 nPuts;       /* Number of put operations */
-  u64 nGets;       /* Number of get operations */
-  u64 nDeletes;    /* Number of delete operations */
-  u64 nIterations; /* Number of iterations created */
-  u64 nErrors;     /* Number of errors encountered */
+  uint64_t nPuts;       /* Number of put operations */
+  uint64_t nGets;       /* Number of get operations */
+  uint64_t nDeletes;    /* Number of delete operations */
+  uint64_t nIterations; /* Number of iterations created */
+  uint64_t nErrors;     /* Number of errors encountered */
 };
 
 /*

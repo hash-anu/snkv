@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
-** test_config.c — Tests for kvstore_open_v2 / KVStoreConfig
+** test_config.c -- Tests for kvstore_open_v2 / KVStoreConfig
 **
 ** Verifies:
 **   1. NULL config (all defaults)

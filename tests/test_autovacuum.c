@@ -143,7 +143,7 @@ static void test_incremental_vacuum(void){
   size_after_insert = get_file_size(TEST_DB);
   printf("  File size after insert: %ld bytes\n", size_after_insert);
 
-  /* Delete most records — file should NOT shrink yet (incremental mode) */
+  /* Delete most records -- file should NOT shrink yet (incremental mode) */
   rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "reopen");
 

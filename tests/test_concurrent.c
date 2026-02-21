@@ -7,7 +7,7 @@
 ** 10 reader threads verify that every committed key has the correct value.
 **
 ** Each writer owns a unique key range so there are no write conflicts
-** between writers — only the WAL-level serialisation of commits.
+** between writers -- only the WAL-level serialisation of commits.
 */
 
 #include <stdio.h>
@@ -142,7 +142,7 @@ static void *writer_thread(void *arg) {
         if (rc == KVSTORE_OK) {
             res->keys_written++;
         } else if (IS_BUSY(rc) || rc == KVSTORE_LOCKED) {
-            /* Busy during put — rollback and retry the whole batch */
+            /* Busy during put -- rollback and retry the whole batch */
             res->busy_retries++;
             kvstore_rollback(kv);
             i = (i / BATCH_SIZE) * BATCH_SIZE - 1; /* restart batch */
@@ -199,8 +199,8 @@ done:
 typedef struct {
     int id;
     int reads_ok;
-    int reads_missing;   /* key not yet written — acceptable */
-    int reads_wrong;     /* value mismatch — failure */
+    int reads_missing;   /* key not yet written -- acceptable */
+    int reads_wrong;     /* value mismatch -- failure */
     int busy_retries;
     int errors;
     int last_err;
@@ -240,7 +240,7 @@ static void *reader_thread(void *arg) {
                 }
                 sqliteFree(got_val);
             } else if (rc == KVSTORE_NOTFOUND) {
-                /* Writer hasn't committed this key yet — acceptable */
+                /* Writer hasn't committed this key yet -- acceptable */
                 res->reads_missing++;
             } else if (IS_BUSY(rc)) {
                 res->busy_retries++;
@@ -406,19 +406,19 @@ static void test_concurrent_write_read(void) {
 /* ==================== Main ==================== */
 int main(void) {
     printf("\n" CLR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  SNKV Concurrent Read/Write Test (WAL Mode)\n");
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf(CLR_RESET);
 
     srand((unsigned)time(NULL));
 
     test_concurrent_write_read();
 
-    printf("\n════════════════════════════════════════════════════════\n");
+    printf("\n========================================================\n");
     printf("  Results: " CLR_GREEN "%d passed" CLR_RESET ", "
            CLR_RED "%d failed" CLR_RESET "\n", g_passed, g_failed);
-    printf("════════════════════════════════════════════════════════\n\n");
+    printf("========================================================\n\n");
 
     return g_failed > 0 ? 1 : 0;
 }

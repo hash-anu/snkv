@@ -25,13 +25,13 @@ static int tests_failed = 0;
 #define PASS() \
   do { \
     tests_passed++; \
-    printf(COLOR_GREEN "  ✓ PASSED" COLOR_RESET "\n"); \
+    printf(COLOR_GREEN "  [OK] PASSED" COLOR_RESET "\n"); \
   } while(0)
 
 #define FAIL(msg) \
   do { \
     tests_failed++; \
-    printf(COLOR_RED "  ✗ FAILED: %s" COLOR_RESET "\n", msg); \
+    printf(COLOR_RED "  [X] FAILED: %s" COLOR_RESET "\n", msg); \
     return; \
   } while(0)
 
@@ -61,17 +61,17 @@ static void test_cf_create_open(void) {
   /* Get default CF */
   rc = kvstore_cf_get_default(kv, &cf_default);
   ASSERT_OK(rc, "Failed to get default CF");
-  printf("  ✓ Default CF opened\n");
+  printf("  [OK] Default CF opened\n");
   
   /* Create users CF */
   rc = kvstore_cf_create(kv, "users", &cf_users);
   ASSERT_OK(rc, "Failed to create users CF");
-  printf("  ✓ Created 'users' CF\n");
+  printf("  [OK] Created 'users' CF\n");
   
   /* Create sessions CF */
   rc = kvstore_cf_create(kv, "sessions", &cf_sessions);
   ASSERT_OK(rc, "Failed to create sessions CF");
-  printf("  ✓ Created 'sessions' CF\n");
+  printf("  [OK] Created 'sessions' CF\n");
   
   /* Try to create duplicate */
   KVColumnFamily *cf_dup = NULL;
@@ -79,7 +79,7 @@ static void test_cf_create_open(void) {
   if( rc == KVSTORE_OK ){
     FAIL("Should not allow duplicate CF");
   }
-  printf("  ✓ Duplicate CF prevented\n");
+  printf("  [OK] Duplicate CF prevented\n");
   
   /* Clean up */
   kvstore_cf_close(cf_users);
@@ -93,7 +93,7 @@ static void test_cf_create_open(void) {
   
   rc = kvstore_cf_open(kv, "users", &cf_users);
   ASSERT_OK(rc, "Failed to open persisted users CF");
-  printf("  ✓ CF persisted across sessions\n");
+  printf("  [OK] CF persisted across sessions\n");
   
   kvstore_cf_close(cf_users);
   kvstore_close(kv);
@@ -139,7 +139,7 @@ static void test_cf_isolation(void) {
     sqliteFree(val);
     FAIL("Wrong value from users CF");
   }
-  printf("  ✓ users CF: key1 = user_value\n");
+  printf("  [OK] users CF: key1 = user_value\n");
   sqliteFree(val);
   
   rc = kvstore_cf_get(cf_sessions, "key1", 4, &val, &vlen);
@@ -148,7 +148,7 @@ static void test_cf_isolation(void) {
     sqliteFree(val);
     FAIL("Wrong value from sessions CF");
   }
-  printf("  ✓ sessions CF: key1 = session_value\n");
+  printf("  [OK] sessions CF: key1 = session_value\n");
   sqliteFree(val);
   
   /* Verify key doesn't exist in wrong CF */
@@ -166,7 +166,7 @@ static void test_cf_isolation(void) {
   if( exists ){
     FAIL("Key should not exist in sessions CF");
   }
-  printf("  ✓ Keys properly isolated between CFs\n");
+  printf("  [OK] Keys properly isolated between CFs\n");
   
   kvstore_cf_close(cf_users);
   kvstore_cf_close(cf_sessions);
@@ -310,7 +310,7 @@ static void test_cf_iterators(void) {
     printf("  Expected 5 items in cf_a, got %d\n", count_a);
     FAIL("Wrong count in cf_a");
   }
-  printf("  ✓ cf_a has %d items\n", count_a);
+  printf("  [OK] cf_a has %d items\n", count_a);
   
   /* Iterate cf_b */
   rc = kvstore_cf_iterator_create(cf_b, &it);
@@ -332,7 +332,7 @@ static void test_cf_iterators(void) {
     printf("  Expected 3 items in cf_b, got %d\n", count_b);
     FAIL("Wrong count in cf_b");
   }
-  printf("  ✓ cf_b has %d items\n", count_b);
+  printf("  [OK] cf_b has %d items\n", count_b);
   
   kvstore_cf_close(cf_a);
   kvstore_cf_close(cf_b);
@@ -388,7 +388,7 @@ static void test_cf_transactions(void) {
   if( exists ){
     FAIL("key2 should not exist after rollback");
   }
-  printf("  ✓ Rollback works across CFs\n");
+  printf("  [OK] Rollback works across CFs\n");
   
   /* Now commit */
   rc = kvstore_begin(kv, 1);
@@ -415,7 +415,7 @@ static void test_cf_transactions(void) {
   if( !exists ){
     FAIL("key2 should exist after commit");
   }
-  printf("  ✓ Commit works across CFs\n");
+  printf("  [OK] Commit works across CFs\n");
   
   kvstore_cf_close(cf1);
   kvstore_cf_close(cf2);
@@ -452,10 +452,10 @@ int main(void) {
   printf("========================================\n\n");
   
   if( tests_failed == 0 ){
-    printf(COLOR_GREEN "✓ All column family tests passed!" COLOR_RESET "\n\n");
+    printf(COLOR_GREEN "[OK] All column family tests passed!" COLOR_RESET "\n\n");
     return 0;
   }else{
-    printf(COLOR_RED "✗ Some tests failed!" COLOR_RESET "\n\n");
+    printf(COLOR_RED "[X] Some tests failed!" COLOR_RESET "\n\n");
     return 1;
   }
 }
