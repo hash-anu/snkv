@@ -68,7 +68,8 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_wal.c tests/test_stress.c tests/test_prefix.c \
            tests/test_concurrent.c \
            tests/test_crash_recovery.c \
-           tests/test_autovacuum.c
+           tests/test_autovacuum.c \
+           tests/test_config.c
 TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
 
 # ---- Example files ----
@@ -112,11 +113,13 @@ test: tests
 	  ./$$t || exit 1; \
 	  echo; \
 	done
-	rm -f *.db
+	rm -f *.db *.db-wal *.db-shm
 
 clean:
 	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
 	rm -f snkv.h
-	rm -f *.db tests/*.db examples/*.db
+	rm -f *.db *.db-wal *.db-shm
+	rm -f tests/*.db tests/*.db-wal tests/*.db-shm
+	rm -f examples/*.db examples/*.db-wal examples/*.db-shm
 
 .PHONY: all clean tests test examples run-examples snkv.h

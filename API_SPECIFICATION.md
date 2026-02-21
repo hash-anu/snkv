@@ -1,6 +1,6 @@
 # SNKV API Specification
 
-**Version:** 1.0
+**Version:** 1.1
 **Built on:** SQLite v3.51.200 B-tree engine
 **License:** Apache-2.0
 
@@ -9,6 +9,7 @@
 - [Overview](#overview)
 - [Error Codes](#error-codes)
 - [Constants](#constants)
+- [Configuration](#configuration)
 - [Database Lifecycle](#database-lifecycle)
 - [Key-Value Operations (Default Column Family)](#key-value-operations-default-column-family)
 - [Column Family Management](#column-family-management)
@@ -40,6 +41,7 @@ SNKV is an embedded key-value store built directly on SQLite's B-tree layer. It 
 | `KVColumnFamily` | Opaque handle to a column family |
 | `KVIterator` | Opaque handle to a key-value iterator |
 | `KVStoreStats` | Statistics counters (see [Diagnostics](#diagnostics)) |
+| `KVStoreConfig` | Configuration struct for `kvstore_open_v2` (see [Configuration](#configuration)) |
 
 ---
 
@@ -49,11 +51,13 @@ SNKV is an embedded key-value store built directly on SQLite's B-tree layer. It 
 |------|-------|-------------|
 | `KVSTORE_OK` | 0 | Operation succeeded |
 | `KVSTORE_ERROR` | 1 | Generic error |
-| `KVSTORE_NOTFOUND` | 12 | Key or column family not found |
+| `KVSTORE_BUSY` | 5 | Database locked by another connection (retry or use `busyTimeout`) |
+| `KVSTORE_LOCKED` | 6 | Database locked within the same connection |
 | `KVSTORE_NOMEM` | 7 | Memory allocation failed |
 | `KVSTORE_READONLY` | 8 | Database is read-only |
-| `KVSTORE_LOCKED` | 6 | Database is locked by another connection |
 | `KVSTORE_CORRUPT` | 11 | Database file is corrupted |
+| `KVSTORE_NOTFOUND` | 12 | Key or column family not found |
+| `KVSTORE_PROTOCOL` | 15 | Database lock protocol error |
 
 All error codes are aliases for the corresponding `SQLITE_*` codes.
 
@@ -61,19 +65,114 @@ All error codes are aliases for the corresponding `SQLITE_*` codes.
 
 ## Constants
 
+### Journal modes
+
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `KVSTORE_JOURNAL_DELETE` | 0 | Rollback journal mode (delete journal on commit) |
-| `KVSTORE_JOURNAL_WAL` | 1 | Write-Ahead Logging mode |
+| `KVSTORE_JOURNAL_WAL` | 1 | Write-Ahead Logging mode (recommended) |
+
+### Sync levels
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `KVSTORE_SYNC_OFF` | 0 | No fsync — fastest, data at risk on power failure |
+| `KVSTORE_SYNC_NORMAL` | 1 | WAL-safe (default) — survives process crash, not power loss |
+| `KVSTORE_SYNC_FULL` | 2 | Power-safe — fsync on every commit, slower writes |
+
+> In WAL mode (`KVSTORE_JOURNAL_WAL`) there is virtually no write-throughput
+> difference between `SYNC_NORMAL` and `SYNC_FULL`.
+
+### Other constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
 | `KVSTORE_MAX_COLUMN_FAMILIES` | 64 | Maximum number of column families per database |
+
+---
+
+## Configuration
+
+### KVStoreConfig
+
+```c
+typedef struct KVStoreConfig KVStoreConfig;
+struct KVStoreConfig {
+  int journalMode;  /* KVSTORE_JOURNAL_WAL (default) or KVSTORE_JOURNAL_DELETE */
+  int syncLevel;    /* KVSTORE_SYNC_NORMAL (default), KVSTORE_SYNC_OFF, or KVSTORE_SYNC_FULL */
+  int cacheSize;    /* Page cache in pages (0 = default = 2000 pages ≈ 8 MB) */
+  int pageSize;     /* Page size in bytes (0 = default = 4096; new databases only) */
+  int readOnly;     /* 1 = open read-only; default 0 */
+  int busyTimeout;  /* ms to retry on SQLITE_BUSY (0 = fail immediately; default 0) */
+};
+```
+
+**Field defaults** (applied when the field is 0 / structure is zero-initialised):
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `journalMode` | `KVSTORE_JOURNAL_WAL` | WAL is strongly recommended |
+| `syncLevel` | `KVSTORE_SYNC_NORMAL` | Safe against process crash |
+| `cacheSize` | 2000 pages (~8 MB) | Larger cache improves read-heavy workloads |
+| `pageSize` | 4096 bytes | Ignored for existing databases |
+| `readOnly` | 0 (read-write) | |
+| `busyTimeout` | 0 (fail immediately) | Set > 0 for multi-process workloads |
 
 ---
 
 ## Database Lifecycle
 
+### kvstore_open_v2
+
+Open or create a key-value store with full configuration control.
+
+```c
+int kvstore_open_v2(
+  const char *zFilename,
+  KVStore **ppKV,
+  const KVStoreConfig *pConfig
+);
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `zFilename` | `const char *` | Path to database file. `NULL` for in-memory. |
+| `ppKV` | `KVStore **` | Output pointer to the opened `KVStore` handle. |
+| `pConfig` | `const KVStoreConfig *` | Configuration. `NULL` uses all defaults (same as `kvstore_open` with `KVSTORE_JOURNAL_WAL`). |
+
+**Returns:** `KVSTORE_OK` on success, error code otherwise.
+
+**Examples:**
+
+```c
+/* Default config — WAL mode, NORMAL sync, 8 MB cache */
+KVStore *kv;
+kvstore_open_v2("mydb.db", &kv, NULL);
+
+/* Explicitly configured */
+KVStoreConfig cfg = {0};
+cfg.journalMode = KVSTORE_JOURNAL_WAL;
+cfg.syncLevel   = KVSTORE_SYNC_FULL;     /* power-safe */
+cfg.cacheSize   = 4000;                  /* ~16 MB cache */
+cfg.busyTimeout = 5000;                  /* retry up to 5 s */
+kvstore_open_v2("mydb.db", &kv, &cfg);
+
+/* Read-only open */
+KVStoreConfig ro = {0};
+ro.readOnly = 1;
+kvstore_open_v2("mydb.db", &kv, &ro);
+```
+
+---
+
 ### kvstore_open
 
-Open or create a key-value store database.
+Open or create a key-value store (simplified interface).
+
+Equivalent to calling `kvstore_open_v2` with `pConfig->journalMode = journalMode`
+and all other fields at their defaults.
 
 ```c
 int kvstore_open(
@@ -92,9 +191,6 @@ int kvstore_open(
 | `journalMode` | `int` | `KVSTORE_JOURNAL_DELETE` or `KVSTORE_JOURNAL_WAL`. |
 
 **Returns:** `KVSTORE_OK` on success, error code otherwise.
-
-**Notes:**
-- The database is always opened with incremental auto-vacuum enabled. Call `kvstore_incremental_vacuum()` to reclaim unused space after deleting data.
 
 **Example:**
 ```c
@@ -549,7 +645,7 @@ Commit the current transaction, making all changes durable.
 int kvstore_commit(KVStore *pKV);
 ```
 
-**Durability:** In WAL mode with the default `synchronous=FULL`, `kvstore_commit()` fsyncs the WAL file, ensuring committed data survives power loss.
+**Durability:** In WAL mode with the default `syncLevel = KVSTORE_SYNC_NORMAL`, `kvstore_commit()` does not fsync on every commit but guarantees survival of process crash. Use `KVSTORE_SYNC_FULL` for power-loss safety.
 
 ### kvstore_rollback
 
@@ -575,20 +671,28 @@ kvstore_commit(kv);    /* all three writes are atomic */
 
 If no explicit transaction is active, each `kvstore_put`, `kvstore_delete`, etc. runs in its own auto-committed transaction. For bulk operations, wrapping multiple operations in an explicit transaction is significantly faster.
 
-### Handling SQLITE_BUSY
+### Handling KVSTORE_BUSY
 
-When multiple connections access the same database, write operations may return `SQLITE_BUSY`. Applications should retry with backoff:
+When multiple connections access the same database, write operations may return `KVSTORE_BUSY`. The simplest fix is to set `busyTimeout` in `KVStoreConfig` — SNKV will automatically retry for up to that many milliseconds before returning `KVSTORE_BUSY`:
+
+```c
+KVStoreConfig cfg = {0};
+cfg.busyTimeout = 5000;   /* retry for up to 5 seconds */
+kvstore_open_v2("shared.db", &kv, &cfg);
+```
+
+For manual retry without `busyTimeout`:
 
 ```c
 int rc;
 int retries = 0;
 do {
     rc = kvstore_begin(kv, 1);
-    if (rc == SQLITE_BUSY || rc == KVSTORE_LOCKED) {
+    if (rc == KVSTORE_BUSY || rc == KVSTORE_LOCKED) {
         usleep(1000 + (rand() % 5000));
         retries++;
     }
-} while ((rc == SQLITE_BUSY || rc == KVSTORE_LOCKED) && retries < 100);
+} while ((rc == KVSTORE_BUSY || rc == KVSTORE_LOCKED) && retries < 100);
 ```
 
 ---
@@ -698,7 +802,14 @@ SNKV uses SQLite's memory allocator internally. The following macros are provide
 | `sqliteRealloc(p, n)` | `sqlite3Realloc(p, n)` | Resize allocation |
 | `sqliteStrDup(s)` | `sqlite3_mprintf("%s", s)` | Duplicate a string |
 
-**Rule:** Any pointer returned by `kvstore_get`, `kvstore_cf_get`, `kvstore_cf_list`, or `kvstore_integrity_check` must be freed with `sqliteFree()`.
+When using the **single-header** (`snkv.h`) build, the following aliases are also available and preferred in application code:
+
+| Macro | Description |
+|-------|-------------|
+| `snkv_malloc(n)` | Alias for `sqliteMalloc(n)` |
+| `snkv_free(p)` | Alias for `sqliteFree(p)` |
+
+**Rule:** Any pointer returned by `kvstore_get`, `kvstore_cf_get`, `kvstore_cf_list`, or `kvstore_integrity_check` must be freed with `sqliteFree()` (or `snkv_free()` in single-header builds).
 
 Iterator key/value pointers (`kvstore_iterator_key`, `kvstore_iterator_value`) are **not** caller-owned and must **not** be freed.
 

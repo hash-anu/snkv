@@ -10,12 +10,14 @@ tests/test_mutex_journal
 tests/test_json
 tests/test_wal
 tests/test_concurrent
+tests/test_config
 tests/test_crash_recovery
 libsnkv.a
 tests/test_stress
 tests/test_prefix
 examples/basic
 examples/benchmark
+examples/config
 examples/column_families
 examples/iterators
 examples/session_store

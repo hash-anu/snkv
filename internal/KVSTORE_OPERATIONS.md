@@ -45,7 +45,7 @@ key-value interface with column families, iterators, and transactions.
 
 1.  [Data Structures](#1-data-structures)
 2.  [Storage Model: BLOBKEY Encoding](#2-storage-model-blobkey-encoding)
-3.  [kvstore_open](#3-kvstore_open)
+3.  [kvstore_open_v2 / kvstore_open](#3-kvstore_open_v2--kvstore_open)
 4.  [kvstore_close](#4-kvstore_close)
 5.  [kvstore_begin](#5-kvstore_begin)
 6.  [kvstore_commit](#6-kvstore_commit)
@@ -90,6 +90,16 @@ key-value interface with column families, iterators, and transactions.
   │   pDefaultCF   → KVColumnFamily*   default column family │
   │   apCF[]       → KVColumnFamily**  open named CFs        │
   │   stats        → KVStoreStats      {nPuts nGets nDel ...}│
+  │                                                          │
+  │   db->busyHandler.xBusyHandler → kvstoreBusyHandler()   │
+  │   db->busyHandler.pBusyArg     → KVBusyCtx* (or NULL)   │
+  │   db->busyTimeout              → int (ms, or 0)         │
+  └──────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ KVBusyCtx  (heap-allocated; set when busyTimeout > 0)   │
+  │   timeoutMs    → int               max wait in ms        │
+  │   pVfs         → sqlite3_vfs*      VFS for OsSleep       │
   └──────────────────────────────────────────────────────────┘
            │ pDefaultCF / apCF[i]
            ▼
@@ -193,35 +203,86 @@ hash of the CF name (with linear probing for collisions):
 
 ---
 
-## 3. kvstore_open
+## 3. kvstore_open_v2 / kvstore_open
 
-Opens a key-value store database file. Handles both new and existing
-databases. On success, holds a **persistent read transaction** so that
-subsequent `get`/`exists` calls require no `BeginTrans`/`Commit` overhead.
+`kvstore_open_v2` is the primary open function. It accepts a `KVStoreConfig`
+struct to control journal mode, sync level, cache size, page size, read-only
+access, and busy-retry timeout. `kvstore_open` is a thin backward-compatible
+wrapper that delegates to `kvstore_open_v2`.
 
 ```
-  kvstore_open("test.db", &kv, KVSTORE_JOURNAL_WAL)
+  kvstore_open_v2("test.db", &kv, &cfg)
           │
           ├── Step 1: sqlite3_initialize()
           │
-          ├── Step 2: Allocate structures
-          │     ┌────────────────────────────────────────────┐
-          │     │ KVStore {                                   │
-          │     │   db      = alloc sqlite3{}                 │
-          │     │   pMutex  = sqlite3_mutex_alloc(RECURSIVE)  │
-          │     │   closing = 0                               │
-          │     │   inTrans = 0                               │
-          │     │ }                                           │
-          │     └────────────────────────────────────────────┘
+          ├── Step 2: Resolve config defaults (zero-value → default)
+          │     ┌────────────────────────────────────────────────────┐
+          │     │ cfg == NULL        → all-zero KVStoreConfig        │
+          │     │ journalMode == 0   → KVSTORE_JOURNAL_WAL           │
+          │     │ syncLevel   == 0   → KVSTORE_SYNC_NORMAL           │
+          │     │ cacheSize   == 0   → 2000 pages (~8 MB)            │
+          │     │ pageSize    == 0   → 4096 bytes (B-tree default)   │
+          │     │ readOnly    == 0   → read-write                    │
+          │     │ busyTimeout == 0   → no busy retry                 │
+          │     └────────────────────────────────────────────────────┘
           │
-          ├── Step 3: Open B-tree
-          │     sqlite3BtreeOpen(vfs, "test.db", db, &pBt, ...)
+          ├── Step 3: Allocate structures
+          │     ┌────────────────────────────────────────────────────┐
+          │     │ KVStore {                                           │
+          │     │   db      = alloc sqlite3{}                         │
+          │     │   pMutex  = sqlite3_mutex_alloc(RECURSIVE)          │
+          │     │   closing = 0                                       │
+          │     │   inTrans = 0                                       │
+          │     │ }                                                   │
+          │     └────────────────────────────────────────────────────┘
+          │
+          ├── Step 4: Open B-tree
+          │     flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+          │     if cfg.readOnly:
+          │       flags = SQLITE_OPEN_READONLY  (no CREATE)
+          │     sqlite3BtreeOpen(vfs, "test.db", db, &pBt, 0, flags)
           │       └── PagerOpen → OsOpen → open or create file
           │
-          ├── Step 4: Set cache size
-          │     sqlite3BtreeSetCacheSize(pBt, 2000)
+          ├── Step 5: Set page size  (new databases only)
+          │     if cfg.pageSize != 0:
+          │       sqlite3BtreeSetPageSize(pBt, pageSize, -1, 0)
+          │       ┌───────────────────────────────────────────────┐
+          │       │ New DB  → sets page size before first write   │
+          │       │ Old DB  → returns SQLITE_READONLY (silently   │
+          │       │           ignored; existing page size wins)   │
+          │       └───────────────────────────────────────────────┘
           │
-          ├── Step 5: Enable incremental auto-vacuum
+          ├── Step 6: Set cache size
+          │     sqlite3BtreeSetCacheSize(pBt, cacheSize)
+          │
+          ├── Step 7: Set pager sync flags  (skipped if readOnly)
+          │     syncFlag = (syncLevel + 1) | PAGER_CACHESPILL
+          │     ┌─────────────────────────────────────────────────────┐
+          │     │ SYNC_OFF    (0) → flag = 0x01  SYNCHRONOUS_OFF      │
+          │     │ SYNC_NORMAL (1) → flag = 0x02  SYNCHRONOUS_NORMAL   │
+          │     │ SYNC_FULL   (2) → flag = 0x03  SYNCHRONOUS_FULL     │
+          │     └─────────────────────────────────────────────────────┘
+          │     sqlite3_mutex_enter(pKV->db->mutex)
+          │     sqlite3BtreeSetPagerFlags(pBt, syncFlag)
+          │     sqlite3_mutex_leave(pKV->db->mutex)
+          │
+          ├── Step 8: Install busy handler  (if busyTimeout > 0)
+          │     ┌────────────────────────────────────────────────────┐
+          │     │ KVBusyCtx {                                         │
+          │     │   timeoutMs = cfg.busyTimeout                       │
+          │     │   pVfs      = sqlite3_vfs_find(NULL)                │
+          │     │ }  (heap-allocated via sqlite3_malloc)              │
+          │     │                                                     │
+          │     │ db->busyHandler.xBusyHandler = kvstoreBusyHandler   │
+          │     │ db->busyHandler.pBusyArg     = ctx                  │
+          │     │                                                     │
+          │     │ kvstoreBusyHandler(ctx, nBusy):                     │
+          │     │   if nBusy * 1ms >= timeoutMs → return 0 (give up)  │
+          │     │   sqlite3OsSleep(pVfs, 1000 µs)  → sleep 1 ms      │
+          │     │   return 1  (retry)                                 │
+          │     └────────────────────────────────────────────────────┘
+          │
+          ├── Step 9: Enable auto-vacuum  (skipped if readOnly)
           │     sqlite3BtreeSetAutoVacuum(pBt, BTREE_AUTOVACUUM_INCR)
           │     ┌───────────────────────────────────────────┐
           │     │ New DB  → stores mode in header (OK)       │
@@ -229,7 +290,7 @@ subsequent `get`/`exists` calls require no `BeginTrans`/`Commit` overhead.
           │     │           ignored (header wins)            │
           │     └───────────────────────────────────────────┘
           │
-          ├── Step 6: Set journal mode
+          ├── Step 10: Set journal mode  (skipped if readOnly)
           │     sqlite3BtreeSetVersion(pBt, ver)
           │     ┌──────────────────────────────────────┐
           │     │ ver=1 → Rollback journal (DELETE)     │
@@ -237,7 +298,7 @@ subsequent `get`/`exists` calls require no `BeginTrans`/`Commit` overhead.
           │     └──────────────────────────────────────┘
           │     sqlite3BtreeCommit(pBt)
           │
-          ├── Step 7: Detect new vs existing database
+          ├── Step 11: Detect new vs existing database
           │     sqlite3BtreeBeginTrans(pBt, 0, 0)
           │     sqlite3BtreeGetMeta(pBt, META_DEFAULT_CF_ROOT, &root)
           │     sqlite3BtreeGetMeta(pBt, META_CF_METADATA_ROOT, &meta)
@@ -248,7 +309,11 @@ subsequent `get`/`exists` calls require no `BeginTrans`/`Commit` overhead.
           │     │ root != 0 → EXISTING database         │
           │     └──────────────────────────────────────┘
           │
-          ├── Step 7a: [NEW DB] Initialize tables
+          ├── Step 11a: [NEW DB] Initialize tables
+          │     if readOnly:
+          │       kvstoreTeardownNoLock(pKV)
+          │       return KVSTORE_READONLY
+          │               "cannot open empty database read-only"
           │     │
           │     ├── createDefaultCF()
           │     │     BtreeBeginTrans(wrflag=1)
@@ -264,11 +329,11 @@ subsequent `get`/`exists` calls require no `BeginTrans`/`Commit` overhead.
           │           BtreeUpdateMeta(META_CF_COUNT, 1)
           │           BtreeCommit()
           │
-          ├── Step 7b: [EXISTING DB] Restore handles
+          ├── Step 11b: [EXISTING DB] Restore handles
           │     Allocate KVColumnFamily{iTable=root, pReadCur=NULL}
           │     pKV->iMetaTable = meta
           │
-          ├── Step 8: Allocate shared KeyInfo
+          ├── Step 12: Allocate shared KeyInfo
           │     ┌────────────────────────────────────────┐
           │     │ KeyInfo {                               │
           │     │   enc       = SQLITE_UTF8               │
@@ -278,11 +343,23 @@ subsequent `get`/`exists` calls require no `BeginTrans`/`Commit` overhead.
           │     │ Used by ALL BLOBKEY cursor comparisons  │
           │     └────────────────────────────────────────┘
           │
-          └── Step 9: Open persistent read transaction
+          └── Step 13: Open persistent read transaction
                 sqlite3BtreeBeginTrans(pBt, 0, 0)
                 pKV->inTrans = 1   ← held for lifetime of store
                 *ppKV = pKV
                 return KVSTORE_OK
+
+  kvstore_open — thin backward-compatible wrapper:
+  ┌──────────────────────────────────────────────────────────┐
+  │ int kvstore_open(path, ppKV, journalMode) {              │
+  │   KVStoreConfig cfg;                                     │
+  │   memset(&cfg, 0, sizeof(cfg));                          │
+  │   cfg.journalMode = journalMode;                         │
+  │   return kvstore_open_v2(path, ppKV, &cfg);              │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+  All other fields default: syncLevel=NORMAL, cacheSize=2000,
+  pageSize=4096 (new DBs), readOnly=0, busyTimeout=0.
 
   Disk layout after first open (new database):
   ┌────────────────────────────────────────────────┐
@@ -330,6 +407,8 @@ under the mutex so any racing API call returns early safely.
           ├── sqlite3BtreeClose(pBt)
           │     └── PagerClose → OsClose → close fd
           │
+          ├── if db->busyHandler.pBusyArg:
+          │     sqlite3_free(db->busyHandler.pBusyArg)  ← KVBusyCtx
           ├── free(pKeyInfo)         ← shared KeyInfo
           ├── free(zErrMsg)
           ├── sqlite3_mutex_free(db->mutex)
@@ -1515,7 +1594,7 @@ now uses SQLite's native `sqlite3_mutex` API directly.
 **Allocation site:**
 
 ```
-  kvstore_open():
+  kvstore_open_v2():
     pKV->pMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
 
   kvstore_cf_create() / kvstore_cf_open():
@@ -1653,7 +1732,8 @@ persistent read afterward:
 
 | kvstore function             | btree calls                                                                             |
 |------------------------------|-----------------------------------------------------------------------------------------|
-| `kvstore_open`               | `BtreeOpen`, `SetCacheSize`, `SetAutoVacuum`, `SetVersion`, `GetMeta`, `CreateTable`, `UpdateMeta`, `BeginTrans(0)` |
+| `kvstore_open_v2`            | `BtreeOpen`, `SetPageSize`, `SetCacheSize`, `SetPagerFlags`, `SetAutoVacuum`, `SetVersion`, `GetMeta`, `CreateTable`, `UpdateMeta`, `BeginTrans(0)` |
+| `kvstore_open`               | delegates to `kvstore_open_v2` (sets `journalMode`; all other fields default) |
 | `kvstore_close`              | `BtreeRollback` (if txn active), `BtreeClose`                                          |
 | `kvstore_begin`              | `BtreeCommit` (if inTrans=1) + `BtreeBeginTrans(wrflag)`                               |
 | `kvstore_commit`             | `BtreeCommit` + `BtreeBeginTrans(0)` (restore persistent read)                         |

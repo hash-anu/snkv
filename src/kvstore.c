@@ -500,16 +500,84 @@ static int createDefaultCF(KVStore *pKV){
   return KVSTORE_OK;
 }
 
+/* ======================================================================
+** Busy-handler callback for kvstore_open_v2(busyTimeout > 0).
+**
+** SQLite calls this every time a lock cannot be acquired.  We sleep 1 ms
+** per call and give up once the total elapsed time exceeds busyTimeout.
+**
+** pArg — points to a KVBusyCtx embedded in the KVStore allocation.
+** nBusy — number of previous busy calls for this operation.
+** Returns 1 to retry, 0 to surface SQLITE_BUSY to the caller.
+** ====================================================================== */
+typedef struct KVBusyCtx KVBusyCtx;
+struct KVBusyCtx {
+  int timeoutMs;    /* maximum wait in milliseconds */
+  sqlite3_vfs *pVfs;
+};
+
+static int kvstoreBusyHandler(void *pArg, int nBusy){
+  KVBusyCtx *ctx = (KVBusyCtx *)pArg;
+  /* Each call represents ~1 ms of waiting (one 1000-µs sleep below). */
+  if( nBusy * 1 >= ctx->timeoutMs ) return 0;  /* give up */
+  sqlite3OsSleep(ctx->pVfs, 1000);              /* sleep 1 ms */
+  return 1;                                     /* retry */
+}
+
+/* ======================================================================
+** Shared teardown helper — releases all resources owned by a partially or
+** fully initialised KVStore.  Used by both kvstore_open_v2 error paths
+** and kvstore_close.
+** ====================================================================== */
+static void kvstoreTeardownNoLock(KVStore *pKV){
+  int i;
+  if( pKV->pDefaultCF ){
+    if( pKV->pDefaultCF->pReadCur ) kvstoreFreeCursor(pKV->pDefaultCF->pReadCur);
+    if( pKV->pDefaultCF->pMutex )   sqlite3_mutex_free(pKV->pDefaultCF->pMutex);
+    sqlite3_free(pKV->pDefaultCF->zName);
+    sqlite3_free(pKV->pDefaultCF);
+    pKV->pDefaultCF = 0;
+  }
+  for( i = 0; i < pKV->nCF; i++ ){
+    if( pKV->apCF[i] ){
+      if( pKV->apCF[i]->pReadCur ) kvstoreFreeCursor(pKV->apCF[i]->pReadCur);
+      if( pKV->apCF[i]->pMutex )   sqlite3_mutex_free(pKV->apCF[i]->pMutex);
+      sqlite3_free(pKV->apCF[i]->zName);
+      sqlite3_free(pKV->apCF[i]);
+    }
+  }
+  sqlite3_free(pKV->apCF);
+  if( pKV->pBt ) sqlite3BtreeClose(pKV->pBt);
+  sqlite3_free(pKV->pKeyInfo);
+  if( pKV->zErrMsg ) sqlite3_free(pKV->zErrMsg);
+  /* Free the busy-handler context if we allocated one */
+  if( pKV->db ){
+    sqlite3_free(pKV->db->busyHandler.pBusyArg);
+    if( pKV->db->mutex ) sqlite3_mutex_free(pKV->db->mutex);
+    sqlite3_free(pKV->db);
+  }
+}
+
 /*
-** Open a key-value store database file.
+** Open a key-value store with full configuration control.
 */
-int kvstore_open(
+int kvstore_open_v2(
   const char *zFilename,
   KVStore **ppKV,
-  int journalMode
+  const KVStoreConfig *pConfig
 ){
   KVStore *pKV;
   int rc;
+
+  /* Resolve configuration — use defaults for any zero/unset field */
+  int journalMode  = pConfig ? pConfig->journalMode  : KVSTORE_JOURNAL_WAL;
+  int syncLevel    = pConfig ? pConfig->syncLevel    : KVSTORE_SYNC_NORMAL;
+  int cacheSize    = pConfig ? pConfig->cacheSize    : 0;
+  int pageSize     = pConfig ? pConfig->pageSize     : 0;
+  int readOnly     = pConfig ? pConfig->readOnly     : 0;
+  int busyTimeout  = pConfig ? pConfig->busyTimeout  : 0;
+
+  if( cacheSize <= 0 ) cacheSize = KVSTORE_DEFAULT_CACHE_SIZE;
 
   if( ppKV == NULL ){
     return KVSTORE_ERROR;
@@ -526,7 +594,7 @@ int kvstore_open(
     return KVSTORE_NOMEM;
   }
 
-  /* Create main mutex first */
+  /* Create main mutex */
   pKV->pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
   if( !pKV->pMutex ){
     sqlite3_free(pKV);
@@ -543,92 +611,121 @@ int kvstore_open(
   pKV->db->mutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
   pKV->db->aLimit[SQLITE_LIMIT_LENGTH] = SQLITE_MAX_LENGTH;
 
-  /* Open the btree (pVfs, filename, db, ppBt, flags, vfsFlags) */
+  /* Install busy handler if a positive timeout was requested */
+  if( busyTimeout > 0 ){
+    KVBusyCtx *ctx = (KVBusyCtx*)sqlite3MallocZero(sizeof(KVBusyCtx));
+    if( !ctx ){
+      sqlite3_mutex_free(pKV->db->mutex);
+      sqlite3_free(pKV->db);
+      sqlite3_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return KVSTORE_NOMEM;
+    }
+    ctx->timeoutMs = busyTimeout;
+    ctx->pVfs      = sqlite3_vfs_find(0);
+    pKV->db->busyHandler.xBusyHandler = kvstoreBusyHandler;
+    pKV->db->busyHandler.pBusyArg     = ctx;
+    pKV->db->busyTimeout              = busyTimeout;
+  }
+
+  /* Choose VFS flags based on readOnly */
+  int vfsFlags = readOnly
+    ? (SQLITE_OPEN_READONLY  | SQLITE_OPEN_MAIN_DB)
+    : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+
+  /* Open the btree */
   rc = sqlite3BtreeOpen(
-    sqlite3_vfs_find(0),       /* default VFS */
+    sqlite3_vfs_find(0),
     zFilename,
     pKV->db,
     &pKV->pBt,
-    0,                         /* no btree flags */
-    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB
+    0,           /* no btree flags */
+    vfsFlags
   );
   if( rc != SQLITE_OK ){
     kvstoreSetError(pKV, "failed to open btree: error %d", rc);
-    sqlite3_mutex_free(pKV->db->mutex);
-    sqlite3_free(pKV->db);
+    kvstoreTeardownNoLock(pKV);
     sqlite3_mutex_free(pKV->pMutex);
     sqlite3_free(pKV);
     return rc;
   }
 
-  /* Set cache size for better performance */
-  sqlite3BtreeSetCacheSize(pKV->pBt, KVSTORE_DEFAULT_CACHE_SIZE);
+  /* Set page size for new databases (must be before any write transaction).
+  ** sqlite3BtreeSetPageSize returns SQLITE_READONLY for existing databases
+  ** (page size already fixed) — silently ignore that. */
+  if( pageSize > 0 ){
+    int psRc = sqlite3BtreeSetPageSize(pKV->pBt, pageSize, -1, 0);
+    if( psRc != SQLITE_OK && psRc != SQLITE_READONLY ){
+      kvstoreSetError(pKV, "failed to set page size: error %d", psRc);
+      kvstoreTeardownNoLock(pKV);
+      sqlite3_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return psRc;
+    }
+  }
 
-  /* Always enable incremental auto-vacuum.  Must happen before any
-  ** transaction (including SetVersion below) so that BTS_PAGESIZE_FIXED
-  ** is not yet set.  For existing databases the mode is already stored
-  ** in the header and this call returns SQLITE_READONLY which we
-  ** silently ignore — the header value wins. */
+  /* Set cache size */
+  sqlite3BtreeSetCacheSize(pKV->pBt, cacheSize);
+
+  /* Set synchronous level via pager flags.
+  ** KVSTORE_SYNC_* maps to PAGER_SYNCHRONOUS_* with a +1 offset:
+  **   KVSTORE_SYNC_OFF    (0) → PAGER_SYNCHRONOUS_OFF    (0x01)
+  **   KVSTORE_SYNC_NORMAL (1) → PAGER_SYNCHRONOUS_NORMAL (0x02)
+  **   KVSTORE_SYNC_FULL   (2) → PAGER_SYNCHRONOUS_FULL   (0x03)
+  ** PAGER_CACHESPILL allows dirty pages to spill under memory pressure. */
   {
+    unsigned syncFlag = (unsigned)(syncLevel + 1) | PAGER_CACHESPILL;
+    sqlite3_mutex_enter(pKV->db->mutex);
+    sqlite3BtreeSetPagerFlags(pKV->pBt, syncFlag);
+    sqlite3_mutex_leave(pKV->db->mutex);
+  }
+
+  if( !readOnly ){
+    /* Enable incremental auto-vacuum.  Must happen before SetVersion.
+    ** SQLITE_READONLY returned for existing databases — that is expected. */
     int avRc = sqlite3BtreeSetAutoVacuum(pKV->pBt, BTREE_AUTOVACUUM_INCR);
-    /* SQLITE_READONLY means the DB already has data — mode is fixed.
-    ** This is expected for existing databases, so ignore it. */
     if( avRc != SQLITE_OK && avRc != SQLITE_READONLY ){
       kvstoreSetError(pKV, "failed to set auto-vacuum mode: error %d", avRc);
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
+      kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
       return avRc;
     }
-  }
 
-  /* Set journal mode (rollback-delete or WAL).
-  ** sqlite3BtreeSetVersion(pBt, 2) writes the WAL format marker into the
-  ** database header (bytes 18-19).  On the next transaction the pager will
-  ** detect this and open the WAL file automatically.
-  ** sqlite3BtreeSetVersion(pBt, 1) reverts to rollback-journal mode.
-  */
-  {
-    int ver = (journalMode == KVSTORE_JOURNAL_WAL) ? 2 : 1;
-    rc = sqlite3BtreeSetVersion(pKV->pBt, ver);
-    if( rc == SQLITE_OK ){
-      /* SetVersion leaves a transaction open – commit it */
-      rc = sqlite3BtreeCommit(pKV->pBt);
-    }
-    if( rc != SQLITE_OK ){
-      kvstoreSetError(pKV, "failed to set journal mode: error %d", rc);
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
-      sqlite3_mutex_free(pKV->pMutex);
-      sqlite3_free(pKV);
-      return rc;
+    /* Set journal mode (WAL or delete-journal).
+    ** sqlite3BtreeSetVersion(2) writes the WAL marker into the header.
+    ** sqlite3BtreeSetVersion(1) reverts to rollback-journal mode. */
+    {
+      int ver = (journalMode == KVSTORE_JOURNAL_WAL) ? 2 : 1;
+      rc = sqlite3BtreeSetVersion(pKV->pBt, ver);
+      if( rc == SQLITE_OK ){
+        rc = sqlite3BtreeCommit(pKV->pBt);  /* SetVersion leaves a txn open */
+      }
+      if( rc != SQLITE_OK ){
+        kvstoreSetError(pKV, "failed to set journal mode: error %d", rc);
+        kvstoreTeardownNoLock(pKV);
+        sqlite3_mutex_free(pKV->pMutex);
+        sqlite3_free(pKV);
+        return rc;
+      }
     }
   }
 
-  /* Check if this is a new database or existing one */
+  /* Check whether this is a new or existing database */
   u32 defaultCFRoot = 0;
-  u32 cfMetaRoot = 0;
-  int needsInit = 0;
+  u32 cfMetaRoot    = 0;
+  int needsInit     = 0;
 
-  /* Begin a read transaction so BtreeGetMeta can access page 1 */
   rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
   if( rc != SQLITE_OK ){
     kvstoreSetError(pKV, "failed to begin read transaction: error %d", rc);
-    sqlite3BtreeClose(pKV->pBt);
-    sqlite3_mutex_free(pKV->db->mutex);
-    sqlite3_free(pKV->db);
+    kvstoreTeardownNoLock(pKV);
     sqlite3_mutex_free(pKV->pMutex);
     sqlite3_free(pKV);
     return rc;
   }
-
-  /* Try to read existing metadata */
   sqlite3BtreeGetMeta(pKV->pBt, META_DEFAULT_CF_ROOT, &defaultCFRoot);
   sqlite3BtreeGetMeta(pKV->pBt, META_CF_METADATA_ROOT, &cfMetaRoot);
-
   sqlite3BtreeCommit(pKV->pBt);
 
   if( defaultCFRoot == 0 ){
@@ -636,61 +733,50 @@ int kvstore_open(
   }
 
   if( needsInit ){
-    /* New database - initialize */
+    if( readOnly ){
+      /* Cannot initialise a brand-new database in read-only mode */
+      kvstoreSetError(pKV, "cannot open empty database read-only");
+      kvstoreTeardownNoLock(pKV);
+      sqlite3_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return KVSTORE_READONLY;
+    }
     rc = createDefaultCF(pKV);
     if( rc != SQLITE_OK ){
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
+      kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
       return rc;
     }
-
     rc = initCFMetadataTable(pKV);
     if( rc != SQLITE_OK ){
-      if( pKV->pDefaultCF ){
-        if( pKV->pDefaultCF->pMutex ) sqlite3_mutex_free(pKV->pDefaultCF->pMutex);
-        sqlite3_free(pKV->pDefaultCF->zName);
-        sqlite3_free(pKV->pDefaultCF);
-      }
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
+      kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
       return rc;
     }
   }else{
-    /* Existing database - open default CF */
+    /* Existing database — open the default CF */
     KVColumnFamily *pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
     if( !pCF ){
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
+      kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
       return KVSTORE_NOMEM;
     }
-
-    pCF->pKV = pKV;
-    pCF->zName = sqliteStrDup(DEFAULT_CF_NAME);
+    pCF->pKV    = pKV;
+    pCF->zName  = sqliteStrDup(DEFAULT_CF_NAME);
     pCF->iTable = (int)defaultCFRoot;
     pCF->refCount = 1;
-
-    /* Create mutex for default CF */
     pCF->pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
     if( !pCF->pMutex ){
       sqlite3_free(pCF->zName);
       sqlite3_free(pCF);
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
+      kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
       return KVSTORE_NOMEM;
     }
-
     pKV->pDefaultCF = pCF;
     pKV->iMetaTable = (int)cfMetaRoot;
   }
@@ -699,15 +785,7 @@ int kvstore_open(
   {
     KeyInfo *pKI = (KeyInfo*)sqlite3MallocZero(SZ_KEYINFO(1));
     if( !pKI ){
-      /* Clean up everything allocated so far */
-      if( pKV->pDefaultCF ){
-        if( pKV->pDefaultCF->pMutex ) sqlite3_mutex_free(pKV->pDefaultCF->pMutex);
-        sqlite3_free(pKV->pDefaultCF->zName);
-        sqlite3_free(pKV->pDefaultCF);
-      }
-      sqlite3BtreeClose(pKV->pBt);
-      sqlite3_mutex_free(pKV->db->mutex);
-      sqlite3_free(pKV->db);
+      kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
       return KVSTORE_NOMEM;
@@ -717,25 +795,37 @@ int kvstore_open(
     pKI->nKeyField = 1;
     pKI->nAllField = 1;
     pKI->db        = pKV->db;
-    pKI->aSortFlags = 0;  /* ascending, no collation */
+    pKI->aSortFlags = 0;
     pKI->aColl[0]  = 0;
     pKV->pKeyInfo  = pKI;
   }
 
-  /* Keep a persistent read transaction open so that get/exists calls
-  ** issued without an explicit kvstore_begin() bypass BeginTrans/Commit
-  ** overhead entirely.  Write transactions upgrade this read lease and
-  ** restore it again on commit/rollback. */
+  /* Keep a persistent read transaction open to avoid per-operation
+  ** BeginTrans/Commit overhead on the hot read path. */
   {
     int rcR = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
-    if( rcR == SQLITE_OK ){
-      pKV->inTrans = 1;
-    }
-    /* If the read-open fails it is non-fatal; auto-trans will handle it. */
+    if( rcR == SQLITE_OK ) pKV->inTrans = 1;
+    /* Non-fatal if it fails; auto-trans will handle individual operations. */
   }
 
   *ppKV = pKV;
   return KVSTORE_OK;
+}
+
+/*
+** Open a key-value store database file (simplified interface).
+** Delegates to kvstore_open_v2 with journalMode set and all other
+** fields at their defaults.
+*/
+int kvstore_open(
+  const char *zFilename,
+  KVStore **ppKV,
+  int journalMode
+){
+  KVStoreConfig cfg;
+  memset(&cfg, 0, sizeof(cfg));
+  cfg.journalMode = journalMode;
+  return kvstore_open_v2(zFilename, ppKV, &cfg);
 }
 
 /*
@@ -795,7 +885,10 @@ int kvstore_close(KVStore *pKV){
     sqlite3_free(pKV->zErrMsg);
   }
 
-  /* Free db resources */
+  /* Free db resources (including busy-handler context if installed) */
+  if( pKV->db->busyHandler.pBusyArg ){
+    sqlite3_free(pKV->db->busyHandler.pBusyArg);
+  }
   if( pKV->db->mutex ){
     sqlite3_mutex_free(pKV->db->mutex);
   }
