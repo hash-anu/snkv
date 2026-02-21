@@ -67,7 +67,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential valgrind jq bc
+        sudo apt-get install -y build-essential valgrind jq bc lcov
 
     - name: Build (debug mode)
       run: make BUILD=debug tests
@@ -300,6 +300,31 @@ jobs:
       with:
         name: valgrind-logs
         path: valgrind-*.log
+
+    # ---- Code coverage (kvstore.c only) ----
+    - name: Build with coverage instrumentation
+      run: make BUILD=coverage tests
+
+    - name: Run tests to generate coverage data
+      run: |
+        for t in tests/test_*; do
+          [ -x "$t" ] || continue
+          ./"$t" 2>/dev/null || true
+          rm -f *.db *.db-wal *.db-shm
+        done
+
+    - name: Extract kvstore.c coverage
+      run: |
+        lcov --capture --directory src --output-file coverage.info
+        lcov --extract coverage.info '*/src/kvstore.c' --output-file coverage_kvstore.info
+        lcov --summary coverage_kvstore.info
+
+    - name: Upload to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        files: coverage_kvstore.info
+        flags: kvstore
+        name: kvstore-coverage
 
     # ---- Publish badge JSON files to 'badges' branch ----
     - name: Publish badges to badges branch

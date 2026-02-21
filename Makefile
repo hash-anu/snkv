@@ -13,6 +13,12 @@ ifeq ($(BUILD),release)
   CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
 endif
 
+ifeq ($(BUILD),coverage)
+  CFLAGS = $(BASE_CFLAGS) -g -O0 --coverage
+  COVERAGE_LDFLAGS = --coverage
+endif
+COVERAGE_LDFLAGS ?=
+
 # ---- Platform detection ----
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 
@@ -106,7 +112,7 @@ run-examples: examples
 tests: $(TEST_BIN)
 
 tests/%$(TARGET_EXT): tests/%.c $(LIB_OBJ)
-	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDFLAGS) $(COVERAGE_LDFLAGS)
 
 test: tests
 	@for t in $(TEST_BIN); do \
@@ -124,14 +130,24 @@ clean:
 	rm -f examples/*.db examples/*.db-wal examples/*.db-shm
 	rm -f tests/test_crash_10gb$(TARGET_EXT)
 	rm -f tests/crash_10gb.db tests/crash_10gb.db-wal tests/crash_10gb.db-shm
+	rm -f src/*.gcda src/*.gcno coverage.info coverage_kvstore.info
+	rm -rf coverage_html
 
 # ---- 10 GB kill-9 crash safety test (run manually, not part of 'make test') ----
 # Requires ~11 GB free disk and takes 15-60 minutes depending on storage speed.
 # POSIX only (Linux / macOS) for 'run' mode; 'write' and 'verify' are cross-platform.
 tests/test_crash_10gb$(TARGET_EXT): tests/test_crash_10gb.c $(LIB_OBJ)
-	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDFLAGS) $(COVERAGE_LDFLAGS)
 
 test-crash-10gb: tests/test_crash_10gb$(TARGET_EXT)
 	./tests/test_crash_10gb$(TARGET_EXT) run tests/crash_10gb.db
 
-.PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb
+coverage:
+	$(MAKE) BUILD=coverage tests
+	@for t in $(TEST_BIN); do ./"$$t" 2>/dev/null || true; rm -f *.db *.db-wal *.db-shm; done
+	lcov --capture --directory src --output-file coverage.info
+	lcov --extract coverage.info '*/src/kvstore.c' --output-file coverage_kvstore.info
+	genhtml coverage_kvstore.info --output-directory coverage_html
+	@echo "Coverage report: open coverage_html/index.html"
+
+.PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb coverage
