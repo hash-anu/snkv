@@ -83,6 +83,17 @@ All error codes are aliases for the corresponding `SQLITE_*` codes.
 > In WAL mode (`KVSTORE_JOURNAL_WAL`) there is virtually no write-throughput
 > difference between `SYNC_NORMAL` and `SYNC_FULL`.
 
+### Checkpoint modes
+
+Used with `kvstore_checkpoint()`. Map directly to `SQLITE_CHECKPOINT_*` values.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `KVSTORE_CHECKPOINT_PASSIVE` | 0 | Copy frames without blocking; may not flush all if readers hold back frames |
+| `KVSTORE_CHECKPOINT_FULL` | 1 | Wait for active writers to finish, then copy all frames |
+| `KVSTORE_CHECKPOINT_RESTART` | 2 | Like FULL, then reset the WAL write position to the start |
+| `KVSTORE_CHECKPOINT_TRUNCATE` | 3 | Like RESTART, then truncate the WAL file to zero bytes |
+
 ### Other constants
 
 | Constant | Value | Description |
@@ -103,7 +114,8 @@ struct KVStoreConfig {
   int cacheSize;    /* Page cache in pages (0 = default = 2000 pages ≈ 8 MB) */
   int pageSize;     /* Page size in bytes (0 = default = 4096; new databases only) */
   int readOnly;     /* 1 = open read-only; default 0 */
-  int busyTimeout;  /* ms to retry on SQLITE_BUSY (0 = fail immediately; default 0) */
+  int busyTimeout;   /* ms to retry on SQLITE_BUSY (0 = fail immediately; default 0) */
+  int walSizeLimit;  /* auto-checkpoint every N commits in WAL mode (0 = disabled) */
 };
 ```
 
@@ -117,6 +129,7 @@ struct KVStoreConfig {
 | `pageSize` | 4096 bytes | Ignored for existing databases |
 | `readOnly` | 0 (read-write) | |
 | `busyTimeout` | 0 (fail immediately) | Set > 0 for multi-process workloads |
+| `walSizeLimit` | 0 (disabled) | Auto-checkpoint every N commits; 0 = no auto-checkpoint |
 
 ---
 
@@ -787,6 +800,62 @@ kvstore_incremental_vacuum(kv, 0);
 
 /* Or reclaim incrementally (e.g., 50 pages at a time) */
 kvstore_incremental_vacuum(kv, 50);
+```
+
+### kvstore_checkpoint
+
+Run a WAL checkpoint, copying WAL frames back into the main database file.
+
+```c
+int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt);
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pKV` | `KVStore *` | Database handle. |
+| `mode` | `int` | Checkpoint mode — one of the `KVSTORE_CHECKPOINT_*` constants. |
+| `pnLog` | `int *` | Output: total WAL frames after checkpoint. May be `NULL`. |
+| `pnCkpt` | `int *` | Output: frames successfully written to the database file. May be `NULL`. |
+
+**Returns:**
+
+| Code | Meaning |
+|------|---------|
+| `KVSTORE_OK` | Checkpoint completed (or no-op on non-WAL database). |
+| `KVSTORE_BUSY` | A write transaction is currently open — commit or rollback first. |
+| `KVSTORE_ERROR` | Other failure (check `kvstore_errmsg()`). |
+
+**Notes:**
+- The persistent read transaction is temporarily released around the checkpoint call (required by the btree layer) and is automatically restored afterward.
+- On non-WAL (DELETE journal) databases this is a no-op that returns `KVSTORE_OK` with `*pnLog = *pnCkpt = 0`.
+- `PASSIVE` mode is non-blocking: it copies only frames not held back by active readers and returns immediately. It is the safest choice for background use.
+- If `*pnLog == *pnCkpt` after a `PASSIVE` checkpoint, all WAL frames have been successfully copied (no frames are blocked by readers).
+- Use `TRUNCATE` to also shrink the WAL file to zero bytes, which frees disk space.
+
+**WAL auto-checkpoint via `walSizeLimit`:**
+
+As an alternative to calling `kvstore_checkpoint()` manually, set `cfg.walSizeLimit = N` when opening the store. SNKV then automatically runs a `PASSIVE` checkpoint after every N committed write transactions, keeping WAL growth bounded without any application-level calls.
+
+```c
+KVStoreConfig cfg = {0};
+cfg.journalMode  = KVSTORE_JOURNAL_WAL;
+cfg.walSizeLimit = 500;   /* PASSIVE checkpoint every 500 committed writes */
+kvstore_open_v2("mydb.db", &kv, &cfg);
+```
+
+**Manual checkpoint example:**
+```c
+/* Flush all WAL frames — call after a batch of writes */
+int nLog = 0, nCkpt = 0;
+int rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+if (rc == KVSTORE_OK) {
+    printf("WAL: %d frames total, %d checkpointed\n", nLog, nCkpt);
+}
+
+/* Reclaim WAL disk space (truncate WAL file to zero) */
+kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_TRUNCATE, NULL, NULL);
 ```
 
 ---

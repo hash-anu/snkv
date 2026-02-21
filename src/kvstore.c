@@ -156,6 +156,10 @@ struct KVStore {
   sqlite3_mutex *pMutex;  /* Recursive mutex protecting store operations (SQLITE_MUTEX_RECURSIVE) */
   int closing;            /* Set to 1 when kvstore_close() is in progress */
 
+  /* WAL auto-checkpoint */
+  int walSizeLimit;       /* Checkpoint every N commits (0 = disabled) */
+  int walCommits;         /* Write commits since last auto-checkpoint */
+
   /* Column families */
   KVColumnFamily *pDefaultCF;  /* Default column family */
   KVColumnFamily **apCF;       /* Array of open column families */
@@ -559,6 +563,21 @@ static void kvstoreTeardownNoLock(KVStore *pKV){
 }
 
 /*
+** Increment the commit counter and run a PASSIVE checkpoint when the
+** walSizeLimit threshold is reached. Called in the TRANS_NONE window
+** (after sqlite3BtreeCommit, before the read transaction is restored).
+*/
+static void kvstoreAutoCheckpoint(KVStore *pKV){
+  if( pKV->walSizeLimit > 0 ){
+    pKV->walCommits++;
+    if( pKV->walCommits >= pKV->walSizeLimit ){
+      pKV->walCommits = 0;
+      sqlite3BtreeCheckpoint(pKV->pBt, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+    }
+  }
+}
+
+/*
 ** Open a key-value store with full configuration control.
 */
 int kvstore_open_v2(
@@ -808,6 +827,9 @@ int kvstore_open_v2(
     /* Non-fatal if it fails; auto-trans will handle individual operations. */
   }
 
+  /* WAL auto-checkpoint config (walCommits starts at 0 via sqlite3MallocZero). */
+  pKV->walSizeLimit = pConfig ? pConfig->walSizeLimit : 0;
+
   *ppKV = pKV;
   return KVSTORE_OK;
 }
@@ -986,6 +1008,7 @@ int kvstore_commit(KVStore *pKV){
   rc = sqlite3BtreeCommit(pKV->pBt);
   if( rc == SQLITE_OK ){
     pKV->inTrans = 0;
+    kvstoreAutoCheckpoint(pKV);
     /* Restore the persistent read transaction so that subsequent get/exists
     ** calls avoid per-call BeginTrans/Commit overhead. */
     if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
@@ -1035,6 +1058,55 @@ int kvstore_rollback(KVStore *pKV){
     if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
       pKV->inTrans = 1;
     }
+  }
+
+  sqlite3_mutex_leave(pKV->pMutex);
+  return rc;
+}
+
+/*
+** Run a WAL checkpoint on the database.
+*/
+int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt){
+  int rc;
+  if( pKV == NULL ) return KVSTORE_ERROR;
+
+  sqlite3_mutex_enter(pKV->pMutex);
+
+  if( pKV->closing ){
+    sqlite3_mutex_leave(pKV->pMutex);
+    return KVSTORE_ERROR;
+  }
+
+  if( pKV->inTrans == 2 ){
+    kvstoreSetError(pKV, "commit or rollback the write transaction first");
+    sqlite3_mutex_leave(pKV->pMutex);
+    return KVSTORE_BUSY;
+  }
+
+  if( pnLog  ) *pnLog  = 0;
+  if( pnCkpt ) *pnCkpt = 0;
+
+  /* Release the persistent read transaction — sqlite3BtreeCheckpoint
+  ** requires TRANS_NONE (returns SQLITE_LOCKED otherwise). */
+  if( pKV->inTrans == 1 ){
+    sqlite3BtreeCommit(pKV->pBt);
+    pKV->inTrans = 0;
+  }
+
+#ifndef SQLITE_OMIT_WAL
+  rc = sqlite3BtreeCheckpoint(pKV->pBt, mode, pnLog, pnCkpt);
+#else
+  rc = SQLITE_OK;
+#endif
+
+  /* Restore the persistent read transaction. */
+  if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
+    pKV->inTrans = 1;
+  }
+
+  if( rc != SQLITE_OK ){
+    kvstoreSetError(pKV, "checkpoint failed: error %d", rc);
   }
 
   sqlite3_mutex_leave(pKV->pMutex);
@@ -1611,8 +1683,11 @@ static int kvstore_cf_put_internal(
       rc = sqlite3BtreeCommit(pKV->pBt);
       pKV->inTrans = 0;
       /* Restore persistent read transaction */
-      if( rc == SQLITE_OK && sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
-        pKV->inTrans = 1;
+      if( rc == SQLITE_OK ){
+        kvstoreAutoCheckpoint(pKV);
+        if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
+          pKV->inTrans = 1;
+        }
       }
     }
   }else{
@@ -1830,8 +1905,11 @@ static int kvstore_cf_delete_internal(
       rc = sqlite3BtreeCommit(pKV->pBt);
       pKV->inTrans = 0;
       /* Restore persistent read transaction */
-      if( rc == SQLITE_OK && sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
-        pKV->inTrans = 1;
+      if( rc == SQLITE_OK ){
+        kvstoreAutoCheckpoint(pKV);
+        if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
+          pKV->inTrans = 1;
+        }
       }
     }
   }else{
