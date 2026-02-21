@@ -78,6 +78,8 @@ kvstore_open_v2("mydb.db", &db, &cfg);
 
 ## Installation & Build
 
+### Linux / macOS
+
 ```bash
 make              # builds libsnkv.a
 make snkv.h       # generates single-header version
@@ -86,6 +88,36 @@ make run-examples # run all examples
 make test         # run all tests (CI suite)
 make clean
 ```
+
+### Windows (MSYS2 / MinGW64)
+
+**1.** Install [MSYS2](https://www.msys2.org/).
+
+**2.** Launch **"MSYS2 MinGW 64-bit"** from the Start menu (not the plain MSYS2 terminal).
+
+**3.** Install the toolchain:
+
+```bash
+pacman -S --needed mingw-w64-x86_64-gcc make
+```
+
+**4.** Clone and build:
+
+```bash
+git clone https://github.com/hash-anu/snkv.git
+cd snkv
+make              # builds libsnkv.a
+make snkv.h       # generates single-header
+make examples     # builds .exe examples
+make run-examples
+make test
+```
+
+> All commands must be run from the **MSYS2 MinGW64 shell**. Running `mingw32-make` from
+> a native `cmd.exe` or PowerShell window will not work — the Makefile relies on `sh` and
+> standard Unix tools that are only available inside the MSYS2 environment.
+
+---
 
 ### 10 GB Crash-Safety Stress Test
 
