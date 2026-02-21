@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <assert.h>
+#include <inttypes.h>
 #include "kvstore.h"
 
 #define TEST_DB "kvstore_test.db"
@@ -462,7 +463,7 @@ static void test_statistics(void){
   ASSERT_EQ(1, stats.nGets, "Wrong get count");
   ASSERT_EQ(1, stats.nDeletes, "Wrong delete count");
   
-  printf("  Stats: puts=%llu, gets=%llu, deletes=%llu\n",
+  printf("  Stats: puts=%" PRIu64 ", gets=%" PRIu64 ", deletes=%" PRIu64 "\n",
          stats.nPuts, stats.nGets, stats.nDeletes);
   
   kvstore_close(kv);

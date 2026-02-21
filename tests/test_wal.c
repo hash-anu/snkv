@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -1188,10 +1189,8 @@ static void test_wal_statistics(void){
   KVStoreStats stats;
   rc = kvstore_stats(pKV, &stats);
   if( rc == KVSTORE_OK ){
-    printf("  Stats: puts=%llu, gets=%llu, deletes=%llu\n",
-           (unsigned long long)stats.nPuts,
-           (unsigned long long)stats.nGets,
-           (unsigned long long)stats.nDeletes);
+    printf("  Stats: puts=%" PRIu64 ", gets=%" PRIu64 ", deletes=%" PRIu64 "\n",
+           stats.nPuts, stats.nGets, stats.nDeletes);
     passed = (stats.nPuts == 3 && stats.nGets == 2 && stats.nDeletes == 1);
   }
 

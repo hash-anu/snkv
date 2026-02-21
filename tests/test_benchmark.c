@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 #include "kvstore.h"
 #include "platform_compat.h"
 
@@ -338,9 +339,9 @@ int main(void) {
     KVStoreStats stats;
     kvstore_stats(kv, &stats);
     printf("  Total operations:\n");
-    printf("    - Puts:    %llu\n", stats.nPuts);
-    printf("    - Gets:    %llu\n", stats.nGets);
-    printf("    - Deletes: %llu\n", stats.nDeletes);
+    printf("    - Puts:    %" PRIu64 "\n", stats.nPuts);
+    printf("    - Gets:    %" PRIu64 "\n", stats.nGets);
+    printf("    - Deletes: %" PRIu64 "\n", stats.nDeletes);
 
 
     kvstore_close(kv);

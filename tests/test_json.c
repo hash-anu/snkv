@@ -17,6 +17,7 @@
 #include <string.h>
 #include <assert.h>
 #include <time.h>
+#include <inttypes.h>
 
 /* JSON utilities */
 #include <ctype.h>
@@ -241,9 +242,9 @@ int example1_basic_json_operations(void) {
     KVStoreStats stats;
     kvstore_stats(pKV, &stats);
     printf("\nStatistics:\n");
-    printf("  Puts: %llu\n", stats.nPuts);
-    printf("  Gets: %llu\n", stats.nGets);
-    printf("  Errors: %llu\n", stats.nErrors);
+    printf("  Puts: %" PRIu64 "\n", stats.nPuts);
+    printf("  Gets: %" PRIu64 "\n", stats.nGets);
+    printf("  Errors: %" PRIu64 "\n", stats.nErrors);
     
     kvstore_close(pKV);
     printf("\n[OK] Example 1 completed successfully!\n");
