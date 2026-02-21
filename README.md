@@ -78,6 +78,8 @@ kvstore_open_v2("mydb.db", &db, &cfg);
 
 ## Installation & Build
 
+### Linux / macOS
+
 ```bash
 make              # builds libsnkv.a
 make snkv.h       # generates single-header version
@@ -86,6 +88,97 @@ make run-examples # run all examples
 make test         # run all tests (CI suite)
 make clean
 ```
+
+### Windows (MSYS2 / MinGW64)
+
+SNKV builds natively on Windows using [MSYS2](https://www.msys2.org/) with the MinGW-w64 toolchain.
+No Visual Studio or WSL required.
+
+> **Important:** You must run all commands from the **MSYS2 MinGW64 shell**, not from a
+> native `cmd.exe` or PowerShell window. Several Makefile targets use `sh` and bash `for`
+> loops internally — these work in the MSYS2 shell but fail if you run `mingw32-make` from
+> a native terminal. The make tool inside the MSYS2 shell is called `make`, not `mingw32-make`.
+
+**1. Install MSYS2**
+
+Download and run the installer from [msys2.org](https://www.msys2.org/).
+
+**2. Open the MinGW64 shell**
+
+Launch **"MSYS2 MinGW 64-bit"** from the Start menu.
+This is the correct shell — it provides `gcc`, `make`, `sh`, `awk`, and all Unix tools needed.
+Do not use the plain "MSYS2" terminal or "MSYS2 MSYS" — those use a different compiler.
+
+**3. Install required packages**
+
+```bash
+pacman -S --needed mingw-w64-x86_64-gcc make
+```
+
+**4. Clone and build**
+
+```bash
+git clone https://github.com/hash-anu/snkv.git
+cd snkv
+make              # builds libsnkv.a  (.a static library)
+make snkv.h       # generates single-header  (requires sh — available in MSYS2 shell)
+make examples     # builds examples   (outputs .exe files)
+make run-examples # run all examples
+make test         # run all tests
+make clean
+```
+
+The Makefile auto-detects MinGW and:
+- appends `.exe` to all output binaries
+- omits `-lpthread` / `-lm` (not needed; MinGW's runtime provides the equivalents)
+
+**What does NOT work from a native `cmd.exe` / PowerShell (using `mingw32-make`)**
+
+| Target | Works in MSYS2 shell | Works with `mingw32-make` in cmd |
+|--------|---------------------|----------------------------------|
+| `make` (libsnkv.a) | Yes | Yes |
+| `make snkv.h` | Yes | No — requires `sh` |
+| `make examples` | Yes | No — requires `sh` |
+| `make run-examples` | Yes | No — bash `for` loop in recipe |
+| `make test` | Yes | No — bash `for` loop in recipe |
+| `make clean` | Yes | No — uses `rm -f` |
+
+If you must use `mingw32-make` from a native terminal, only the static library build works.
+Everything else requires the MSYS2 MinGW64 shell.
+
+**Output library**
+
+`make` produces `libsnkv.a` — a static library. Link it into your application:
+
+```bash
+gcc myapp.c -o myapp.exe -I/path/to/snkv/include -L/path/to/snkv -lsnkv
+```
+
+> **Note:** A Windows DLL (`.dll` + `.def` + import library) is not currently provided.
+> If you need dynamic linking, use the single-header approach below instead — it compiles
+> the entire library into your binary in one step with no linking step.
+
+**Single-header (recommended for Windows)**
+
+The simplest way to use SNKV on Windows. No library files, no linking flags:
+
+```c
+// myapp.c — define this in exactly ONE .c file
+#define SNKV_IMPLEMENTATION
+#include "snkv.h"
+
+int main(void) { ... }
+```
+
+```bash
+# Compile from MSYS2 MinGW64 shell
+gcc myapp.c -o myapp.exe
+```
+
+The `snkv.h` file is pre-generated and committed to the repository — no need to run
+`make snkv.h` on Windows. Just copy `snkv.h` from the repo root into your project.
+
+---
 
 ### 10 GB Crash-Safety Stress Test
 
