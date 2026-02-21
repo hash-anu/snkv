@@ -14,11 +14,9 @@
 
 **SNKV** is a lightweight, **ACID-compliant embedded key-value store** built directly on SQLite's B-Tree storage engine — without SQL.
 
-It was born from a simple observation: even conservatively tuned RocksDB (8MB block cache, 2MB write buffer, no compression) consumed ~27 MB RSS for a 1M record workload — 2.5x more than SNKV — while being slower on reads, scans, and mixed workloads. That felt like the wrong tradeoff for embedded or resource-constrained use cases where write throughput isn't the bottleneck.
-
 The idea: bypass the SQL layer entirely and talk directly to SQLite's storage engine. No SQL parser. No query planner. No virtual machine. Just a clean KV API on top of a proven, battle-tested storage core.
 
-> *SQLite-grade reliability. KV-first design. Lower memory footprint and faster reads than RocksDB on small workloads.*
+> *SQLite-grade reliability. KV-first design. Lower overhead for read-heavy and mixed key-value workloads.*
 
 ---
 
@@ -138,51 +136,10 @@ By removing the layers you don't need for key-value workloads, SNKV keeps the pr
 
 ## Benchmarks
 
-> All benchmarks: 1M records, Linux. Numbers averaged across 3 runs. Peak memory from `/usr/bin/time -v` (Maximum RSS).
-> SNKV vs SQLite use identical settings: WAL journal mode, `synchronous=NORMAL`, 2000-page (8 MB) page cache, 4096-byte pages.
+> 1M records, Linux, averaged across 3 runs.
+> Both SNKV and SQLite use identical settings: WAL mode, `synchronous=NORMAL`, 2000-page (8 MB) page cache, 4096-byte pages.
 >
-> Benchmark source code: [SNKV](https://github.com/hash-anu/snkv/blob/master/tests/test_benchmark.c) · [RocksDB](https://github.com/hash-anu/rocksdb-benchmark) · [LMDB](https://github.com/hash-anu/lmdb-benchmark) · [SQLite](https://github.com/hash-anu/sqllite-benchmark-kv)
-
----
-
-### SNKV vs RocksDB
-
-RocksDB configured to match SNKV's durability level: 8MB block cache, 2MB write buffer, 4KB block size, compression disabled, bloom filters disabled, `sync=false` (matching SNKV's `synchronous=NORMAL`).
-
-| Benchmark         | RocksDB     | SNKV        | Notes                                        |
-| ----------------- | ----------- | ----------- | -------------------------------------------- |
-| Sequential writes | 387K ops/s  | 147K ops/s  | RocksDB **2.6x faster** (LSM-tree)           |
-| Random reads      | 50K ops/s   | 142K ops/s  | **SNKV 2.8x faster**                         |
-| Sequential scan   | 937K ops/s  | 3.13M ops/s | **SNKV 3.3x faster**                         |
-| Random updates    | 108K ops/s  | 23K ops/s   | RocksDB **4.6x faster** (LSM-tree)           |
-| Random deletes    | 97K ops/s   | 20K ops/s   | RocksDB **4.8x faster** (LSM tombstones)     |
-| Exists checks     | 37K ops/s   | 156K ops/s  | **SNKV 4.2x faster**                         |
-| Mixed workload    | 40K ops/s   | 50K ops/s   | **SNKV 1.25x faster** (read-heavy 70%)       |
-| Bulk insert       | 362K ops/s  | 241K ops/s  | RocksDB **1.5x faster**                      |
-| **Peak RSS**      | **~27 MB**  | **10.8 MB** | **SNKV uses 2.5x less memory**               |
-
-RocksDB's LSM-tree design dominates write-heavy operations — sequential writes, updates, deletes, and bulk insert. That's the fundamental LSM advantage: writes are append-only to a memtable, no in-place B-tree rebalancing. SNKV's B-tree wins on reads and scans: random reads are 2.8x faster and sequential scan is 3.3x faster because the data is already ordered on disk with no SST file merging overhead. Mixed workload (70% reads) goes to SNKV for the same reason. Memory usage is 2.5x lower — RocksDB's internal structures (block cache, memtables, table readers, compaction state) add up even at minimum configuration.
-
----
-
-### SNKV vs LMDB
-
-LMDB uses memory-mapped I/O, which makes it exceptionally fast — especially for reads and scans. These numbers reflect that honestly.
-
-| Benchmark         | LMDB        | SNKV        | Notes                          |
-| ----------------- | ----------- | ----------- | ------------------------------ |
-| Sequential writes | 245K ops/s  | 181K ops/s  | LMDB faster                    |
-| Random reads      | 779K ops/s  | 154K ops/s  | LMDB 5x faster (mmap)          |
-| Sequential scan   | 37.9M ops/s | 5.95M ops/s | LMDB 6x faster (mmap)          |
-| Random updates    | 119K ops/s  | 48K ops/s   | LMDB faster                    |
-| Random deletes    | 120K ops/s  | 41K ops/s   | LMDB faster                    |
-| Mixed workload    | 173K ops/s  | 97K ops/s   | LMDB 1.8x faster               |
-| Bulk insert       | 1.5M ops/s  | 494K ops/s  | LMDB faster                    |
-| **Peak RSS**      | **170 MB**  | **10.8 MB** | **SNKV uses 16x less memory**  |
-
-LMDB wins on raw throughput across the board — that's the nature of memory-mapped storage. The tradeoff: LMDB maps the entire database into virtual address space, so memory usage scales with database size and requires upfront `mmap` size configuration. SNKV avoids that entirely — fixed, low overhead regardless of database size, and no tuning required.
-
----
+> Benchmark source: [SNKV](https://github.com/hash-anu/snkv/blob/master/tests/test_benchmark.c) · [SQLite](https://github.com/hash-anu/sqllite-benchmark-kv)
 
 ### SNKV vs SQLite (KV workloads)
 
@@ -205,10 +162,18 @@ With identical storage configuration, SNKV wins across every benchmark. The gain
 
 ---
 
+### Running your own LMDB / RocksDB comparison
+
+If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses are here:
+
+- **LMDB** — [github.com/hash-anu/lmdb-benchmark](https://github.com/hash-anu/lmdb-benchmark)
+- **RocksDB** — [github.com/hash-anu/rocksdb-benchmark](https://github.com/hash-anu/rocksdb-benchmark)
+
+---
+
 ## When to Use SNKV
 
 **SNKV is a good fit if:**
-- You're currently using RocksDB or LMDB and memory is a constraint
 - Your workload is read-heavy or mixed (reads + writes)
 - You're running in a memory-constrained or embedded environment
 - You want a clean KV API without writing SQL strings, preparing statements, and binding parameters
@@ -216,8 +181,8 @@ With identical storage configuration, SNKV wins across every benchmark. The gain
 - You want predictable latency — no compaction stalls, no mmap tuning
 
 **Consider alternatives if:**
-- You need maximum write/update/delete throughput → **RocksDB**
-- You need maximum read/scan speed and memory isn't a constraint → **LMDB**
+- You need maximum write/update/delete throughput → **RocksDB** (LSM-tree)
+- You need maximum read/scan speed and memory isn't a constraint → **LMDB** (memory-mapped)
 - You already use SQL elsewhere and want to consolidate → **SQLite directly**
 
 ---
