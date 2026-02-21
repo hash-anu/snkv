@@ -33,7 +33,7 @@ key-value interface with column families, iterators, and transactions.
  └────────────────────┬────────────────────┘
                       │ OsRead / OsWrite / OsSync / ...
  ┌────────────────────▼────────────────────┐
- │        os.c / os_unix.c  (VFS)          │
+ │        os.c / os_unix.c / os_windows.c (VFS) │
  └────────────────────┬────────────────────┘
                       │ read() / write() / fsync()
                    [ Disk ]
