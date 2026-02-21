@@ -358,7 +358,7 @@ int main(void) {
     printf("  Total benchmark time: " COLOR_GREEN "%.2f seconds" COLOR_RESET "\n", 
            total_end - total_start);
         
-    printf("\n" COLOR_GREEN "✓ Benchmark complete!" COLOR_RESET "\n\n");
+    printf("\n" COLOR_GREEN "[OK] Benchmark complete!" COLOR_RESET "\n\n");
     
     /* Cleanup */
     remove(DB_FILE);

@@ -1302,12 +1302,12 @@ int main(void) {
         "|       SNKV Integration & Stress Test Suite                  |\n"
         "|                                                              |\n"
         "|  Modeled after SQLite's storage-engine validation:          |\n"
-        "|   • Edge cases & boundary values                            |\n"
-        "|   • High-volume write storms + integrity checks             |\n"
-        "|   • Large dataset fill/scan/delete                          |\n"
-        "|   • Crash-recovery simulation                               |\n"
-        "|   • Concurrent reader/writer stress                         |\n"
-        "|   • Cross-configuration (DELETE + WAL)                      |\n"
+        "|   - Edge cases & boundary values                            |\n"
+        "|   - High-volume write storms + integrity checks             |\n"
+        "|   - Large dataset fill/scan/delete                          |\n"
+        "|   - Crash-recovery simulation                               |\n"
+        "|   - Concurrent reader/writer stress                         |\n"
+        "|   - Cross-configuration (DELETE + WAL)                      |\n"
         "+==============================================================+\n"
         CLR_RESET "\n");
 

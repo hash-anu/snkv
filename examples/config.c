@@ -15,7 +15,7 @@ static void example_default_config(void)
     printf("=== Default Config (NULL) ===\n");
 
     KVStore *db;
-    /* NULL config — uses WAL, SYNC_NORMAL, 2000-page cache */
+    /* NULL config -- uses WAL, SYNC_NORMAL, 2000-page cache */
     int rc = kvstore_open_v2("cfg_default.db", &db, NULL);
     printf("  kvstore_open_v2(NULL): %s\n", rc == KVSTORE_OK ? "OK" : "FAIL");
 
@@ -59,7 +59,7 @@ static void example_explicit_wal(void)
 /* ------------------------------------------------------------------ */
 static void example_large_cache(void)
 {
-    printf("=== Large Cache (4000 pages ≈ 16 MB) ===\n");
+    printf("=== Large Cache (4000 pages ~16 MB) ===\n");
 
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;

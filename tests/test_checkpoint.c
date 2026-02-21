@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
-** test_checkpoint.c — Tests for kvstore_checkpoint() and walSizeLimit.
+** test_checkpoint.c -- Tests for kvstore_checkpoint() and walSizeLimit.
 */
 
 #include <stdio.h>
@@ -118,7 +118,7 @@ static void test_walsizelimit_auto_checkpoint(void) {
     int rc = kvstore_open_v2(db, &kv, &cfg);
     CHECK(rc == KVSTORE_OK, "open with walSizeLimit=10");
 
-    /* Write 50 records — 5 auto-checkpoints should have fired */
+    /* Write 50 records -- 5 auto-checkpoints should have fired */
     int i;
     char key[32], val[64];
     for (i = 0; i < 50; i++) {
@@ -127,23 +127,23 @@ static void test_walsizelimit_auto_checkpoint(void) {
         kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
 
-    /* After auto-checkpoints the WAL should be small — manually verify
+    /* After auto-checkpoints the WAL should be small -- manually verify
     ** by running a final PASSIVE checkpoint and checking nLog is low. */
     int nLog = -1, nCkpt = -1;
     rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
     CHECK(rc == KVSTORE_OK, "manual checkpoint after auto-checkpoints succeeds");
     /* PASSIVE returns pnLog = total WAL frames, pnCkpt = frames successfully copied.
     ** If auto-checkpoints ran correctly, all frames are already in the DB so the
-    ** manual checkpoint copies none new — but pnLog == pnCkpt means no frames
+    ** manual checkpoint copies none new -- but pnLog == pnCkpt means no frames
     ** are blocked (i.e. auto-checkpoint did its job). */
-    CHECK(nLog == nCkpt, "all WAL frames checkpointed — auto-checkpoint was effective");
+    CHECK(nLog == nCkpt, "all WAL frames checkpointed -- auto-checkpoint was effective");
 
     kvstore_close(kv);
     cleanup(db);
 }
 
 static void test_walsizelimit_disabled(void) {
-    printf("\n--- Test 4: walSizeLimit=0 (disabled) — WAL grows freely ---\n");
+    printf("\n--- Test 4: walSizeLimit=0 (disabled) -- WAL grows freely ---\n");
     const char *db = "ckpt_t4.db";
     cleanup(db);
 
@@ -174,7 +174,7 @@ static void test_walsizelimit_disabled(void) {
 }
 
 static void test_null_output_params(void) {
-    printf("\n--- Test 5: NULL pnLog / pnCkpt — no crash ---\n");
+    printf("\n--- Test 5: NULL pnLog / pnCkpt -- no crash ---\n");
     const char *db = "ckpt_t5.db";
     cleanup(db);
 

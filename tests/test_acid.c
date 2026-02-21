@@ -705,27 +705,27 @@ int main(int argc, char **argv) {
     printf("|  DELETE Journal Mode                                       |\n");
     printf("+============================================================+\n");
     printf("|  [A] Atomicity        %-33s|\n",
-           result_delete.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
+           result_delete.atomicity_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("|  [C] Consistency      %-33s|\n",
-           result_delete.consistency_passed ? "✓ PASSED" : "✗ FAILED");
+           result_delete.consistency_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("|  [I] Isolation        %-33s|\n",
-           result_delete.isolation_passed ? "✓ PASSED" : "✗ FAILED");
+           result_delete.isolation_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("|  [D] Durability       %-33s|\n",
-           result_delete.durability_passed ? "✓ PASSED" : "✗ FAILED");
+           result_delete.durability_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("+============================================================+\n");
     printf("|  WAL Journal Mode                                          |\n");
     printf("+============================================================+\n");
     printf("|  [A] Atomicity        %-33s|\n",
-           result_wal.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
+           result_wal.atomicity_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("|  [C] Consistency      %-33s|\n",
-           result_wal.consistency_passed ? "✓ PASSED" : "✗ FAILED");
+           result_wal.consistency_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("|  [I] Isolation        %-33s|\n",
-           result_wal.isolation_passed ? "✓ PASSED" : "✗ FAILED");
+           result_wal.isolation_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("|  [D] Durability       %-33s|\n",
-           result_wal.durability_passed ? "✓ PASSED" : "✗ FAILED");
+           result_wal.durability_passed ? "[OK] PASSED" : "[X] FAILED");
     printf("+============================================================+\n");
     printf("|  OVERALL              %-33s|\n",
-           all_passed ? "✓ ALL PASSED" : "✗ FAILED");
+           all_passed ? "[OK] ALL PASSED" : "[X] FAILED");
     printf("+============================================================+\n\n");
   }
 

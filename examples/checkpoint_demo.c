@@ -22,7 +22,7 @@ static void example_auto_checkpoint(void)
     int rc = kvstore_open_v2("ckpt_auto.db", &db, &cfg);
     printf("  open (walSizeLimit=20): %s\n", rc == KVSTORE_OK ? "OK" : "FAIL");
 
-    /* Write 60 records — 3 auto-checkpoints will fire automatically */
+    /* Write 60 records -- 3 auto-checkpoints will fire automatically */
     int i;
     for (i = 0; i < 60; i++) {
         char key[32], val[32];
@@ -32,11 +32,11 @@ static void example_auto_checkpoint(void)
     }
     printf("  wrote 60 records (3 auto-checkpoints fired at commits 20, 40, 60)\n");
 
-    /* Manual PASSIVE checkpoint — all frames already copied by auto-checkpoints */
+    /* Manual PASSIVE checkpoint -- all frames already copied by auto-checkpoints */
     int nLog = 0, nCkpt = 0;
     rc = kvstore_checkpoint(db, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
     printf("  PASSIVE checkpoint: rc=%d  nLog=%d  nCkpt=%d\n", rc, nLog, nCkpt);
-    printf("  (nLog==nCkpt means no frames are stuck — WAL is fully copied)\n");
+    printf("  (nLog==nCkpt means no frames are stuck -- WAL is fully copied)\n");
 
     kvstore_close(db);
     remove("ckpt_auto.db");
@@ -52,12 +52,12 @@ static void example_manual_checkpoint(void)
 
     KVStoreConfig cfg = {0};
     cfg.journalMode  = KVSTORE_JOURNAL_WAL;
-    cfg.walSizeLimit = 0;   /* no auto-checkpoint — we control it manually */
+    cfg.walSizeLimit = 0;   /* no auto-checkpoint -- we control it manually */
 
     KVStore *db;
     kvstore_open_v2("ckpt_manual.db", &db, &cfg);
 
-    /* Write 50 records — WAL grows without auto-checkpoint */
+    /* Write 50 records -- WAL grows without auto-checkpoint */
     int i;
     for (i = 0; i < 50; i++) {
         char key[32], val[32];
@@ -109,7 +109,7 @@ static void example_busy_guard(void)
 
     int rc = kvstore_checkpoint(db, KVSTORE_CHECKPOINT_PASSIVE, NULL, NULL);
     printf("  checkpoint during write txn: rc=%d (%s)\n",
-           rc, rc == KVSTORE_BUSY ? "KVSTORE_BUSY — correctly rejected" : "unexpected");
+           rc, rc == KVSTORE_BUSY ? "KVSTORE_BUSY -- correctly rejected" : "unexpected");
 
     kvstore_rollback(db);
     kvstore_close(db);

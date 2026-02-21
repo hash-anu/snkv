@@ -8,7 +8,7 @@
 **   test_crash_10gb verify <db>   post-crash verifier
 **   test_crash_10gb run    <db>   orchestrate kill cycles + final verify (POSIX only)
 **
-** Self-validating design — no external truth file needed.
+** Self-validating design -- no external truth file needed.
 ** Every value (data and mark) is a unique deterministic 4 KB pseudo-random
 ** byte sequence derived from (txid, key-index) via a Knuth LCG.
 **
@@ -47,7 +47,7 @@
 /* ------------------------------------------------------------------ */
 
 #define BATCH_SIZE      100     /* data keys per transaction                  */
-#define VALUE_SIZE      4096    /* bytes for every value — data AND mark keys */
+#define VALUE_SIZE      4096    /* bytes for every value -- data AND mark keys */
 #define TARGET_SIZE_GB  10      /* write until DB file reaches this size (GB) */
 #define KILL_CYCLES     5       /* kill-9 + verify cycles in run mode         */
 #define KILL_SLEEP_MIN  3       /* minimum seconds before each kill           */
@@ -78,7 +78,7 @@
 ** For mark keys use kidx == BATCH_SIZE (one slot past last data key).
 **
 ** The same (txid, kidx) pair always produces identical bytes on any
-** platform — no seed file or shared state required.
+** platform -- no seed file or shared state required.
 */
 static void generateValue(char *buf, long long txid, int kidx) {
     unsigned int seed =
@@ -140,7 +140,7 @@ static double nowSec(void) {
 ** Since mark keys are zero-padded to 10 digits they sort correctly in
 ** lexicographic order, so the last entry in a forward scan is also the
 ** numerically largest txid. We iterate all of them and keep the max
-** (the extra cost is negligible — there are at most ~26 K mark keys
+** (the extra cost is negligible -- there are at most ~26 K mark keys
 ** even for a 10 GB database).
 */
 static long long findLastTxid(KVStore *kv) {
@@ -156,7 +156,7 @@ static long long findLastTxid(KVStore *kv) {
         int   nKey = 0;
         kvstore_iterator_key(iter, &pKey, &nKey);
 
-        /* Key format: "mark:NNNNNNNNNN" — 5 + 10 = 15 chars minimum */
+        /* Key format: "mark:NNNNNNNNNN" -- 5 + 10 = 15 chars minimum */
         if (pKey && nKey >= 15) {
             char digits[16];
             memcpy(digits, (char *)pKey + 5, 10);
@@ -176,7 +176,7 @@ static long long findLastTxid(KVStore *kv) {
 
 /*
 ** Write transactions continuously until the database file reaches
-** TARGET_SIZE_GB. Safe to kill -9 at any point — WAL will roll back
+** TARGET_SIZE_GB. Safe to kill -9 at any point -- WAL will roll back
 ** any in-flight transaction on the next open.
 **
 ** Returns 0 on normal completion, 1 on fatal error.
@@ -210,7 +210,7 @@ static int doWrite(const char *zDb) {
     double tLastProg = tStart;
     long long txSinceLast = 0;
 
-    /* Stack-allocated value buffer — VALUE_SIZE = 4 KB, safe on stack. */
+    /* Stack-allocated value buffer -- VALUE_SIZE = 4 KB, safe on stack. */
     char val[VALUE_SIZE];
     char key[KEY_MAX];
 
@@ -307,10 +307,10 @@ static int doWrite(const char *zDb) {
 /*
 ** Open the database and run four verification passes:
 **
-**   Phase 1 — scan mark: prefix, validate each mark value, build committed[]
-**   Phase 2 — scan data: prefix, validate each value, detect orphaned data
-**   Phase 3 — check every committed txid has exactly BATCH_SIZE data keys
-**   Phase 4 — SQLite integrity_check
+**   Phase 1 -- scan mark: prefix, validate each mark value, build committed[]
+**   Phase 2 -- scan data: prefix, validate each value, detect orphaned data
+**   Phase 3 -- check every committed txid has exactly BATCH_SIZE data keys
+**   Phase 4 -- SQLite integrity_check
 **
 ** Returns 0 on full pass, 1 if any check fails.
 */
@@ -391,7 +391,7 @@ static int doVerify(const char *zDb) {
             digits[10] = '\0';
             long long txid = atoll(digits);
 
-            /* Validate the mark value — it must equal generateValue(txid, BATCH_SIZE). */
+            /* Validate the mark value -- it must equal generateValue(txid, BATCH_SIZE). */
             generateValue(expected, txid, BATCH_SIZE);
             if (nVal != VALUE_SIZE ||
                 memcmp(pVal, expected, VALUE_SIZE) != 0) {
@@ -399,7 +399,7 @@ static int doVerify(const char *zDb) {
                        "[verify] CORRUPT MARK: mark:%010lld value wrong "
                        "(got %d bytes)\n" CLR_RESET, txid, nVal);
                 markCorrupt++;
-                /* Do not add to committed[] — treat as uncommitted. */
+                /* Do not add to committed[] -- treat as uncommitted. */
             } else {
                 if (nCommitted < MAX_TXNS) {
                     committed[nCommitted++] = txid;
@@ -477,13 +477,13 @@ static int doVerify(const char *zDb) {
                 valueErrors++;
             }
 
-            /* b) Orphan check — txid must be in committed[] */
+            /* b) Orphan check -- txid must be in committed[] */
             long long *found = (long long *)bsearch(
                 &txid, committed, (size_t)nCommitted,
                 sizeof(long long), cmpLL);
             if (!found) {
                 printf(CLR_RED
-                       "[verify] ORPHAN: data:%010lld:%05d — "
+                       "[verify] ORPHAN: data:%010lld:%05d -- "
                        "txid not in committed set\n" CLR_RESET,
                        txid, kidx);
                 orphanErrors++;
@@ -509,7 +509,7 @@ static int doVerify(const char *zDb) {
            totalDataKeys);
 
     /* ----------------------------------------------------------------
-    ** Phase 3: completeness — every committed txid must have exactly
+    ** Phase 3: completeness -- every committed txid must have exactly
     **          BATCH_SIZE data keys.  Any deviation means a partial
     **          transaction somehow made it into the committed state.
     ** ---------------------------------------------------------------- */
@@ -540,7 +540,7 @@ static int doVerify(const char *zDb) {
         intOk = 1;
         printf("[verify] Phase 4: " CLR_GREEN "PASS\n" CLR_RESET);
     } else {
-        printf(CLR_RED "[verify] Phase 4: FAIL — %s\n" CLR_RESET,
+        printf(CLR_RED "[verify] Phase 4: FAIL -- %s\n" CLR_RESET,
                errMsg ? errMsg : "unknown error");
     }
     if (errMsg) sqliteFree(errMsg);
@@ -562,7 +562,7 @@ static int doVerify(const char *zDb) {
     printf("  Value mismatches        : %lld\n", valueErrors);
     printf("  Incomplete transactions : %lld\n", incompleteErrors);
     printf("  Integrity check         : %s\n",   intOk ? "PASS" : "FAIL");
-    printf("──────────────────────────────────────────────────\n");
+    printf("--------------------------------------------------\n");
     if (!failed) {
         printf("  " CLR_GREEN "Result: PASS" CLR_RESET "\n");
     } else {
@@ -577,7 +577,7 @@ static int doVerify(const char *zDb) {
 }
 
 /* ------------------------------------------------------------------ */
-/* RUN MODE — orchestrate kill cycles (POSIX only)                     */
+/* RUN MODE -- orchestrate kill cycles (POSIX only)                     */
 /* ------------------------------------------------------------------ */
 
 #ifndef _WIN32
@@ -592,7 +592,7 @@ static int doRun(const char *zDb, const char *argv0) {
 
     printf(CLR_CYAN
            "==============================================================\n"
-           "  SNKV %d GB Kill-9 Crash Safety Test — %d Kill Cycles\n"
+           "  SNKV %d GB Kill-9 Crash Safety Test -- %d Kill Cycles\n"
            "==============================================================\n"
            CLR_RESET "\n",
            TARGET_SIZE_GB, KILL_CYCLES);
@@ -669,7 +669,7 @@ static int doRun(const char *zDb, const char *argv0) {
     if (vRc == 0) {
         printf(CLR_GREEN
                "==============================================================\n"
-               "  ALL %d KILL CYCLES PASSED — %d GB database verified clean\n"
+               "  ALL %d KILL CYCLES PASSED -- %d GB database verified clean\n"
                "==============================================================\n"
                CLR_RESET "\n",
                KILL_CYCLES, TARGET_SIZE_GB);

@@ -177,7 +177,7 @@ int example1_basic_json_operations(void) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
-    printf("✓ Opened kvstore\n");
+    printf("[OK] Opened kvstore\n");
     
     /* Generate a large JSON document (1000 records) */
     jsonData = generateLargeJSON(1000, &jsonSize);
@@ -186,7 +186,7 @@ int example1_basic_json_operations(void) {
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ Generated JSON document: %d bytes\n", jsonSize);
+    printf("[OK] Generated JSON document: %d bytes\n", jsonSize);
     
     /* Validate the generated JSON */
     if (!validateJSON(jsonData, jsonSize)) {
@@ -195,7 +195,7 @@ int example1_basic_json_operations(void) {
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ JSON validation passed\n");
+    printf("[OK] JSON validation passed\n");
     
     /* Insert JSON into kvstore */
     const char *key = "large_json_doc";
@@ -206,7 +206,7 @@ int example1_basic_json_operations(void) {
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ Inserted JSON document with key: %s\n", key);
+    printf("[OK] Inserted JSON document with key: %s\n", key);
     
     /* Fetch JSON back */
     rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
@@ -216,21 +216,21 @@ int example1_basic_json_operations(void) {
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ Fetched JSON document: %d bytes\n", fetchedSize);
+    printf("[OK] Fetched JSON document: %d bytes\n", fetchedSize);
     
     /* Verify data integrity */
     if (compareJSON(jsonData, jsonSize, (char*)fetchedData, fetchedSize)) {
-        printf("✓ Data verification PASSED - JSON matches exactly!\n");
+        printf("[OK] Data verification PASSED - JSON matches exactly!\n");
     } else {
-        fprintf(stderr, "✗ Data verification FAILED - JSON mismatch!\n");
+        fprintf(stderr, "[X] Data verification FAILED - JSON mismatch!\n");
         printf("  Original size: %d, Fetched size: %d\n", jsonSize, fetchedSize);
     }
     
     /* Validate fetched JSON */
     if (validateJSON((char*)fetchedData, fetchedSize)) {
-        printf("✓ Fetched JSON is well-formed\n");
+        printf("[OK] Fetched JSON is well-formed\n");
     } else {
-        fprintf(stderr, "✗ Fetched JSON is malformed!\n");
+        fprintf(stderr, "[X] Fetched JSON is malformed!\n");
     }
     
     /* Cleanup */
@@ -246,7 +246,7 @@ int example1_basic_json_operations(void) {
     printf("  Errors: %llu\n", stats.nErrors);
     
     kvstore_close(pKV);
-    printf("\n✓ Example 1 completed successfully!\n");
+    printf("\n[OK] Example 1 completed successfully!\n");
     
     return 0;
 }
@@ -266,7 +266,7 @@ int example2_multiple_json_documents(void) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
-    printf("✓ Opened kvstore\n");
+    printf("[OK] Opened kvstore\n");
     
     /* Insert JSON documents of varying sizes */
     int sizes[] = {10, 100, 500, 1000, 5000};
@@ -294,7 +294,7 @@ int example2_multiple_json_documents(void) {
             continue;
         }
         
-        printf("  ✓ Inserted %s: %d bytes\n", key, jsonSize);
+        printf("  [OK] Inserted %s: %d bytes\n", key, jsonSize);
         free(jsonData);
     }
     
@@ -313,15 +313,15 @@ int example2_multiple_json_documents(void) {
         
         rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
         if (rc != KVSTORE_OK) {
-            fprintf(stderr, "  ✗ Failed to fetch %s\n", key);
+            fprintf(stderr, "  [X] Failed to fetch %s\n", key);
             free(expectedJSON);
             continue;
         }
         
         if (compareJSON(expectedJSON, expectedSize, (char*)fetchedData, fetchedSize)) {
-            printf("  ✓ %s verified (size: %d bytes)\n", key, fetchedSize);
+            printf("  [OK] %s verified (size: %d bytes)\n", key, fetchedSize);
         } else {
-            fprintf(stderr, "  ✗ %s verification failed!\n", key);
+            fprintf(stderr, "  [X] %s verification failed!\n", key);
         }
         
         sqliteFree(fetchedData);
@@ -329,7 +329,7 @@ int example2_multiple_json_documents(void) {
     }
     
     kvstore_close(pKV);
-    printf("\n✓ Example 2 completed successfully!\n");
+    printf("\n[OK] Example 2 completed successfully!\n");
     
     return 0;
 }
@@ -350,7 +350,7 @@ int example3_column_families_json(void) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
-    printf("✓ Opened kvstore\n");
+    printf("[OK] Opened kvstore\n");
     
     /* Create column families */
     rc = kvstore_cf_create(pKV, "users", &pCF_Users);
@@ -359,7 +359,7 @@ int example3_column_families_json(void) {
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ Created 'users' column family\n");
+    printf("[OK] Created 'users' column family\n");
     
     rc = kvstore_cf_create(pKV, "products", &pCF_Products);
     if (rc != KVSTORE_OK) {
@@ -368,7 +368,7 @@ int example3_column_families_json(void) {
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ Created 'products' column family\n");
+    printf("[OK] Created 'products' column family\n");
     
     /* Insert user JSON documents */
     printf("\nInserting user documents...\n");
@@ -390,9 +390,9 @@ int example3_column_families_json(void) {
         
         rc = kvstore_cf_put(pCF_Users, key, strlen(key), json, jsonLen);
         if (rc == KVSTORE_OK) {
-            printf("  ✓ Inserted %s (%d bytes)\n", key, jsonLen);
+            printf("  [OK] Inserted %s (%d bytes)\n", key, jsonLen);
         } else {
-            fprintf(stderr, "  ✗ Failed to insert %s\n", key);
+            fprintf(stderr, "  [X] Failed to insert %s\n", key);
         }
     }
     
@@ -416,9 +416,9 @@ int example3_column_families_json(void) {
         
         rc = kvstore_cf_put(pCF_Products, key, strlen(key), json, jsonLen);
         if (rc == KVSTORE_OK) {
-            printf("  ✓ Inserted %s (%d bytes)\n", key, jsonLen);
+            printf("  [OK] Inserted %s (%d bytes)\n", key, jsonLen);
         } else {
-            fprintf(stderr, "  ✗ Failed to insert %s\n", key);
+            fprintf(stderr, "  [X] Failed to insert %s\n", key);
         }
     }
     
@@ -434,13 +434,13 @@ int example3_column_families_json(void) {
         
         if (rc == KVSTORE_OK) {
             if (validateJSON((char*)data, size)) {
-                printf("  ✓ %s: valid JSON (%d bytes)\n", key, size);
+                printf("  [OK] %s: valid JSON (%d bytes)\n", key, size);
             } else {
-                fprintf(stderr, "  ✗ %s: invalid JSON!\n", key);
+                fprintf(stderr, "  [X] %s: invalid JSON!\n", key);
             }
             sqliteFree(data);
         } else {
-            fprintf(stderr, "  ✗ Failed to fetch %s\n", key);
+            fprintf(stderr, "  [X] Failed to fetch %s\n", key);
         }
     }
     
@@ -455,13 +455,13 @@ int example3_column_families_json(void) {
         
         if (rc == KVSTORE_OK) {
             if (validateJSON((char*)data, size)) {
-                printf("  ✓ %s: valid JSON (%d bytes)\n", key, size);
+                printf("  [OK] %s: valid JSON (%d bytes)\n", key, size);
             } else {
-                fprintf(stderr, "  ✗ %s: invalid JSON!\n", key);
+                fprintf(stderr, "  [X] %s: invalid JSON!\n", key);
             }
             sqliteFree(data);
         } else {
-            fprintf(stderr, "  ✗ Failed to fetch %s\n", key);
+            fprintf(stderr, "  [X] Failed to fetch %s\n", key);
         }
     }
     
@@ -482,7 +482,7 @@ int example3_column_families_json(void) {
     kvstore_cf_close(pCF_Products);
     kvstore_close(pKV);
     
-    printf("\n✓ Example 3 completed successfully!\n");
+    printf("\n[OK] Example 3 completed successfully!\n");
     return 0;
 }
 
@@ -500,7 +500,7 @@ int example4_nested_json(void) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
-    printf("✓ Opened kvstore\n");
+    printf("[OK] Opened kvstore\n");
     
     /* Test different nesting depths */
     int depths[] = {5, 10, 20, 30};
@@ -526,26 +526,26 @@ int example4_nested_json(void) {
         /* Insert */
         rc = kvstore_put(pKV, key, strlen(key), jsonData, jsonSize);
         if (rc != KVSTORE_OK) {
-            fprintf(stderr, "  ✗ Failed to insert depth %d: %d\n", depths[i], rc);
+            fprintf(stderr, "  [X] Failed to insert depth %d: %d\n", depths[i], rc);
             free(jsonData);
             continue;
         }
-        printf("  ✓ Inserted nested JSON (depth=%d, size=%d bytes)\n", 
+        printf("  [OK] Inserted nested JSON (depth=%d, size=%d bytes)\n", 
                depths[i], jsonSize);
         
         /* Fetch and verify */
         rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
         if (rc != KVSTORE_OK) {
-            fprintf(stderr, "  ✗ Failed to fetch depth %d\n", depths[i]);
+            fprintf(stderr, "  [X] Failed to fetch depth %d\n", depths[i]);
             free(jsonData);
             continue;
         }
         
         if (compareJSON(jsonData, jsonSize, (char*)fetchedData, fetchedSize) &&
             validateJSON((char*)fetchedData, fetchedSize)) {
-            printf("  ✓ Verified nested JSON (depth=%d)\n", depths[i]);
+            printf("  [OK] Verified nested JSON (depth=%d)\n", depths[i]);
         } else {
-            fprintf(stderr, "  ✗ Verification failed for depth %d\n", depths[i]);
+            fprintf(stderr, "  [X] Verification failed for depth %d\n", depths[i]);
         }
         
         sqliteFree(fetchedData);
@@ -553,7 +553,7 @@ int example4_nested_json(void) {
     }
     
     kvstore_close(pKV);
-    printf("\n✓ Example 4 completed successfully!\n");
+    printf("\n[OK] Example 4 completed successfully!\n");
     
     return 0;
 }
@@ -573,7 +573,7 @@ int example5_batch_json_operations(void) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
-    printf("✓ Opened kvstore\n");
+    printf("[OK] Opened kvstore\n");
     
     /* Batch insert with transaction */
     printf("\nBatch inserting %d JSON documents in transaction...\n", numDocs);
@@ -617,7 +617,7 @@ int example5_batch_json_operations(void) {
     clock_t end = clock();
     double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     
-    printf("✓ Inserted %d/%d documents in %.3f seconds\n", 
+    printf("[OK] Inserted %d/%d documents in %.3f seconds\n", 
            successCount, numDocs, elapsed);
     printf("  Average: %.2f docs/sec\n", successCount / elapsed);
     
@@ -636,10 +636,10 @@ int example5_batch_json_operations(void) {
         rc = kvstore_get(pKV, key, strlen(key), &data, &size);
         
         if (rc == KVSTORE_OK && validateJSON((char*)data, size)) {
-            printf("  ✓ Document %d verified\n", idx);
+            printf("  [OK] Document %d verified\n", idx);
             sqliteFree(data);
         } else {
-            fprintf(stderr, "  ✗ Document %d verification failed\n", idx);
+            fprintf(stderr, "  [X] Document %d verification failed\n", idx);
         }
     }
     
@@ -668,12 +668,12 @@ int example5_batch_json_operations(void) {
             }
         }
         
-        printf("  ✓ Found %d documents, %d with valid JSON\n", count, validJSON);
+        printf("  [OK] Found %d documents, %d with valid JSON\n", count, validJSON);
         kvstore_iterator_close(pIter);
     }
     
     kvstore_close(pKV);
-    printf("\n✓ Example 5 completed successfully!\n");
+    printf("\n[OK] Example 5 completed successfully!\n");
     
     return 0;
 }
@@ -692,7 +692,7 @@ int example6_very_large_json(void) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
-    printf("✓ Opened kvstore\n");
+    printf("[OK] Opened kvstore\n");
     
     /* Generate a very large JSON document (50,000 records ~ 5-6 MB) */
     printf("\nGenerating very large JSON document...\n");
@@ -707,18 +707,18 @@ int example6_very_large_json(void) {
         return 1;
     }
     
-    printf("✓ Generated JSON: %.2f MB (%d bytes)\n", 
+    printf("[OK] Generated JSON: %.2f MB (%d bytes)\n", 
            largeSize / (1024.0 * 1024.0), largeSize);
     
     /* Validate */
     printf("Validating JSON structure...\n");
     if (!validateJSON(largeJSON, largeSize)) {
-        fprintf(stderr, "✗ Generated JSON is invalid!\n");
+        fprintf(stderr, "[X] Generated JSON is invalid!\n");
         free(largeJSON);
         kvstore_close(pKV);
         return 1;
     }
-    printf("✓ JSON validation passed\n");
+    printf("[OK] JSON validation passed\n");
     
     /* Insert */
     printf("Inserting large JSON...\n");
@@ -731,13 +731,13 @@ int example6_very_large_json(void) {
     double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     
     if (rc != KVSTORE_OK) {
-        fprintf(stderr, "✗ Failed to insert: %d (%s)\n", rc, kvstore_errmsg(pKV));
+        fprintf(stderr, "[X] Failed to insert: %d (%s)\n", rc, kvstore_errmsg(pKV));
         free(largeJSON);
         kvstore_close(pKV);
         return 1;
     }
     
-    printf("✓ Inserted in %.3f seconds (%.2f MB/sec)\n", 
+    printf("[OK] Inserted in %.3f seconds (%.2f MB/sec)\n", 
            elapsed, (largeSize / (1024.0 * 1024.0)) / elapsed);
     
     /* Fetch */
@@ -751,43 +751,43 @@ int example6_very_large_json(void) {
     elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     
     if (rc != KVSTORE_OK) {
-        fprintf(stderr, "✗ Failed to fetch: %d\n", rc);
+        fprintf(stderr, "[X] Failed to fetch: %d\n", rc);
         free(largeJSON);
         kvstore_close(pKV);
         return 1;
     }
     
-    printf("✓ Fetched in %.3f seconds (%.2f MB/sec)\n",
+    printf("[OK] Fetched in %.3f seconds (%.2f MB/sec)\n",
            elapsed, (fetchedSize / (1024.0 * 1024.0)) / elapsed);
     
     /* Verify */
     printf("Verifying data integrity...\n");
     if (compareJSON(largeJSON, largeSize, (char*)fetchedData, fetchedSize)) {
-        printf("✓ Data verification PASSED - exact match!\n");
+        printf("[OK] Data verification PASSED - exact match!\n");
     } else {
-        fprintf(stderr, "✗ Data verification FAILED!\n");
+        fprintf(stderr, "[X] Data verification FAILED!\n");
         fprintf(stderr, "  Original: %d bytes, Fetched: %d bytes\n", 
                 largeSize, fetchedSize);
     }
     
     if (validateJSON((char*)fetchedData, fetchedSize)) {
-        printf("✓ Fetched JSON is well-formed\n");
+        printf("[OK] Fetched JSON is well-formed\n");
     } else {
-        fprintf(stderr, "✗ Fetched JSON is malformed!\n");
+        fprintf(stderr, "[X] Fetched JSON is malformed!\n");
     }
     
     /* Sync to disk */
     printf("Syncing to disk...\n");
     rc = kvstore_sync(pKV);
     if (rc == KVSTORE_OK) {
-        printf("✓ Database synced successfully\n");
+        printf("[OK] Database synced successfully\n");
     }
     
     sqliteFree(fetchedData);
     free(largeJSON);
     kvstore_close(pKV);
     
-    printf("\n✓ Example 6 completed successfully!\n");
+    printf("\n[OK] Example 6 completed successfully!\n");
     return 0;
 }
 
