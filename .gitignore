@@ -17,6 +17,7 @@ tests/test_stress
 tests/test_prefix
 examples/basic
 examples/benchmark
+examples/config
 examples/column_families
 examples/iterators
 examples/session_store
