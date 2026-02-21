@@ -85,11 +85,15 @@ static void test_truncate_checkpoint(void) {
         kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
 
-    /* WAL file should exist and have content before checkpoint */
+    /* WAL file should exist and have content before checkpoint.
+    ** Skipped on Windows: stat() returns stale size (0) for files held
+    ** open by another handle until FlushFileBuffers / handle close. */
     char walPath[256];
     snprintf(walPath, sizeof(walPath), "%s-wal", db);
+#ifndef _WIN32
     long long walBefore = file_size(walPath);
     CHECK(walBefore > 0, "WAL file has content before checkpoint");
+#endif
 
     int nLog = -1, nCkpt = -1;
     int rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_TRUNCATE, &nLog, &nCkpt);
@@ -157,8 +161,11 @@ static void test_walsizelimit_disabled(void) {
 
     char walPath[256];
     snprintf(walPath, sizeof(walPath), "%s-wal", db);
+#ifndef _WIN32
+    /* Skipped on Windows: stat() returns stale size for open files. */
     long long walSize = file_size(walPath);
     CHECK(walSize > 0, "WAL file has grown (no auto-checkpoint)");
+#endif
 
     kvstore_close(kv);
     cleanup(db);

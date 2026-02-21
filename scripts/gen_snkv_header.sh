@@ -18,8 +18,11 @@ CDIR="$SRCDIR/src"
 
 # Strip lines that include internal project headers.
 # Keeps all system <...> includes except <sqliteInt.h> (used by os_kv.c).
+# Exception: #include "windows.h" (used by os_win.h) is converted to
+# #include <windows.h> so it survives into the amalgamation.
 strip_local_includes() {
   sed \
+    -e 's/^\([[:space:]]*#[[:space:]]*include[[:space:]]*\)"windows\.h"/\1<windows.h>/' \
     -e '/^[[:space:]]*#[[:space:]]*include[[:space:]]*".*"/d' \
     -e '/^[[:space:]]*#[[:space:]]*include[[:space:]]*<sqliteInt\.h>/d'
 }
