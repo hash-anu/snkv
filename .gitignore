@@ -16,6 +16,7 @@ libsnkv.a
 tests/test_stress
 tests/test_prefix
 tests/test_crash_10gb
+tests/test_checkpoint
 examples/basic
 examples/benchmark
 examples/config

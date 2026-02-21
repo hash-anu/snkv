@@ -132,6 +132,7 @@ struct KVStoreConfig {
   int pageSize;     /* DB page size in bytes (0 = 4096, new DBs only)   */
   int readOnly;     /* 1 = open read-only; default 0                    */
   int busyTimeout;  /* ms to retry on SQLITE_BUSY (0 = fail immediately)*/
+  int walSizeLimit; /* auto-checkpoint every N commits (0 = disabled)   */
 };
 
 /* ========== STATISTICS ========== */
