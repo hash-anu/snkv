@@ -85,9 +85,28 @@ make              # builds libsnkv.a
 make snkv.h       # generates single-header version
 make examples     # builds examples
 make run-examples # run all examples
-make test         # run tests
+make test         # run all tests (CI suite)
 make clean
 ```
+
+### 10 GB Crash-Safety Stress Test
+
+A production-scale kill-9 test is included but kept separate from the CI suite.
+It writes unique deterministic key-value pairs into a 10 GB WAL-mode database,
+forcibly kills the writer with `SIGKILL` during active writes, and verifies on
+restart that every committed transaction is present with byte-exact values, no
+partial transactions are visible, and the database has zero corruption.
+
+```bash
+make test-crash-10gb          # run full 5-cycle kill-9 + verify (Linux / macOS)
+
+# individual modes
+./tests/test_crash_10gb write  tests/crash_10gb.db   # continuous writer
+./tests/test_crash_10gb verify tests/crash_10gb.db   # post-crash verifier
+./tests/test_crash_10gb clean  tests/crash_10gb.db   # remove DB files
+```
+
+> Requires ~11 GB free disk. `run` mode is POSIX-only; `write` and `verify` work on all platforms.
 
 ---
 

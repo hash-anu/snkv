@@ -121,5 +121,16 @@ clean:
 	rm -f *.db *.db-wal *.db-shm
 	rm -f tests/*.db tests/*.db-wal tests/*.db-shm
 	rm -f examples/*.db examples/*.db-wal examples/*.db-shm
+	rm -f tests/test_crash_10gb$(TARGET_EXT)
+	rm -f tests/crash_10gb.db tests/crash_10gb.db-wal tests/crash_10gb.db-shm
 
-.PHONY: all clean tests test examples run-examples snkv.h
+# ---- 10 GB kill-9 crash safety test (run manually, not part of 'make test') ----
+# Requires ~11 GB free disk and takes 15-60 minutes depending on storage speed.
+# POSIX only (Linux / macOS) for 'run' mode; 'write' and 'verify' are cross-platform.
+tests/test_crash_10gb$(TARGET_EXT): tests/test_crash_10gb.c $(LIB_OBJ)
+	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDFLAGS)
+
+test-crash-10gb: tests/test_crash_10gb$(TARGET_EXT)
+	./tests/test_crash_10gb$(TARGET_EXT) run tests/crash_10gb.db
+
+.PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb
