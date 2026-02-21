@@ -84,7 +84,7 @@ cat << 'FILE_HEADER'
 **     int main() { ... }
 **
 ** Compile (Linux/macOS):  gcc myapp.c -o myapp
-** Compile (Windows/MSYS): gcc myapp.c -o myapp.exe -lws2_32
+** Compile (Windows/MSYS): gcc myapp.c -o myapp.exe
 **
 ** Usage (C++) — compile the implementation as C, use the API from C++:
 **

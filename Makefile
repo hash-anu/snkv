@@ -24,16 +24,16 @@ ifeq ($(UNAME_S),Darwin)
 endif
 ifeq ($(UNAME_S),Windows)
   # Native Windows / MSYS2 / MinGW
-  LDFLAGS = -lws2_32
+  LDFLAGS = 
   TARGET_EXT = .exe
 endif
 # Fallback for MSYS/Cygwin reporting MINGW/MSYS
 ifneq (,$(findstring MINGW,$(UNAME_S)))
-  LDFLAGS = -lws2_32
+  LDFLAGS =
   TARGET_EXT = .exe
 endif
 ifneq (,$(findstring MSYS,$(UNAME_S)))
-  LDFLAGS = -lws2_32
+  LDFLAGS =
   TARGET_EXT = .exe
 endif
 
