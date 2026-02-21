@@ -406,19 +406,19 @@ static void test_concurrent_write_read(void) {
 /* ==================== Main ==================== */
 int main(void) {
     printf("\n" CLR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  SNKV Concurrent Read/Write Test (WAL Mode)\n");
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf(CLR_RESET);
 
     srand((unsigned)time(NULL));
 
     test_concurrent_write_read();
 
-    printf("\n════════════════════════════════════════════════════════\n");
+    printf("\n========================================================\n");
     printf("  Results: " CLR_GREEN "%d passed" CLR_RESET ", "
            CLR_RED "%d failed" CLR_RESET "\n", g_passed, g_failed);
-    printf("════════════════════════════════════════════════════════\n\n");
+    printf("========================================================\n\n");
 
     return g_failed > 0 ? 1 : 0;
 }

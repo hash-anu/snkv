@@ -552,9 +552,9 @@ static int doVerify(const char *zDb) {
                   incompleteErrors || !intOk);
 
     printf("\n");
-    printf("══════════════════════════════════════════════════\n");
+    printf("==================================================\n");
     printf("  Verification Summary\n");
-    printf("══════════════════════════════════════════════════\n");
+    printf("==================================================\n");
     printf("  Committed transactions  : %d\n",   nCommitted);
     printf("  Corrupt mark values     : %lld\n", markCorrupt);
     printf("  Total data keys checked : %lld\n", totalDataKeys);
@@ -568,7 +568,7 @@ static int doVerify(const char *zDb) {
     } else {
         printf("  " CLR_RED   "Result: FAIL" CLR_RESET "\n");
     }
-    printf("══════════════════════════════════════════════════\n\n");
+    printf("==================================================\n\n");
 
     free(committed);
     free(perTxCount);
@@ -591,9 +591,9 @@ static int doRun(const char *zDb, const char *argv0) {
     srand((unsigned int)time(NULL));
 
     printf(CLR_CYAN
-           "══════════════════════════════════════════════════════════════\n"
+           "==============================================================\n"
            "  SNKV %d GB Kill-9 Crash Safety Test — %d Kill Cycles\n"
-           "══════════════════════════════════════════════════════════════\n"
+           "==============================================================\n"
            CLR_RESET "\n",
            TARGET_SIZE_GB, KILL_CYCLES);
 
@@ -643,9 +643,9 @@ static int doRun(const char *zDb, const char *argv0) {
         waitpid(vPid, &status, 0);
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
             printf(CLR_RED
-                   "══════════════════════════════════════════════════════════════\n"
+                   "==============================================================\n"
                    "  FAIL: Verification failed at cycle %d/%d\n"
-                   "══════════════════════════════════════════════════════════════\n"
+                   "==============================================================\n"
                    CLR_RESET "\n",
                    cycle, KILL_CYCLES);
             return 1;
@@ -668,16 +668,16 @@ static int doRun(const char *zDb, const char *argv0) {
 
     if (vRc == 0) {
         printf(CLR_GREEN
-               "══════════════════════════════════════════════════════════════\n"
+               "==============================================================\n"
                "  ALL %d KILL CYCLES PASSED — %d GB database verified clean\n"
-               "══════════════════════════════════════════════════════════════\n"
+               "==============================================================\n"
                CLR_RESET "\n",
                KILL_CYCLES, TARGET_SIZE_GB);
     } else {
         printf(CLR_RED
-               "══════════════════════════════════════════════════════════════\n"
+               "==============================================================\n"
                "  FINAL VERIFICATION FAILED\n"
-               "══════════════════════════════════════════════════════════════\n"
+               "==============================================================\n"
                CLR_RESET "\n");
     }
     return vRc;

@@ -797,9 +797,9 @@ int example6_very_large_json(void) {
 int main(int argc, char **argv) {
     int runExample = 0;
     
-    printf("╔═══════════════════════════════════════════════════════════╗\n");
-    printf("║  KVStore JSON Examples - Large File Operations           ║\n");
-    printf("╚═══════════════════════════════════════════════════════════╝\n");
+    printf("+===========================================================+\n");
+    printf("|  KVStore JSON Examples - Large File Operations           |\n");
+    printf("+===========================================================+\n");
     
     /* Parse command line */
     if (argc > 1) {
@@ -831,9 +831,9 @@ int main(int argc, char **argv) {
         }
     }
     
-    printf("\n╔═══════════════════════════════════════════════════════════╗\n");
-    printf("║  All examples completed!                                  ║\n");
-    printf("╚═══════════════════════════════════════════════════════════╝\n");
+    printf("\n+===========================================================+\n");
+    printf("|  All examples completed!                                  |\n");
+    printf("+===========================================================+\n");
     
     return 0;
 }

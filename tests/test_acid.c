@@ -676,13 +676,13 @@ int main(int argc, char **argv) {
   srand(time(NULL));
 
   if(verbose) {
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
-    printf("║      KVSTORE ACID COMPLIANCE TEST SUITE v2.0              ║\n");
-    printf("║                                                            ║\n");
-    printf("║  Comprehensive testing of ACID transaction properties     ║\n");
-    printf("║  Tests both DELETE journal and WAL journal modes          ║\n");
-    printf("║  Built on SQLite btree implementation                     ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n+============================================================+\n");
+    printf("|      KVSTORE ACID COMPLIANCE TEST SUITE v2.0              |\n");
+    printf("|                                                            |\n");
+    printf("|  Comprehensive testing of ACID transaction properties     |\n");
+    printf("|  Tests both DELETE journal and WAL journal modes          |\n");
+    printf("|  Built on SQLite btree implementation                     |\n");
+    printf("+============================================================+\n\n");
     printf("Test Database: %s\n\n", dbfile);
   }
 
@@ -699,34 +699,34 @@ int main(int argc, char **argv) {
   int all_passed = passed_delete && passed_wal;
 
   if(verbose) {
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
-    printf("║                    FINAL RESULTS                           ║\n");
-    printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  DELETE Journal Mode                                       ║\n");
-    printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  [A] Atomicity        %-33s║\n",
+    printf("\n+============================================================+\n");
+    printf("|                    FINAL RESULTS                           |\n");
+    printf("+============================================================+\n");
+    printf("|  DELETE Journal Mode                                       |\n");
+    printf("+============================================================+\n");
+    printf("|  [A] Atomicity        %-33s|\n",
            result_delete.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [C] Consistency      %-33s║\n",
+    printf("|  [C] Consistency      %-33s|\n",
            result_delete.consistency_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [I] Isolation        %-33s║\n",
+    printf("|  [I] Isolation        %-33s|\n",
            result_delete.isolation_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [D] Durability       %-33s║\n",
+    printf("|  [D] Durability       %-33s|\n",
            result_delete.durability_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  WAL Journal Mode                                          ║\n");
-    printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  [A] Atomicity        %-33s║\n",
+    printf("+============================================================+\n");
+    printf("|  WAL Journal Mode                                          |\n");
+    printf("+============================================================+\n");
+    printf("|  [A] Atomicity        %-33s|\n",
            result_wal.atomicity_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [C] Consistency      %-33s║\n",
+    printf("|  [C] Consistency      %-33s|\n",
            result_wal.consistency_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [I] Isolation        %-33s║\n",
+    printf("|  [I] Isolation        %-33s|\n",
            result_wal.isolation_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("║  [D] Durability       %-33s║\n",
+    printf("|  [D] Durability       %-33s|\n",
            result_wal.durability_passed ? "✓ PASSED" : "✗ FAILED");
-    printf("╠════════════════════════════════════════════════════════════╣\n");
-    printf("║  OVERALL              %-33s║\n",
+    printf("+============================================================+\n");
+    printf("|  OVERALL              %-33s|\n",
            all_passed ? "✓ ALL PASSED" : "✗ FAILED");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("+============================================================+\n\n");
   }
 
   if(!all_passed) {

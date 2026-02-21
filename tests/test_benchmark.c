@@ -56,9 +56,9 @@ static void print_result(const char *test, double elapsed, int ops) {
 
 static void print_header(const char *title) {
     printf("\n" COLOR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  %s\n", title);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf(COLOR_RESET);
 }
 
@@ -305,12 +305,12 @@ int main(void) {
     double total_start, total_end;
     
     printf("\n");
-    printf(COLOR_BLUE "╔══════════════════════════════════════════════════════════════╗\n");
-    printf("║                  KVStore Performance Benchmark               ║\n");
-    printf("║                                                              ║\n");
-    printf("║  Database: %-50s║\n", DB_FILE);
-    printf("║  Records:  %-50d║\n", NUM_RECORDS);
-    printf("╚══════════════════════════════════════════════════════════════╝\n");
+    printf(COLOR_BLUE "+==============================================================+\n");
+    printf("|                  KVStore Performance Benchmark               |\n");
+    printf("|                                                              |\n");
+    printf("|  Database: %-50s|\n", DB_FILE);
+    printf("|  Records:  %-50d|\n", NUM_RECORDS);
+    printf("+==============================================================+\n");
     printf(COLOR_RESET);
     
     srand(time(NULL));
@@ -351,9 +351,9 @@ int main(void) {
     
     /* Summary */
     printf("\n" COLOR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  SUMMARY\n");
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf(COLOR_RESET);
     printf("  Total benchmark time: " COLOR_GREEN "%.2f seconds" COLOR_RESET "\n", 
            total_end - total_start);

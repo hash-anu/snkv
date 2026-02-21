@@ -657,9 +657,9 @@ static void test_delete_recovery(void) {
 /* ==================== Main ==================== */
 int main(void) {
     printf("\n" CLR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  SNKV Crash Recovery & Transaction Durability Tests\n");
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf(CLR_RESET);
 
     /* Test 1: Committed data survives */
@@ -689,10 +689,10 @@ int main(void) {
 
     /* Summary */
     printf("\n" CLR_CYAN);
-    printf("════════════════════════════════════════════════════════\n");
+    printf("========================================================\n");
     printf("  Results: " CLR_GREEN "%d passed" CLR_RESET ", "
            CLR_RED "%d failed" CLR_RESET "\n", g_passed, g_failed);
-    printf(CLR_CYAN "════════════════════════════════════════════════════════\n");
+    printf(CLR_CYAN "========================================================\n");
     printf(CLR_RESET "\n");
 
     return g_failed > 0 ? 1 : 0;
