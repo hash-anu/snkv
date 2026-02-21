@@ -644,9 +644,7 @@ int kvstore_open_v2(
   );
   if( rc != SQLITE_OK ){
     kvstoreSetError(pKV, "failed to open btree: error %d", rc);
-    sqlite3_mutex_free(pKV->db->mutex);
-    sqlite3_free(pKV->db->busyHandler.pBusyArg);
-    sqlite3_free(pKV->db);
+    kvstoreTeardownNoLock(pKV);
     sqlite3_mutex_free(pKV->pMutex);
     sqlite3_free(pKV);
     return rc;
