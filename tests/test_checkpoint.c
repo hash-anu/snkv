@@ -29,11 +29,13 @@ static void cleanup(const char *db) {
     snprintf(buf, sizeof(buf), "%s-shm", db); remove(buf);
 }
 
+#ifndef _WIN32
 static long long file_size(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return -1LL;
     return (long long)st.st_size;
 }
+#endif
 
 /* ----------------------------------------------------------------------- */
 
