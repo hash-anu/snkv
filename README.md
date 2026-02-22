@@ -123,21 +123,45 @@ make test
 
 The `python/` directory contains a CPython C extension that wraps the full SNKV C API.
 
-**Prerequisites:** Python 3.8+, `python3-dev` (or equivalent), and `make`.
+**Prerequisites:** Python 3.8+, a C compiler, and `make`.
 
 #### Build
 
+**Linux**
+
 ```bash
-# Install system dependencies (Linux)
 sudo apt-get install -y build-essential python3-dev
 
-# Build the extension in-place (no install required)
 cd python
 python3 setup.py build_ext --inplace
 ```
 
-`setup.py` automatically runs `make snkv.h` in the repo root and copies the freshly
-generated amalgamated header before compiling, so no manual header step is needed.
+**macOS**
+
+```bash
+# Compiler comes with Xcode Command Line Tools
+xcode-select --install    # skip if already installed
+
+cd python
+python3 setup.py build_ext --inplace
+```
+
+**Windows (MSYS2 MinGW64)**
+
+Use the **MSYS2 MinGW64 shell** (same environment as the C build).
+Install the MinGW64 Python package so the extension and interpreter share the same runtime:
+
+```bash
+pacman -S --needed mingw-w64-x86_64-python mingw-w64-x86_64-python-pip \
+                   mingw-w64-x86_64-python-setuptools
+
+cd python
+python3 setup.py build_ext --inplace
+```
+
+> On all platforms, `setup.py` automatically runs `make snkv.h` in the repo root
+> and copies the freshly generated amalgamated header before compiling — no
+> manual header step needed.
 
 #### Quick Start
 
@@ -152,10 +176,13 @@ with Store("mydb.db") as db:
 #### Run Tests
 
 ```bash
-# From the repo root — no PYTHONPATH needed
+# Linux / macOS — from the repo root (no PYTHONPATH needed)
 python3 -m pytest python/tests/ -v
 
 # Or from python/
+cd python && python3 -m pytest tests/ -v
+
+# Windows (MSYS2 MinGW64 shell)
 cd python && python3 -m pytest tests/ -v
 ```
 
@@ -164,8 +191,8 @@ All 50 tests should pass.
 #### Run Examples
 
 ```bash
+# Linux / macOS
 cd python
-
 PYTHONPATH=. python3 examples/basic.py           # CRUD, binary data, in-memory store
 PYTHONPATH=. python3 examples/transactions.py    # begin/commit/rollback
 PYTHONPATH=. python3 examples/column_families.py # logical namespaces
@@ -173,6 +200,12 @@ PYTHONPATH=. python3 examples/iterators.py       # ordered scan, prefix scan
 PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WAL limit
 PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
+
+# Windows (MSYS2 MinGW64 shell) — use PYTHONPATH= instead of export
+cd python
+PYTHONPATH=. python3 examples/basic.py
+PYTHONPATH=. python3 examples/transactions.py
+# ... same pattern for all examples
 ```
 
 #### API at a Glance
