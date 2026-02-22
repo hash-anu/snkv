@@ -44,7 +44,13 @@ class BuildExtWithHeader(_build_ext):
 
         print("-- snkv: running `make snkv.h` in repo root...")
         try:
-            make_cmd = "mingw32-make" if sys.platform == "win32" else "make"
+            # In MSYS2 (MinGW64/UCRT64) shells, MSYSTEM is set and plain
+            # 'make' is on PATH.  In a bare native-Windows MinGW installation
+            # the command is 'mingw32-make'.
+            if sys.platform == "win32":
+                make_cmd = "make" if os.environ.get("MSYSTEM") else "mingw32-make"
+            else:
+                make_cmd = "make"
             result = subprocess.run(
                 [make_cmd, "snkv.h"],
                 cwd=REPO_ROOT,
@@ -106,26 +112,6 @@ ext = Extension(
 # ---------------------------------------------------------------------------
 
 setup(
-    name="snkv",
-    version="0.2.0",
-    description="Python bindings for SNKV - crash-safe embedded key-value store",
-    license="Apache-2.0",
-    url="https://github.com/hash-anu/snkv",
-    python_requires=">=3.8",
-    packages=["snkv"],
-    package_data={
-        "snkv": ["py.typed", "_snkv.pyi"],
-    },
     ext_modules=[ext],
     cmdclass={"build_ext": BuildExtWithHeader},
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "Programming Language :: C",
-        "License :: OSI Approved :: Apache Software License",
-        "Operating System :: POSIX :: Linux",
-        "Operating System :: MacOS",
-        "Operating System :: Microsoft :: Windows",
-        "Topic :: Database",
-        "Topic :: Software Development :: Libraries :: Python Modules",
-    ],
 )
