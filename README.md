@@ -187,7 +187,7 @@ cd python && python3 -m pytest tests/ -v
 cd python && python3 -m pytest tests/ -v
 ```
 
-All 50 tests should pass.
+All 247 tests should pass.
 
 #### Run Examples
 
