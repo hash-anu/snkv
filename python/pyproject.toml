@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snkv"
+version = "0.2.0"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["snkv*"]
+
+[tool.setuptools.package-data]
+snkv = ["py.typed", "_snkv.pyi"]

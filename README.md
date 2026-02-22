@@ -119,6 +119,119 @@ make test
 
 ---
 
+### Python Bindings
+
+The `python/` directory contains a CPython C extension that wraps the full SNKV C API.
+
+**Prerequisites:** Python 3.8+, `python3-dev` (or equivalent), and `make`.
+
+#### Build
+
+```bash
+# Install system dependencies (Linux)
+sudo apt-get install -y build-essential python3-dev
+
+# Build the extension in-place (no install required)
+cd python
+python3 setup.py build_ext --inplace
+```
+
+`setup.py` automatically runs `make snkv.h` in the repo root and copies the freshly
+generated amalgamated header before compiling, so no manual header step is needed.
+
+#### Quick Start
+
+```python
+from snkv import Store
+
+with Store("mydb.db") as db:
+    db["hello"] = "world"
+    print(db["hello"].decode())   # world
+```
+
+#### Run Tests
+
+```bash
+# From the repo root — no PYTHONPATH needed
+python3 -m pytest python/tests/ -v
+
+# Or from python/
+cd python && python3 -m pytest tests/ -v
+```
+
+All 50 tests should pass.
+
+#### Run Examples
+
+```bash
+cd python
+
+PYTHONPATH=. python3 examples/basic.py           # CRUD, binary data, in-memory store
+PYTHONPATH=. python3 examples/transactions.py    # begin/commit/rollback
+PYTHONPATH=. python3 examples/column_families.py # logical namespaces
+PYTHONPATH=. python3 examples/iterators.py       # ordered scan, prefix scan
+PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WAL limit
+PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
+PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
+```
+
+#### API at a Glance
+
+```python
+from snkv import Store, JOURNAL_WAL, SYNC_NORMAL, CHECKPOINT_TRUNCATE
+
+# Open with options (mirrors kvstore_open_v2)
+with Store("mydb.db",
+           journal_mode=JOURNAL_WAL,
+           sync_level=SYNC_NORMAL,
+           cache_size=2000,       # pages (~8 MB)
+           busy_timeout=5000,     # ms
+           wal_size_limit=100,    # auto-checkpoint every 100 frames
+           ) as db:
+
+    # CRUD
+    db["key"] = "value"
+    val = db["key"]               # bytes
+    del db["key"]
+    exists = "key" in db
+
+    # Column families
+    cf = db.create_column_family("users")
+    cf["alice"] = b"admin"
+
+    # Transactions
+    db.begin(write=True)
+    db["a"] = "1"
+    db.commit()                   # or db.rollback()
+
+    # Iterators
+    for key, value in db.iterator():
+        print(key, value)
+
+    for key, value in db.prefix_iterator(b"user:"):
+        print(key, value)
+
+    # Maintenance
+    nlog, nckpt = db.checkpoint(CHECKPOINT_TRUNCATE)
+    db.sync()
+    db.incremental_vacuum(100)
+    ok, errmsg = db.integrity_check()
+    stats = db.stats()            # dict: puts, gets, deletes, ...
+```
+
+#### Error Hierarchy
+
+```
+snkv.Error (base)
+├── snkv.NotFoundError   (also KeyError)
+├── snkv.BusyError
+├── snkv.LockedError
+├── snkv.ReadOnlyError
+└── snkv.CorruptError
+```
+
+---
+
 ### 10 GB Crash-Safety Stress Test
 
 A production-scale kill-9 test is included but kept separate from the CI suite.
