@@ -9,14 +9,14 @@ Run:
 """
 
 import os
-from snkv import Store, NotFoundError
+from snkv import KVStore, NotFoundError
 
 DB_FILE = "cf_example.db"
 
 
 def create_and_use():
     print("--- Create and Use Column Families ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         # Create two independent namespaces
         users = db.create_column_family("users")
         posts = db.create_column_family("posts")
@@ -35,7 +35,7 @@ def create_and_use():
 
 def namespace_isolation():
     print("\n--- Namespace Isolation ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         ns_a = db.create_column_family("ns_a")
         ns_b = db.create_column_family("ns_b")
 
@@ -56,7 +56,7 @@ def namespace_isolation():
 
 def list_and_drop():
     print("\n--- List and Drop Column Families ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         db.create_column_family("temp_a")
         db.create_column_family("temp_b")
         db.create_column_family("keep_me")
@@ -73,7 +73,7 @@ def list_and_drop():
 
 def open_existing():
     print("\n--- Open an Existing Column Family ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         # Create and write, then close the handle
         cf = db.create_column_family("persistent_cf")
         cf["key"] = "stored_value"
@@ -93,7 +93,7 @@ def open_existing():
 
 def default_column_family():
     print("\n--- Default Column Family ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         # The default CF is the same underlying namespace as db.put/get
         cf = db.default_column_family()
         cf["via_cf"]  = "written through CF handle"
@@ -105,7 +105,7 @@ def default_column_family():
 
 def cf_context_manager():
     print("\n--- Column Family as Context Manager ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         with db.create_column_family("ctx_cf") as cf:
             cf["item"] = "data"
             print(f"item = {cf['item'].decode()}")

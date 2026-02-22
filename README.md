@@ -153,7 +153,8 @@ Install the MinGW64 Python package so the extension and interpreter share the sa
 
 ```bash
 pacman -S --needed mingw-w64-x86_64-python mingw-w64-x86_64-python-pip \
-                   mingw-w64-x86_64-python-setuptools
+                   mingw-w64-x86_64-python-setuptools \
+                   mingw-w64-x86_64-python-pytest
 
 cd python
 python3 setup.py build_ext --inplace
@@ -166,9 +167,9 @@ python3 setup.py build_ext --inplace
 #### Quick Start
 
 ```python
-from snkv import Store
+from snkv import KVStore
 
-with Store("mydb.db") as db:
+with KVStore("mydb.db") as db:
     db["hello"] = "world"
     print(db["hello"].decode())   # world
 ```
@@ -211,10 +212,10 @@ PYTHONPATH=. python3 examples/transactions.py
 #### API at a Glance
 
 ```python
-from snkv import Store, JOURNAL_WAL, SYNC_NORMAL, CHECKPOINT_TRUNCATE
+from snkv import KVStore, JOURNAL_WAL, SYNC_NORMAL, CHECKPOINT_TRUNCATE
 
 # Open with options (mirrors kvstore_open_v2)
-with Store("mydb.db",
+with KVStore("mydb.db",
            journal_mode=JOURNAL_WAL,
            sync_level=SYNC_NORMAL,
            cache_size=2000,       # pages (~8 MB)

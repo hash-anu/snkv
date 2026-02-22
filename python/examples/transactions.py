@@ -9,14 +9,14 @@ Run:
 
 import os
 import snkv
-from snkv import Store
+from snkv import KVStore
 
 DB_FILE = "transactions_example.db"
 
 
 def atomic_batch_write():
     print("--- Atomic Batch Write ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         # Without explicit transaction: each put auto-commits individually
         db["k1"] = "v1"
         db["k2"] = "v2"
@@ -35,7 +35,7 @@ def atomic_batch_write():
 
 def rollback_on_error():
     print("\n--- Rollback on Error ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         db.begin(write=True)
         db["will_be_rolled_back"] = "temporary"
 
@@ -53,7 +53,7 @@ def rollback_on_error():
 def context_manager_transaction():
     """Use Python try/finally as a manual transaction context."""
     print("\n--- Manual Transaction Pattern ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         db.begin(write=True)
         try:
             db["account:alice"] = "1000"
@@ -71,7 +71,7 @@ def context_manager_transaction():
 
 def read_only_transaction():
     print("\n--- Read Transaction ---")
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         db["data"] = "hello"
 
         # wrflag=False (default) starts a read-only transaction
@@ -87,7 +87,7 @@ def read_only_transaction():
 def large_batch_performance():
     print("\n--- Large Batch (1000 writes in one transaction) ---")
     import time
-    with Store(DB_FILE) as db:
+    with KVStore(DB_FILE) as db:
         t0 = time.perf_counter()
         db.begin(write=True)
         for i in range(1000):

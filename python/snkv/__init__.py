@@ -3,9 +3,9 @@ snkv - Python bindings for SNKV embedded key-value store.
 
 Quick start:
 
-    from snkv import Store
+    from snkv import KVStore
 
-    with Store("mydb.db") as db:
+    with KVStore("mydb.db") as db:
         db["hello"] = "world"
         print(db["hello"])          # b"world"
         print(db.get("hello"))      # b"world"
@@ -75,8 +75,8 @@ def _enc(v: _Encodable) -> bytes:
 
 class Iterator:
     """
-    Ordered key-value iterator returned by Store.iterator() and
-    Store.prefix_iterator().
+    Ordered key-value iterator returned by KVStore.iterator() and
+    KVStore.prefix_iterator().
 
     Can be used as:
       - A Python iterator:  for key, value in db.iterator(): ...
@@ -148,8 +148,8 @@ class ColumnFamily:
     """
     A logical namespace within a SNKV store.
 
-    Obtained via Store.create_column_family(), Store.open_column_family(),
-    or Store.default_column_family().
+    Obtained via KVStore.create_column_family(), KVStore.open_column_family(),
+    or KVStore.default_column_family().
 
     Usage:
 
@@ -234,10 +234,10 @@ class ColumnFamily:
 
 
 # ---------------------------------------------------------------------------
-# Store — main entry point
+# KVStore — main entry point
 # ---------------------------------------------------------------------------
 
-class Store:
+class KVStore:
     """
     SNKV key-value store.
 
@@ -261,7 +261,7 @@ class Store:
 
     Quick start
     -----------
-        with Store("mydb.db") as db:
+        with KVStore("mydb.db") as db:
             db.put(b"key", b"value")
             val = db.get(b"key")    # b"value"
             db["key2"] = "hello"
@@ -428,7 +428,7 @@ class Store:
         """Close the store and release all resources."""
         self._db.close()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> "KVStore":
         return self
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
@@ -436,7 +436,7 @@ class Store:
         return False
 
     def __repr__(self) -> str:
-        return "snkv.Store()"
+        return "snkv.KVStore()"
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +445,7 @@ class Store:
 
 __all__ = [
     # Main class
-    "Store",
+    "KVStore",
     "ColumnFamily",
     "Iterator",
     # Exceptions
