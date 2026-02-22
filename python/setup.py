@@ -29,6 +29,9 @@ class BuildExtWithHeader(_build_ext):
 
     def run(self) -> None:
         self._regenerate_snkv_header()
+        # Ensure the package directory exists so the inplace copy succeeds
+        # on fresh clones where snkv/ may not yet contain any built artifact.
+        os.makedirs(os.path.join(HERE, "snkv"), exist_ok=True)
         super().run()
 
     def build_extension(self, ext: Extension) -> None:
