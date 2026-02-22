@@ -19,7 +19,7 @@ Usage (from python/ directory):
 
 Arguments
 ---------
-  db_path        Path for the database file  (default: /tmp/snkv_dur_test.db)
+  db_path        Path for the database file  (default: snkv_dur_test.db in cwd)
   --gb N         Target data volume in GB    (default: 1)
   --value-size B Bytes per value             (default: 1000)
   --batch-size N Records per transaction     (default: 5000)
@@ -282,8 +282,8 @@ def main() -> int:
     parser.add_argument(
         "db_path",
         nargs="?",
-        default="/tmp/snkv_dur_test.db",
-        help="Path for the test database",
+        default="snkv_dur_test.db",
+        help="Path for the test database (default: snkv_dur_test.db in current directory)",
     )
     parser.add_argument(
         "--gb",
