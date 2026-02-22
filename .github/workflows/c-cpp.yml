@@ -82,13 +82,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential python3-dev python3-pip
 
+    - name: Install Python test dependencies
+      run: python3 -m pip install pytest
+
     - name: Build Python extension (in-place)
       run: |
         cd python
         python3 setup.py build_ext --inplace
 
     - name: Run Python tests
-      run: python3 -m pytest python/tests/ -v
+      run: PYTHONPATH=python python3 -m pytest python/tests/ -v
 
   # ==================================================================
   # Valgrind + memory profiling + test counting + badge publishing
