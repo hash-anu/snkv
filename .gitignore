@@ -1,6 +1,6 @@
 *.o
-snkv
-snkv.h
+/snkv
+/snkv.h
 tests/test_autovacuum
 tests/test_columnfamily
 tests/test_prod
