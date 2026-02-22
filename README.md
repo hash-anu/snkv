@@ -377,6 +377,17 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 - **Zero memory leaks** — verified with Valgrind
 - **SSD-friendly** — WAL appends sequentially, reducing random writes
 
+### Python Bindings
+
+- **Dict-style API** — `db["key"] = value`, `val = db["key"]`, `del db["key"]`, `"key" in db`
+- **Context managers** — `with KVStore(...) as db` and `with db.create_column_family(...) as cf` for guaranteed cleanup
+- **Prefix iterators** — efficient namespace scans with `db.prefix_iterator(b"user:")`
+- **WAL checkpoint control** — PASSIVE / FULL / RESTART / TRUNCATE modes via `db.checkpoint()`
+- **Auto-checkpoint** — set `wal_size_limit=N` to checkpoint automatically after every N WAL frames
+- **Typed exceptions** — `NotFoundError`, `BusyError`, `LockedError`, `ReadOnlyError`, `CorruptError` all subclass `snkv.Error`
+- **No Python dependencies** — pure CPython C extension; only requires a C compiler and `python3-dev`
+- **247 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, JSON, and more
+
 ---
 
 ## Backup & Tooling Compatibility
