@@ -229,9 +229,9 @@ with KVStore("mydb.db",
     del db["key"]
     exists = "key" in db
 
-    # Column families
-    cf = db.create_column_family("users")
-    cf["alice"] = b"admin"
+    # Column families — always close cf before db
+    with db.create_column_family("users") as cf:
+        cf["alice"] = b"admin"
 
     # Transactions
     db.begin(write=True)
@@ -248,8 +248,8 @@ with KVStore("mydb.db",
     # Maintenance
     nlog, nckpt = db.checkpoint(CHECKPOINT_TRUNCATE)
     db.sync()
-    db.incremental_vacuum(100)
-    ok, errmsg = db.integrity_check()
+    db.vacuum(100)                # reclaim up to 100 unused pages
+    db.integrity_check()          # raises CorruptError if corrupt
     stats = db.stats()            # dict: puts, gets, deletes, ...
 ```
 
