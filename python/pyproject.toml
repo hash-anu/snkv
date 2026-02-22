@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snkv"
+version = "0.2.0"
+requires-python = ">=3.8"
+description = "Python bindings for SNKV - crash-safe embedded key-value store"
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/hash-anu/snkv"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["snkv*"]
+
+[tool.setuptools.package-data]
+snkv = ["py.typed", "_snkv.pyi"]

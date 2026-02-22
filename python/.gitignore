@@ -1,0 +1,23 @@
+# Build outputs
+build/
+dist/
+*.egg-info/
+*.egg
+snkv.h
+# Compiled extension (built in-place)
+snkv/_snkv*.so
+snkv/_snkv*.pyd
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.DS_Store
+*.swp

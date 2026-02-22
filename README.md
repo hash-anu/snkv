@@ -119,6 +119,153 @@ make test
 
 ---
 
+### Python Bindings
+
+The `python/` directory contains a CPython C extension that wraps the full SNKV C API.
+
+**Prerequisites:** Python 3.8+, a C compiler, and `make`.
+
+#### Build
+
+**Linux**
+
+```bash
+sudo apt-get install -y build-essential python3-dev
+
+cd python
+python3 setup.py build_ext --inplace
+```
+
+**macOS**
+
+```bash
+# Compiler comes with Xcode Command Line Tools
+xcode-select --install    # skip if already installed
+
+cd python
+python3 setup.py build_ext --inplace
+```
+
+**Windows (MSYS2 MinGW64)**
+
+Use the **MSYS2 MinGW64 shell** (same environment as the C build).
+Install the MinGW64 Python package so the extension and interpreter share the same runtime:
+
+```bash
+pacman -S --needed mingw-w64-x86_64-python mingw-w64-x86_64-python-pip \
+                   mingw-w64-x86_64-python-setuptools \
+                   mingw-w64-x86_64-python-pytest
+
+cd python
+python3 setup.py build_ext --inplace
+```
+
+> On all platforms, `setup.py` automatically runs `make snkv.h` in the repo root
+> and copies the freshly generated amalgamated header before compiling — no
+> manual header step needed.
+
+#### Quick Start
+
+```python
+from snkv import KVStore
+
+with KVStore("mydb.db") as db:
+    db["hello"] = "world"
+    print(db["hello"].decode())   # world
+```
+
+#### Run Tests
+
+```bash
+# Linux / macOS — from the repo root (no PYTHONPATH needed)
+python3 -m pytest python/tests/ -v
+
+# Or from python/
+cd python && python3 -m pytest tests/ -v
+
+# Windows (MSYS2 MinGW64 shell)
+cd python && python3 -m pytest tests/ -v
+```
+
+All 247 tests should pass.
+
+#### Run Examples
+
+```bash
+# Linux / macOS
+cd python
+PYTHONPATH=. python3 examples/basic.py           # CRUD, binary data, in-memory store
+PYTHONPATH=. python3 examples/transactions.py    # begin/commit/rollback
+PYTHONPATH=. python3 examples/column_families.py # logical namespaces
+PYTHONPATH=. python3 examples/iterators.py       # ordered scan, prefix scan
+PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WAL limit
+PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
+PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
+
+# Windows (MSYS2 MinGW64 shell) — use PYTHONPATH= instead of export
+cd python
+PYTHONPATH=. python3 examples/basic.py
+PYTHONPATH=. python3 examples/transactions.py
+# ... same pattern for all examples
+```
+
+#### API at a Glance
+
+```python
+from snkv import KVStore, JOURNAL_WAL, SYNC_NORMAL, CHECKPOINT_TRUNCATE
+
+# Open with options (mirrors kvstore_open_v2)
+with KVStore("mydb.db",
+           journal_mode=JOURNAL_WAL,
+           sync_level=SYNC_NORMAL,
+           cache_size=2000,       # pages (~8 MB)
+           busy_timeout=5000,     # ms
+           wal_size_limit=100,    # auto-checkpoint every 100 frames
+           ) as db:
+
+    # CRUD
+    db["key"] = "value"
+    val = db["key"]               # bytes
+    del db["key"]
+    exists = "key" in db
+
+    # Column families — always close cf before db
+    with db.create_column_family("users") as cf:
+        cf["alice"] = b"admin"
+
+    # Transactions
+    db.begin(write=True)
+    db["a"] = "1"
+    db.commit()                   # or db.rollback()
+
+    # Iterators
+    for key, value in db.iterator():
+        print(key, value)
+
+    for key, value in db.prefix_iterator(b"user:"):
+        print(key, value)
+
+    # Maintenance
+    nlog, nckpt = db.checkpoint(CHECKPOINT_TRUNCATE)
+    db.sync()
+    db.vacuum(100)                # reclaim up to 100 unused pages
+    db.integrity_check()          # raises CorruptError if corrupt
+    stats = db.stats()            # dict: puts, gets, deletes, ...
+```
+
+#### Error Hierarchy
+
+```
+snkv.Error (base)
+├── snkv.NotFoundError   (also KeyError)
+├── snkv.BusyError
+├── snkv.LockedError
+├── snkv.ReadOnlyError
+└── snkv.CorruptError
+```
+
+---
+
 ### 10 GB Crash-Safety Stress Test
 
 A production-scale kill-9 test is included but kept separate from the CI suite.
