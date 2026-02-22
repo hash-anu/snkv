@@ -41,16 +41,30 @@ jobs:
         install: mingw-w64-x86_64-gcc make
 
     - name: Build
-      shell: bash
+      if: runner.os != 'Windows'
+      run: make
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
       run: make
 
     - name: Run tests
-      shell: bash
+      if: runner.os != 'Windows'
+      run: make test
+
+    - name: Run tests (Windows)
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
       run: make test
 
     - name: Clean
-      if: always()
-      shell: bash
+      if: always() && runner.os != 'Windows'
+      run: make clean
+
+    - name: Clean (Windows)
+      if: always() && runner.os == 'Windows'
+      shell: msys2 {0}
       run: make clean
 
   # ==================================================================

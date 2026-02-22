@@ -100,6 +100,11 @@ cat << 'FILE_HEADER'
 #define SNKV_H
 #pragma once
 
+/* Suppress MSVC "unsafe function" warnings (sprintf, strcpy, etc.) */
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+# define _CRT_SECURE_NO_WARNINGS
+#endif
+
 /* _GNU_SOURCE must be defined before any system headers for mremap() etc. */
 #if defined(__GNUC__) && !defined(_GNU_SOURCE)
 # define _GNU_SOURCE
