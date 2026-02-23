@@ -121,7 +121,11 @@ make test
 
 ### Python Bindings
 
-The `python/` directory contains a CPython C extension that wraps the full SNKV C API.
+Available on PyPI — no compiler needed:
+
+```bash
+pip install snkv
+```
 
 ```python
 from snkv import KVStore

@@ -1,6 +1,7 @@
 # SNKV Python Bindings
 
 [![Build](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
+[![PyPI](https://img.shields.io/pypi/v/snkv)](https://pypi.org/project/snkv/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/hash-anu/snkv/blob/master/LICENSE)
 
 Idiomatic Python 3.8+ bindings for [SNKV](https://github.com/hash-anu/snkv) — a lightweight,
@@ -23,7 +24,26 @@ ACID-compliant embedded key-value store built directly on SQLite's B-Tree engine
 
 ## Installation
 
-### Linux
+### From PyPI (recommended)
+
+Pre-built binary wheels are available for Linux, macOS, and Windows — no compiler needed.
+
+**Windows / macOS:**
+```bash
+pip install snkv
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install snkv
+```
+
+> Linux system Python is "externally managed" (PEP 668) and blocks
+> system-wide pip installs. Use a virtual environment.
+
+### Build from Source
 
 ```bash
 # System dependencies
