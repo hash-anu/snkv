@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,11 +7,10 @@ name = "snkv"
 version = "0.2.0"
 requires-python = ">=3.8"
 description = "Python bindings for SNKV - crash-safe embedded key-value store"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
@@ -28,3 +27,18 @@ include = ["snkv*"]
 
 [tool.setuptools.package-data]
 snkv = ["py.typed", "_snkv.pyi"]
+
+# ── cibuildwheel ────────────────────────────────────────────────────────────
+[tool.cibuildwheel]
+# Build CPython 3.8 – 3.13; skip 32-bit and musl builds
+build  = "cp38-* cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip   = "*-win32 *-manylinux_i686 *-musllinux*"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
