@@ -57,11 +57,11 @@ python3 setup.py build_ext --inplace
 2. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — select **"Desktop development with C++"**
 3. Open **"x64 Native Tools Command Prompt for VS 2022"** from the Start Menu (required for 64-bit Python; "Developer PowerShell for VS" defaults to 32-bit and will fail)
 
-```powershell
-# Python build dependencies
+```cmd
+:: Python build dependencies
 pip install setuptools wheel pytest
 
-# Build
+:: Build
 cd python
 python setup.py build_ext --inplace
 ```
@@ -269,10 +269,10 @@ python3 -m pytest tests/ -v
 ```
 
 **Windows — Native Python (x64 Native Tools Command Prompt for VS 2022)**
-```powershell
+```cmd
 cd python
-$env:PYTHONPATH = "."
-python -m pytest tests/ -v
+set PYTHONPATH=.
+python -m pytest tests\ -v
 ```
 
 **Windows — MSYS2 MinGW64 shell**
@@ -300,16 +300,16 @@ PYTHONPATH=. python3 examples/session_store.py   # real-world session store patt
 ```
 
 **Windows — Native Python (x64 Native Tools Command Prompt for VS 2022)**
-```powershell
+```cmd
 cd python
-$env:PYTHONPATH = "."
-python examples/basic.py
-python examples/transactions.py
-python examples/column_families.py
-python examples/iterators.py
-python examples/config.py
-python examples/checkpoint.py
-python examples/session_store.py
+set PYTHONPATH=.
+python examples\basic.py
+python examples\transactions.py
+python examples\column_families.py
+python examples\iterators.py
+python examples\config.py
+python examples\checkpoint.py
+python examples\session_store.py
 ```
 
 **Windows — MSYS2 MinGW64 shell**
