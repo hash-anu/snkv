@@ -55,7 +55,7 @@ python3 setup.py build_ext --inplace
 
 1. Install [Python 3.8+](https://python.org/downloads) — check **"Add Python to PATH"**
 2. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — select **"Desktop development with C++"**
-3. Open **"Developer PowerShell for VS 2022"** from the Start Menu
+3. Open **"x64 Native Tools Command Prompt for VS 2022"** from the Start Menu (required for 64-bit Python; "Developer PowerShell for VS" defaults to 32-bit and will fail)
 
 ```powershell
 # Python build dependencies
@@ -268,7 +268,7 @@ cd python
 python3 -m pytest tests/ -v
 ```
 
-**Windows — Native Python (Developer PowerShell for VS)**
+**Windows — Native Python (x64 Native Tools Command Prompt for VS 2022)**
 ```powershell
 cd python
 $env:PYTHONPATH = "."
@@ -299,7 +299,7 @@ PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
 ```
 
-**Windows — Native Python (Developer PowerShell for VS)**
+**Windows — Native Python (x64 Native Tools Command Prompt for VS 2022)**
 ```powershell
 cd python
 $env:PYTHONPATH = "."
