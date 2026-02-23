@@ -93,21 +93,46 @@ class BuildExtWithHeader(_build_ext):
         import json
         import tempfile
         import zipfile
+        from urllib.error import HTTPError
 
-        # 1. Resolve the latest release tag.
+        headers = {"Accept": "application/vnd.github+json"}
+
+        # 1a. Try GitHub Releases API first (works once releases are published).
+        tag = None
+        release_zip_ok = False
         api_url = "https://api.github.com/repos/hash-anu/snkv/releases/latest"
         try:
-            req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
+            req = urllib.request.Request(api_url, headers=headers)
             with urllib.request.urlopen(req) as resp:
                 tag = json.loads(resp.read())["tag_name"]   # e.g. "v0.1.3"
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to fetch latest release tag from GitHub ({api_url}):\n{exc}\n"
-                "Either install make (Linux/macOS) or ensure internet access."
-            ) from exc
+        except HTTPError as exc:
+            if exc.code == 404:
+                pass  # No releases published yet — fall through to tags API
+            else:
+                raise RuntimeError(
+                    f"GitHub API error ({api_url}): {exc}\n"
+                    "Either install make (Linux/macOS) or ensure internet access."
+                ) from exc
 
-        # 2. Download the release zip, e.g. snkv-0.1.3.zip
-        version = tag.lstrip("v")                           # "0.1.3"
+        # 1b. If no releases, fall back to the latest git tag.
+        if tag is None:
+            tags_url = "https://api.github.com/repos/hash-anu/snkv/tags"
+            try:
+                req = urllib.request.Request(tags_url, headers=headers)
+                with urllib.request.urlopen(req) as resp:
+                    tags = json.loads(resp.read())
+                if not tags:
+                    raise RuntimeError("No tags found in the snkv repository.")
+                tag = tags[0]["name"]   # most-recent tag first
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to fetch tags from GitHub ({tags_url}):\n{exc}\n"
+                    "Either install make (Linux/macOS) or ensure internet access."
+                ) from exc
+
+        version = tag.lstrip("v")   # "0.1.3"
+
+        # 2a. Try the release asset zip (requires a published GitHub Release).
         zip_url = (
             f"https://github.com/hash-anu/snkv/releases/download/"
             f"{tag}/snkv-{version}.zip"
@@ -117,25 +142,44 @@ class BuildExtWithHeader(_build_ext):
             zip_path = os.path.join(tmp, f"snkv-{version}.zip")
             try:
                 urllib.request.urlretrieve(zip_url, zip_path)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to download release zip from GitHub ({zip_url}):\n{exc}\n"
-                    "Either install make (Linux/macOS) or ensure internet access."
-                ) from exc
-
-            # 3. Extract and copy snkv.h from release/snkv-{version}/include/
-            inner_path = f"release/snkv-{version}/include/snkv.h"
-            with zipfile.ZipFile(zip_path) as zf:
-                if inner_path not in zf.namelist():
+                release_zip_ok = True
+            except HTTPError as exc:
+                if exc.code == 404:
+                    release_zip_ok = False  # asset not uploaded yet
+                else:
                     raise RuntimeError(
-                        f"Expected '{inner_path}' inside {zip_url} but it was not found.\n"
-                        f"Available entries: {zf.namelist()[:10]}"
-                    )
-                with zf.open(inner_path) as src_f:
-                    with open(target, "wb") as dst_f:
-                        dst_f.write(src_f.read())
+                        f"Failed to download release zip ({zip_url}): {exc}\n"
+                        "Either install make (Linux/macOS) or ensure internet access."
+                    ) from exc
 
-        print(f"-- snkv: extracted snkv.h {tag} -> {target}")
+            if release_zip_ok:
+                # Extract snkv.h from release/snkv-{version}/include/
+                inner_path = f"release/snkv-{version}/include/snkv.h"
+                with zipfile.ZipFile(zip_path) as zf:
+                    if inner_path not in zf.namelist():
+                        raise RuntimeError(
+                            f"Expected '{inner_path}' inside {zip_url} but it was not found.\n"
+                            f"Available entries: {zf.namelist()[:10]}"
+                        )
+                    with zf.open(inner_path) as src_f:
+                        with open(target, "wb") as dst_f:
+                            dst_f.write(src_f.read())
+                print(f"-- snkv: extracted snkv.h {tag} -> {target}")
+                return
+
+        # 2b. Release asset not available — download raw snkv.h from the tag.
+        raw_url = (
+            f"https://raw.githubusercontent.com/hash-anu/snkv/{tag}/snkv.h"
+        )
+        print(f"-- snkv: release asset not found; downloading raw {raw_url} ...")
+        try:
+            urllib.request.urlretrieve(raw_url, target)
+            print(f"-- snkv: downloaded snkv.h {tag} from GitHub -> {target}")
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to download snkv.h from GitHub ({raw_url}):\n{exc}\n"
+                "Either install make (Linux/macOS) or ensure internet access."
+            ) from exc
 
 
 # ---------------------------------------------------------------------------
