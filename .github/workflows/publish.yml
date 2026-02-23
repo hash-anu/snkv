@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 jobs:
   # ── 1. Build binary wheels on all three platforms ─────────────────────────
