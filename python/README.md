@@ -23,44 +23,68 @@ ACID-compliant embedded key-value store built directly on SQLite's B-Tree engine
 
 ## Installation
 
-**Prerequisites:** Python 3.8+, a C compiler, and `make`.
-
 ### Linux
 
 ```bash
-sudo apt-get install -y build-essential python3-dev
+# System dependencies
+sudo apt-get install -y build-essential python3-dev python3-pip
 
+# Python build dependencies
+pip3 install setuptools wheel pytest
+
+# Build
 cd python
 python3 setup.py build_ext --inplace
 ```
 
-### macOS
+#### macOS
 
 ```bash
-# Compiler comes with Xcode Command Line Tools
-xcode-select --install    # skip if already installed
+# Compiler (skip if already installed)
+xcode-select --install
 
+# Python build dependencies
+pip3 install setuptools wheel pytest
+
+# Build
 cd python
 python3 setup.py build_ext --inplace
 ```
 
-### Windows (MSYS2 MinGW64)
+#### Windows — Native Python (recommended)
 
-Use the **MSYS2 MinGW64 shell** (same environment as the C build).
-Install the MinGW64 Python package so the extension and interpreter share the same runtime:
+1. Install [Python 3.8+](https://python.org/downloads) — check **"Add Python to PATH"**
+2. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — select **"Desktop development with C++"**
+3. Open **"Developer PowerShell for VS 2022"** from the Start Menu
+
+```powershell
+# Python build dependencies
+pip install setuptools wheel pytest
+
+# Build
+cd python
+python setup.py build_ext --inplace
+```
+
+#### Windows — MSYS2 MinGW64 shell
+
+Open the **MSYS2 MinGW64** shell (not plain MSYS2, not cmd.exe):
 
 ```bash
-pacman -S --needed mingw-w64-x86_64-python mingw-w64-x86_64-python-pip \
+# System + Python dependencies (one-time)
+pacman -S --needed mingw-w64-x86_64-python \
+                   mingw-w64-x86_64-python-pip \
                    mingw-w64-x86_64-python-setuptools \
                    mingw-w64-x86_64-python-pytest
 
+# Build
 cd python
 python3 setup.py build_ext --inplace
 ```
 
-> On all platforms, `setup.py` automatically runs `make snkv.h` in the repo root
-> and copies the freshly generated amalgamated header before compiling — no
-> manual header step needed.
+> On all platforms, `setup.py` automatically locates `snkv.h` — no manual
+> header step needed. On Linux/macOS it regenerates it via `make snkv.h`;
+> on Windows it falls back to the pre-built `snkv.h` included in the repo.
 
 ---
 
@@ -238,17 +262,23 @@ except snkv.BusyError:
 
 ## Running Tests
 
+**Linux / macOS**
 ```bash
-# From the repo root (Linux / macOS)
-pip install pytest
-PYTHONPATH=python python3 -m pytest python/tests/ -v
-
-# Or from python/
 cd python
 python3 -m pytest tests/ -v
+```
 
-# Windows (MSYS2 MinGW64 shell)
-cd python && python3 -m pytest tests/ -v
+**Windows — Native Python (Developer PowerShell for VS)**
+```powershell
+cd python
+$env:PYTHONPATH = "."
+python -m pytest tests/ -v
+```
+
+**Windows — MSYS2 MinGW64 shell**
+```bash
+cd python
+PYTHONPATH=. python3 -m pytest tests/ -v
 ```
 
 All 247 tests should pass.
@@ -257,10 +287,9 @@ All 247 tests should pass.
 
 ## Running Examples
 
+**Linux / macOS**
 ```bash
 cd python
-
-# Linux / macOS
 PYTHONPATH=. python3 examples/basic.py           # CRUD, binary data, in-memory store
 PYTHONPATH=. python3 examples/transactions.py    # begin/commit/rollback
 PYTHONPATH=. python3 examples/column_families.py # logical namespaces
@@ -268,9 +297,27 @@ PYTHONPATH=. python3 examples/iterators.py       # ordered scan, prefix scan
 PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WAL limit
 PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
+```
 
-# Windows (MSYS2 MinGW64 shell) — same pattern
+**Windows — Native Python (Developer PowerShell for VS)**
+```powershell
+cd python
+$env:PYTHONPATH = "."
+python examples/basic.py
+python examples/transactions.py
+python examples/column_families.py
+python examples/iterators.py
+python examples/config.py
+python examples/checkpoint.py
+python examples/session_store.py
+```
+
+**Windows — MSYS2 MinGW64 shell**
+```bash
+cd python
 PYTHONPATH=. python3 examples/basic.py
+PYTHONPATH=. python3 examples/transactions.py
+# ... same pattern for all examples
 ```
 
 ---
