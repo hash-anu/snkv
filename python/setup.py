@@ -154,7 +154,7 @@ class BuildExtWithHeader(_build_ext):
 
             if release_zip_ok:
                 # Extract snkv.h from release/snkv-{version}/include/
-                inner_path = f"release/snkv-{version}/include/snkv.h"
+                inner_path = f"snkv-{version}/include/snkv.h"
                 with zipfile.ZipFile(zip_path) as zf:
                     if inner_path not in zf.namelist():
                         raise RuntimeError(
