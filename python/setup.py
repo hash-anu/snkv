@@ -46,17 +46,12 @@ class BuildExtWithHeader(_build_ext):
         if getattr(self, "_snkv_h_ready", False):
             return
 
-        print("-- snkv: running `make snkv.h` in repo root...")
+        # Try `make snkv.h` first (works on Linux, macOS, and Windows MSYS2).
+        # If make is not on PATH, fall back to downloading from GitHub — same
+        # on all platforms.
         try:
-            # In MSYS2 (MinGW64/UCRT64) shells, MSYSTEM is set and plain
-            # 'make' is on PATH.  In a bare native-Windows MinGW installation
-            # the command is 'mingw32-make'.
-            if sys.platform == "win32":
-                make_cmd = "make" if os.environ.get("MSYSTEM") else "mingw32-make"
-            else:
-                make_cmd = "make"
             result = subprocess.run(
-                [make_cmd, "snkv.h"],
+                ["make", "snkv.h"],
                 cwd=REPO_ROOT,
                 check=True,
                 capture_output=True,
@@ -64,29 +59,29 @@ class BuildExtWithHeader(_build_ext):
             )
             if result.stdout:
                 print(result.stdout, end="")
+
+            # Copy the generated header from repo root into python/
+            src = os.path.join(REPO_ROOT, "snkv.h")
+            if not os.path.exists(src):
+                raise FileNotFoundError(
+                    f"`make snkv.h` succeeded but {src} was not found."
+                )
+            shutil.copy2(src, target)
+            print(f"-- snkv: copied {src} -> {target}")
+
         except FileNotFoundError:
-            # make not found — fall back to existing file, or download from GitHub
+            # make not on PATH — download from GitHub (same on all platforms)
             if os.path.exists(target):
                 print(f"-- snkv: `make` not found; using existing {target}")
-                self._snkv_h_ready = True
-                return
-            print("-- snkv: `make` not found and no local snkv.h; downloading from GitHub...")
-            self._download_snkv_header(target)
-            self._snkv_h_ready = True
-            return
+            else:
+                print("-- snkv: `make` not found; downloading snkv.h from GitHub...")
+                self._download_snkv_header(target)
+
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
                 f"`make snkv.h` failed (exit {e.returncode}):\n{e.stderr}"
             ) from e
 
-        # Copy the generated header from repo root into python/
-        src = os.path.join(REPO_ROOT, "snkv.h")
-        if not os.path.exists(src):
-            raise FileNotFoundError(
-                f"`make snkv.h` succeeded but {src} was not found."
-            )
-        shutil.copy2(src, target)
-        print(f"-- snkv: copied {src} -> {target}")
         self._snkv_h_ready = True
 
     def _download_snkv_header(self, target: str) -> None:
