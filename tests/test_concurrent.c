@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "platform_compat.h"
 
 #define DB_FILE         "test_concurrent.db"
@@ -68,11 +68,11 @@ static void make_value(char *buf, int buflen, int writer_id, int seq) {
 
 /* ---- open with busy retry ---- */
 
-static int open_with_retry(const char *db, KVStore **ppKV) {
+static int open_with_retry(const char *db, KeyValueStore **ppKV) {
     int rc, retries = 0;
     do {
-        rc = kvstore_open(db, ppKV, KVSTORE_JOURNAL_WAL);
-        if (rc == KVSTORE_OK) return KVSTORE_OK;
+        rc = keyvaluestore_open(db, ppKV, KEYVALUESTORE_JOURNAL_WAL);
+        if (rc == KEYVALUESTORE_OK) return KEYVALUESTORE_OK;
         if (IS_BUSY(rc)) {
             usleep(5000 + (rand() % 10000));
             retries++;
@@ -100,12 +100,12 @@ typedef struct {
 
 static void *writer_thread(void *arg) {
     WriterResult *res = (WriterResult *)arg;
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
     rc = open_with_retry(DB_FILE, &kv);
-    if (rc != KVSTORE_OK) {
+    if (rc != KEYVALUESTORE_OK) {
         res->errors++;
         res->last_err = rc;
         return NULL;
@@ -116,9 +116,9 @@ static void *writer_thread(void *arg) {
         if (i % BATCH_SIZE == 0) {
             int retries = 0;
             do {
-                rc = kvstore_begin(kv, 1);
-                if (rc == KVSTORE_OK) break;
-                if (IS_BUSY(rc) || rc == KVSTORE_LOCKED || rc == SQLITE_PROTOCOL) {
+                rc = keyvaluestore_begin(kv, 1);
+                if (rc == KEYVALUESTORE_OK) break;
+                if (IS_BUSY(rc) || rc == KEYVALUESTORE_LOCKED || rc == SQLITE_PROTOCOL) {
                     usleep(5000 + (rand() % 20000));
                     retries++;
                     res->busy_retries++;
@@ -128,7 +128,7 @@ static void *writer_thread(void *arg) {
                     goto done;
                 }
             } while (retries < 500);
-            if (rc != KVSTORE_OK) {
+            if (rc != KEYVALUESTORE_OK) {
                 res->errors++;
                 res->last_err = rc;
                 goto done;
@@ -138,13 +138,13 @@ static void *writer_thread(void *arg) {
         make_key(key, sizeof(key), res->id, i);
         make_value(value, sizeof(value), res->id, i);
 
-        rc = kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
-        if (rc == KVSTORE_OK) {
+        rc = keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        if (rc == KEYVALUESTORE_OK) {
             res->keys_written++;
-        } else if (IS_BUSY(rc) || rc == KVSTORE_LOCKED) {
+        } else if (IS_BUSY(rc) || rc == KEYVALUESTORE_LOCKED) {
             /* Busy during put -- rollback and retry the whole batch */
             res->busy_retries++;
-            kvstore_rollback(kv);
+            keyvaluestore_rollback(kv);
             i = (i / BATCH_SIZE) * BATCH_SIZE - 1; /* restart batch */
             res->keys_written -= (i + 1) % BATCH_SIZE; /* undo count */
             if (res->keys_written < 0) res->keys_written = 0;
@@ -153,7 +153,7 @@ static void *writer_thread(void *arg) {
         } else {
             res->errors++;
             res->last_err = rc;
-            kvstore_rollback(kv);
+            keyvaluestore_rollback(kv);
             goto done;
         }
 
@@ -161,20 +161,20 @@ static void *writer_thread(void *arg) {
         if ((i + 1) % BATCH_SIZE == 0 || i == KEYS_PER_WRITER - 1) {
             int retries = 0;
             do {
-                rc = kvstore_commit(kv);
-                if (rc == KVSTORE_OK) break;
-                if (IS_BUSY(rc) || rc == KVSTORE_LOCKED || rc == SQLITE_PROTOCOL) {
+                rc = keyvaluestore_commit(kv);
+                if (rc == KEYVALUESTORE_OK) break;
+                if (IS_BUSY(rc) || rc == KEYVALUESTORE_LOCKED || rc == SQLITE_PROTOCOL) {
                     usleep(5000 + (rand() % 20000));
                     retries++;
                     res->busy_retries++;
                 } else {
                     res->errors++;
                     res->last_err = rc;
-                    kvstore_rollback(kv);
+                    keyvaluestore_rollback(kv);
                     goto done;
                 }
             } while (retries < 500);
-            if (rc != KVSTORE_OK) {
+            if (rc != KEYVALUESTORE_OK) {
                 res->errors++;
                 res->last_err = rc;
                 goto done;
@@ -183,7 +183,7 @@ static void *writer_thread(void *arg) {
     }
 
 done:
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     return NULL;
 }
 
@@ -208,12 +208,12 @@ typedef struct {
 
 static void *reader_thread(void *arg) {
     ReaderResult *res = (ReaderResult *)arg;
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, r, i;
     char key[64], expected_value[64];
 
     rc = open_with_retry(DB_FILE, &kv);
-    if (rc != KVSTORE_OK) {
+    if (rc != KEYVALUESTORE_OK) {
         res->errors++;
         res->last_err = rc;
         return NULL;
@@ -229,8 +229,8 @@ static void *reader_thread(void *arg) {
             make_key(key, sizeof(key), writer_id, seq);
             make_value(expected_value, sizeof(expected_value), writer_id, seq);
 
-            rc = kvstore_get(kv, key, (int)strlen(key), &got_val, &got_len);
-            if (rc == KVSTORE_OK) {
+            rc = keyvaluestore_get(kv, key, (int)strlen(key), &got_val, &got_len);
+            if (rc == KEYVALUESTORE_OK) {
                 /* Verify value correctness */
                 int exp_len = (int)strlen(expected_value);
                 if (got_len == exp_len && memcmp(got_val, expected_value, exp_len) == 0) {
@@ -239,7 +239,7 @@ static void *reader_thread(void *arg) {
                     res->reads_wrong++;
                 }
                 sqliteFree(got_val);
-            } else if (rc == KVSTORE_NOTFOUND) {
+            } else if (rc == KEYVALUESTORE_NOTFOUND) {
                 /* Writer hasn't committed this key yet -- acceptable */
                 res->reads_missing++;
             } else if (IS_BUSY(rc)) {
@@ -251,7 +251,7 @@ static void *reader_thread(void *arg) {
         }
     }
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     return NULL;
 }
 
@@ -267,14 +267,14 @@ static void test_concurrent_write_read(void) {
     cleanup(DB_FILE);
 
     /* Create the database in WAL mode with a seed record */
-    KVStore *kv = NULL;
-    int rc = kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) {
+    KeyValueStore *kv = NULL;
+    int rc = keyvaluestore_open(DB_FILE, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) {
         printf("  Failed to create DB: rc=%d\n", rc);
         print_result("Concurrent write/read", 0);
         return;
     }
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
     /* Spawn threads */
     int total_threads = NUM_WRITERS + NUM_READERS;
@@ -343,7 +343,7 @@ static void test_concurrent_write_read(void) {
 
     kv = NULL;
     rc = open_with_retry(DB_FILE, &kv);
-    if (rc != KVSTORE_OK) {
+    if (rc != KEYVALUESTORE_OK) {
         printf("  Failed to reopen DB: rc=%d\n", rc);
         print_result("Post-write verification", 0);
         cleanup(DB_FILE);
@@ -361,8 +361,8 @@ static void test_concurrent_write_read(void) {
         make_key(key, sizeof(key), writer_id, seq);
         make_value(expected, sizeof(expected), writer_id, seq);
 
-        rc = kvstore_get(kv, key, (int)strlen(key), &got_val, &got_len);
-        if (rc == KVSTORE_OK) {
+        rc = keyvaluestore_get(kv, key, (int)strlen(key), &got_val, &got_len);
+        if (rc == KEYVALUESTORE_OK) {
             int exp_len = (int)strlen(expected);
             if (got_len == exp_len && memcmp(got_val, expected, exp_len) == 0) {
                 verify_ok++;
@@ -391,15 +391,15 @@ static void test_concurrent_write_read(void) {
 
     /* Integrity check */
     char *errMsg = NULL;
-    rc = kvstore_integrity_check(kv, &errMsg);
-    int integrity_ok = (rc == KVSTORE_OK);
+    rc = keyvaluestore_integrity_check(kv, &errMsg);
+    int integrity_ok = (rc == KEYVALUESTORE_OK);
     if (!integrity_ok) {
         printf("    Integrity check failed: %s\n", errMsg ? errMsg : "unknown");
     }
     if (errMsg) sqliteFree(errMsg);
     print_result("Database integrity check", integrity_ok);
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(DB_FILE);
 }
 

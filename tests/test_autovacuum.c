@@ -1,8 +1,8 @@
 /*
-** Auto-Vacuum Test Suite for KVStore
+** Auto-Vacuum Test Suite for KeyValueStore
 **
 ** All databases are opened with incremental auto-vacuum by default.
-** Users call kvstore_incremental_vacuum() to reclaim unused pages.
+** Users call keyvaluestore_incremental_vacuum() to reclaim unused pages.
 **
 ** Tests:
 ** 1. Incremental vacuum reclaims space after deletes
@@ -16,7 +16,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 
 #define TEST_DB   "test_autovacuum.db"
 
@@ -50,7 +50,7 @@ static int tests_failed = 0;
   } while(0)
 
 #define ASSERT_OK(rc, msg) \
-  if( (rc) != KVSTORE_OK ) { \
+  if( (rc) != KEYVALUESTORE_OK ) { \
     printf("  Error at line %d: %s (code=%d)\n", __LINE__, msg, rc); \
     TEST_FAIL(msg); \
   }
@@ -79,88 +79,88 @@ static void cleanup_db(const char *path){
 }
 
 /* Insert N key-value pairs with ~100 byte values */
-static int insert_records(KVStore *kv, int start, int count){
+static int insert_records(KeyValueStore *kv, int start, int count){
   int rc;
   char key[32];
   char value[128];
 
-  rc = kvstore_begin(kv, 1);
-  if( rc != KVSTORE_OK ) return rc;
+  rc = keyvaluestore_begin(kv, 1);
+  if( rc != KEYVALUESTORE_OK ) return rc;
 
   for( int i = start; i < start + count; i++ ){
     snprintf(key, sizeof(key), "key-%06d", i);
     memset(value, 'A' + (i % 26), 100);
     value[100] = '\0';
-    rc = kvstore_put(kv, key, (int)strlen(key), value, 101);
-    if( rc != KVSTORE_OK ){
-      kvstore_rollback(kv);
+    rc = keyvaluestore_put(kv, key, (int)strlen(key), value, 101);
+    if( rc != KEYVALUESTORE_OK ){
+      keyvaluestore_rollback(kv);
       return rc;
     }
   }
 
-  return kvstore_commit(kv);
+  return keyvaluestore_commit(kv);
 }
 
 /* Delete N key-value pairs */
-static int delete_records(KVStore *kv, int start, int count){
+static int delete_records(KeyValueStore *kv, int start, int count){
   int rc;
   char key[32];
 
-  rc = kvstore_begin(kv, 1);
-  if( rc != KVSTORE_OK ) return rc;
+  rc = keyvaluestore_begin(kv, 1);
+  if( rc != KEYVALUESTORE_OK ) return rc;
 
   for( int i = start; i < start + count; i++ ){
     snprintf(key, sizeof(key), "key-%06d", i);
-    rc = kvstore_delete(kv, key, (int)strlen(key));
-    if( rc != KVSTORE_OK && rc != KVSTORE_NOTFOUND ){
-      kvstore_rollback(kv);
+    rc = keyvaluestore_delete(kv, key, (int)strlen(key));
+    if( rc != KEYVALUESTORE_OK && rc != KEYVALUESTORE_NOTFOUND ){
+      keyvaluestore_rollback(kv);
       return rc;
     }
   }
 
-  return kvstore_commit(kv);
+  return keyvaluestore_commit(kv);
 }
 
 /*
 ** Test 1: Incremental vacuum reclaims space after deletes
 */
 static void test_incremental_vacuum(void){
-  KVStore *kv = NULL;
+  KeyValueStore *kv = NULL;
   int rc;
   long size_after_insert, size_after_delete, size_after_vacuum;
 
   TEST_START("Incremental vacuum reclaims space after deletes");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "open");
 
   /* Insert 2000 records */
   rc = insert_records(kv, 0, 2000);
   ASSERT_OK(rc, "insert 2000 records");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_after_insert = get_file_size(TEST_DB);
   printf("  File size after insert: %ld bytes\n", size_after_insert);
 
   /* Delete most records -- file should NOT shrink yet (incremental mode) */
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "reopen");
 
   rc = delete_records(kv, 0, 1800);
   ASSERT_OK(rc, "delete 1800 records");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_after_delete = get_file_size(TEST_DB);
   printf("  File size after delete (no vacuum): %ld bytes\n", size_after_delete);
 
   /* Now run incremental vacuum to reclaim space */
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "reopen for vacuum");
 
-  rc = kvstore_incremental_vacuum(kv, 0);  /* 0 = free all */
+  rc = keyvaluestore_incremental_vacuum(kv, 0);  /* 0 = free all */
   ASSERT_OK(rc, "incremental vacuum");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_after_vacuum = get_file_size(TEST_DB);
   printf("  File size after vacuum: %ld bytes\n", size_after_vacuum);
@@ -182,14 +182,14 @@ static void test_incremental_vacuum(void){
 ** Test 2: Partial vacuum steps (nPage > 0)
 */
 static void test_partial_vacuum(void){
-  KVStore *kv = NULL;
+  KeyValueStore *kv = NULL;
   int rc;
   long size_before, size_partial, size_full;
 
   TEST_START("Partial vacuum steps (nPage > 0)");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "open");
 
   rc = insert_records(kv, 0, 2000);
@@ -197,29 +197,29 @@ static void test_partial_vacuum(void){
 
   rc = delete_records(kv, 0, 1800);
   ASSERT_OK(rc, "delete");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_before = get_file_size(TEST_DB);
   printf("  File size before vacuum: %ld bytes\n", size_before);
 
   /* Vacuum only 10 pages */
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "reopen");
 
-  rc = kvstore_incremental_vacuum(kv, 10);
+  rc = keyvaluestore_incremental_vacuum(kv, 10);
   ASSERT_OK(rc, "vacuum 10 pages");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_partial = get_file_size(TEST_DB);
   printf("  File size after 10-page vacuum: %ld bytes\n", size_partial);
 
   /* Vacuum remaining */
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "reopen");
 
-  rc = kvstore_incremental_vacuum(kv, 0);
+  rc = keyvaluestore_incremental_vacuum(kv, 0);
   ASSERT_OK(rc, "vacuum all remaining");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_full = get_file_size(TEST_DB);
   printf("  File size after full vacuum: %ld bytes\n", size_full);
@@ -242,32 +242,32 @@ static void test_partial_vacuum(void){
 ** Test 3: Incremental vacuum with WAL journal mode
 */
 static void test_vacuum_wal_mode(void){
-  KVStore *kv = NULL;
+  KeyValueStore *kv = NULL;
   int rc;
   long size_after_insert, size_after_vacuum;
 
   TEST_START("Incremental vacuum with WAL journal mode");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_WAL);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_WAL);
   ASSERT_OK(rc, "open WAL");
 
   rc = insert_records(kv, 0, 2000);
   ASSERT_OK(rc, "insert 2000");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_after_insert = get_file_size(TEST_DB);
   printf("  File size after insert: %ld bytes\n", size_after_insert);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_WAL);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_WAL);
   ASSERT_OK(rc, "reopen");
 
   rc = delete_records(kv, 0, 1800);
   ASSERT_OK(rc, "delete 1800");
 
-  rc = kvstore_incremental_vacuum(kv, 0);
+  rc = keyvaluestore_incremental_vacuum(kv, 0);
   ASSERT_OK(rc, "incremental vacuum");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   size_after_vacuum = get_file_size(TEST_DB);
   printf("  File size after vacuum: %ld bytes\n", size_after_vacuum);
@@ -290,13 +290,13 @@ static void test_vacuum_wal_mode(void){
 ** Test 4: Data integrity preserved after vacuum
 */
 static void test_vacuum_integrity(void){
-  KVStore *kv = NULL;
+  KeyValueStore *kv = NULL;
   int rc;
 
   TEST_START("Data integrity preserved after vacuum");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "open");
 
   rc = insert_records(kv, 0, 2000);
@@ -305,12 +305,12 @@ static void test_vacuum_integrity(void){
   rc = delete_records(kv, 0, 1800);
   ASSERT_OK(rc, "delete 1800 records");
 
-  rc = kvstore_incremental_vacuum(kv, 0);
+  rc = keyvaluestore_incremental_vacuum(kv, 0);
   ASSERT_OK(rc, "vacuum");
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
 
   /* Reopen and verify remaining 200 records */
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "reopen for verify");
 
   for( int i = 1800; i < 2000; i++ ){
@@ -318,10 +318,10 @@ static void test_vacuum_integrity(void){
     void *pVal = NULL;
     int nVal = 0;
     snprintf(key, sizeof(key), "key-%06d", i);
-    rc = kvstore_get(kv, key, (int)strlen(key), &pVal, &nVal);
-    if( rc != KVSTORE_OK ){
+    rc = keyvaluestore_get(kv, key, (int)strlen(key), &pVal, &nVal);
+    if( rc != KEYVALUESTORE_OK ){
       printf("  Missing key: %s\n", key);
-      kvstore_close(kv);
+      keyvaluestore_close(kv);
       TEST_FAIL("data lost after vacuum");
     }
     sqliteFree(pVal);
@@ -333,29 +333,29 @@ static void test_vacuum_integrity(void){
     void *pVal = NULL;
     int nVal = 0;
     snprintf(key, sizeof(key), "key-%06d", i);
-    rc = kvstore_get(kv, key, (int)strlen(key), &pVal, &nVal);
-    if( rc != KVSTORE_NOTFOUND ){
+    rc = keyvaluestore_get(kv, key, (int)strlen(key), &pVal, &nVal);
+    if( rc != KEYVALUESTORE_NOTFOUND ){
       printf("  Deleted key still present: %s\n", key);
       if( pVal ) sqliteFree(pVal);
-      kvstore_close(kv);
+      keyvaluestore_close(kv);
       TEST_FAIL("deleted key still exists after vacuum");
     }
   }
 
   /* Integrity check */
   char *zErr = NULL;
-  rc = kvstore_integrity_check(kv, &zErr);
-  if( rc != KVSTORE_OK ){
+  rc = keyvaluestore_integrity_check(kv, &zErr);
+  if( rc != KEYVALUESTORE_OK ){
     printf("  Integrity check failed: %s\n", zErr ? zErr : "unknown");
     if( zErr ) sqliteFree(zErr);
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     TEST_FAIL("integrity check failed after vacuum");
   }
   if( zErr ) sqliteFree(zErr);
   printf("  All 200 remaining records intact, deleted keys confirmed gone\n");
   printf("  Integrity check passed\n");
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -364,14 +364,14 @@ static void test_vacuum_integrity(void){
 ** Test 5: Multiple vacuum cycles (insert/delete/vacuum repeated)
 */
 static void test_multiple_vacuum_cycles(void){
-  KVStore *kv = NULL;
+  KeyValueStore *kv = NULL;
   int rc;
   long sizes[4];
 
   TEST_START("Multiple vacuum cycles");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
   ASSERT_OK(rc, "open");
 
   for( int cycle = 0; cycle < 3; cycle++ ){
@@ -383,14 +383,14 @@ static void test_multiple_vacuum_cycles(void){
     rc = delete_records(kv, base, 800);
     ASSERT_OK(rc, "delete");
 
-    rc = kvstore_incremental_vacuum(kv, 0);
+    rc = keyvaluestore_incremental_vacuum(kv, 0);
     ASSERT_OK(rc, "vacuum");
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     sizes[cycle] = get_file_size(TEST_DB);
     printf("  Cycle %d: file size = %ld bytes\n", cycle + 1, sizes[cycle]);
 
-    rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+    rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
     ASSERT_OK(rc, "reopen");
   }
 
@@ -402,10 +402,10 @@ static void test_multiple_vacuum_cycles(void){
       void *pVal = NULL;
       int nVal = 0;
       snprintf(key, sizeof(key), "key-%06d", i);
-      rc = kvstore_get(kv, key, (int)strlen(key), &pVal, &nVal);
-      if( rc != KVSTORE_OK ){
+      rc = keyvaluestore_get(kv, key, (int)strlen(key), &pVal, &nVal);
+      if( rc != KEYVALUESTORE_OK ){
         printf("  Missing key from cycle %d: %s\n", cycle + 1, key);
-        kvstore_close(kv);
+        keyvaluestore_close(kv);
         TEST_FAIL("data lost across vacuum cycles");
       }
       sqliteFree(pVal);
@@ -415,16 +415,16 @@ static void test_multiple_vacuum_cycles(void){
   printf("  All 600 records (200 per cycle) intact across 3 vacuum cycles\n");
 
   char *zErr = NULL;
-  rc = kvstore_integrity_check(kv, &zErr);
-  if( rc != KVSTORE_OK ){
+  rc = keyvaluestore_integrity_check(kv, &zErr);
+  if( rc != KEYVALUESTORE_OK ){
     printf("  Integrity check failed: %s\n", zErr ? zErr : "unknown");
     if( zErr ) sqliteFree(zErr);
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     TEST_FAIL("integrity check failed");
   }
   if( zErr ) sqliteFree(zErr);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 WAL Checkpoint Examples
-Demonstrates: walSizeLimit auto-checkpoint and manual kvstore_checkpoint()
+Demonstrates: walSizeLimit auto-checkpoint and manual keyvaluestore_checkpoint()
 
 Run:
     python examples/checkpoint.py
@@ -9,7 +9,7 @@ Run:
 
 import os
 from snkv import (
-    KVStore,
+    KeyValueStore,
     JOURNAL_WAL,
     JOURNAL_DELETE,
     CHECKPOINT_PASSIVE,
@@ -25,7 +25,7 @@ def manual_passive_checkpoint():
     print("--- Manual PASSIVE Checkpoint ---")
     # PASSIVE: copies WAL frames to the DB file without blocking readers/writers.
     # May not checkpoint all frames if readers are active.
-    with KVStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
         for i in range(50):
             db[f"k{i:03d}"] = f"v{i}"
 
@@ -37,7 +37,7 @@ def manual_passive_checkpoint():
 def manual_full_checkpoint():
     print("\n--- Manual FULL Checkpoint ---")
     # FULL: waits for all readers to finish, then copies all WAL frames.
-    with KVStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
         for i in range(50):
             db[f"full:{i:03d}"] = f"v{i}"
 
@@ -49,7 +49,7 @@ def truncate_checkpoint():
     print("\n--- TRUNCATE Checkpoint ---")
     # TRUNCATE: like RESTART, then also shrinks the WAL file to zero bytes.
     # Most aggressive; best for reclaiming disk space.
-    with KVStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
         for i in range(100):
             db[f"trunc:{i:04d}"] = f"v{i}"
 
@@ -63,7 +63,7 @@ def auto_checkpoint_via_wal_size_limit():
     # With wal_size_limit=N, a PASSIVE checkpoint fires automatically
     # after every N committed write transactions.
     # Keeps the WAL from growing without bound.
-    with KVStore(DB_FILE, journal_mode=JOURNAL_WAL, wal_size_limit=50) as db:
+    with KeyValueStore(DB_FILE, journal_mode=JOURNAL_WAL, wal_size_limit=50) as db:
         for i in range(200):
             db[f"auto:{i:05d}"] = str(i)
 
@@ -77,7 +77,7 @@ def auto_checkpoint_via_wal_size_limit():
 def checkpoint_on_delete_journal():
     print("\n--- Checkpoint on DELETE Journal (no-op) ---")
     # checkpoint() on a non-WAL database is a no-op and returns (0, 0).
-    with KVStore(DB_FILE, journal_mode=JOURNAL_DELETE) as db:
+    with KeyValueStore(DB_FILE, journal_mode=JOURNAL_DELETE) as db:
         db["key"] = "value"
         nlog, nckpt = db.checkpoint(CHECKPOINT_PASSIVE)
         print(f"  DELETE journal checkpoint: nLog={nlog}, nCkpt={nckpt} (always 0)")
@@ -90,7 +90,7 @@ def checkpoint_modes_summary():
     print("  RESTART  - like FULL + reset write pos; new writes restart from frame 0")
     print("  TRUNCATE - like RESTART + truncate file; WAL shrinks to 0 bytes on disk")
 
-    with KVStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(DB_FILE, journal_mode=JOURNAL_WAL) as db:
         for i in range(30):
             db[f"mode:{i}"] = str(i)
 

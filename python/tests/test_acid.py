@@ -6,7 +6,7 @@ DELETE (rollback journal) and WAL journal modes.
 """
 
 import pytest
-from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE, CorruptError
+from snkv import KeyValueStore, JOURNAL_WAL, JOURNAL_DELETE, CorruptError
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE, CorruptError
 @pytest.fixture(params=[JOURNAL_WAL, JOURNAL_DELETE], ids=["WAL", "DELETE"])
 def db(request, tmp_path):
     path = str(tmp_path / "acid.db")
-    with KVStore(path, journal_mode=request.param) as store:
+    with KeyValueStore(path, journal_mode=request.param) as store:
         yield store
 
 
@@ -160,11 +160,11 @@ def test_durability_survives_close_reopen(db_path):
     """Data written and synced must survive close + reopen."""
     path, mode = db_path
 
-    with KVStore(path, journal_mode=mode) as db:
+    with KeyValueStore(path, journal_mode=mode) as db:
         db[b"durable"] = b"yes"
         db.sync()
 
-    with KVStore(path, journal_mode=mode) as db:
+    with KeyValueStore(path, journal_mode=mode) as db:
         assert db[b"durable"] == b"yes"
 
 
@@ -174,11 +174,11 @@ def test_durability_multiple_close_reopen_cycles(db_path):
     path, mode = db_path
 
     for cycle in range(5):
-        with KVStore(path, journal_mode=mode) as db:
+        with KeyValueStore(path, journal_mode=mode) as db:
             db[f"cycle{cycle}".encode()] = f"v{cycle}".encode()
 
         # verify all previous cycles are still present
-        with KVStore(path, journal_mode=mode) as db:
+        with KeyValueStore(path, journal_mode=mode) as db:
             for prev in range(cycle + 1):
                 assert db.get(f"cycle{prev}".encode()) == f"v{prev}".encode()
 
@@ -187,14 +187,14 @@ def test_durability_uncommitted_lost_on_close(db_path):
     """Data written but NOT committed must be absent after close + reopen."""
     path, mode = db_path
 
-    with KVStore(path, journal_mode=mode) as db:
+    with KeyValueStore(path, journal_mode=mode) as db:
         db[b"committed"] = b"safe"
 
-    with KVStore(path, journal_mode=mode) as db:
+    with KeyValueStore(path, journal_mode=mode) as db:
         db.begin(write=True)
         db[b"lost"] = b"never_committed"
         # close without commit
 
-    with KVStore(path, journal_mode=mode) as db:
+    with KeyValueStore(path, journal_mode=mode) as db:
         assert db[b"committed"] == b"safe"
         assert db.get(b"lost") is None

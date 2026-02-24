@@ -11,15 +11,15 @@ and delete recovery — all in both WAL and DELETE journal modes.
 """
 
 import pytest
-from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE
+from snkv import KeyValueStore, JOURNAL_WAL, JOURNAL_DELETE
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _open(path: str, mode: int) -> KVStore:
-    return KVStore(path, journal_mode=mode, busy_timeout=2000)
+def _open(path: str, mode: int) -> KeyValueStore:
+    return KeyValueStore(path, journal_mode=mode, busy_timeout=2000)
 
 
 # ---------------------------------------------------------------------------

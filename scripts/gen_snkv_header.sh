@@ -47,25 +47,25 @@ emit_lines() {
   sed -n "${2},${3}p" "$1" | strip_local_includes
 }
 
-# Emit the public API from kvstore.h, stripping its own _KVSTORE_H_ include
+# Emit the public API from keyvaluestore.h, stripping its own _KEYVALUESTORE_H_ include
 # guards.  All other transformations (local-include removal, windows.h quoting)
 # are handled by strip_local_includes.  Nothing API-related is hardcoded here:
-# add a new constant, struct field, or function to kvstore.h and it
+# add a new constant, struct field, or function to keyvaluestore.h and it
 # automatically appears in snkv.h on the next `make snkv.h`.
-emit_kvstore_public() {
+emit_keyvaluestore_public() {
   sed \
-    -e '/^#ifndef _KVSTORE_H_$/d' \
-    -e '/^#define _KVSTORE_H_$/d' \
-    -e '/^#endif \/\* _KVSTORE_H_ \*\/$/d' \
+    -e '/^#ifndef _KEYVALUESTORE_H_$/d' \
+    -e '/^#define _KEYVALUESTORE_H_$/d' \
+    -e '/^#endif \/\* _KEYVALUESTORE_H_ \*\/$/d' \
     < "$1" | strip_local_includes
 }
 
 # ============================================================
-# Part 1: File preamble (snkv.h-specific) + public API from kvstore.h.
+# Part 1: File preamble (snkv.h-specific) + public API from keyvaluestore.h.
 #
 # Only the snkv.h include guard, _GNU_SOURCE guard, and the usage comment
 # are hardcoded here.  Every type, constant, struct, and function
-# declaration is derived directly from include/kvstore.h.
+# declaration is derived directly from include/keyvaluestore.h.
 # ============================================================
 cat << 'FILE_HEADER'
 /* SPDX-License-Identifier: Apache-2.0 */
@@ -112,7 +112,7 @@ cat << 'FILE_HEADER'
 
 FILE_HEADER
 
-emit_kvstore_public "$INCDIR/kvstore.h"
+emit_keyvaluestore_public "$INCDIR/keyvaluestore.h"
 
 echo ""
 
@@ -198,10 +198,10 @@ for h in btreeInt.h wal.h os_common.h os_win.h; do
   emit "include/$h" "$INCDIR/$h"
 done
 
-# kvstore.h public API (including compat macros and snkv_malloc/snkv_free)
+# keyvaluestore.h public API (including compat macros and snkv_malloc/snkv_free)
 # was already emitted in Part 1.  Define its include guard so that the
-# stripped #include "kvstore.h" inside kvstore.c becomes a no-op.
-echo "#define _KVSTORE_H_"
+# stripped #include "keyvaluestore.h" inside keyvaluestore.c becomes a no-op.
+echo "#define _KEYVALUESTORE_H_"
 echo ""
 
 # --- Phase D: All .c source files ---
@@ -233,7 +233,7 @@ SOURCES="
   btmutex.c
   status.c
   threads.c
-  kvstore.c
+  keyvaluestore.c
 "
 
 for s in $SOURCES; do

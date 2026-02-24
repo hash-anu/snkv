@@ -10,7 +10,7 @@ import os
 import time
 import pytest
 import snkv
-from snkv import KVStore, NotFoundError, JOURNAL_WAL
+from snkv import KeyValueStore, NotFoundError, JOURNAL_WAL
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ from snkv import KVStore, NotFoundError, JOURNAL_WAL
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / "prod.db")
-    with KVStore(path) as store:
+    with KeyValueStore(path) as store:
         yield store
 
 
@@ -34,9 +34,9 @@ def db_path(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_open_close(tmp_path):
-    """KVStore opens and closes without error."""
+    """KeyValueStore opens and closes without error."""
     path = str(tmp_path / "oc.db")
-    db = KVStore(path)
+    db = KeyValueStore(path)
     db.close()
 
 
@@ -187,21 +187,21 @@ def test_not_found_is_key_error(db):
 
 def test_persistence_close_reopen(db_path):
     """Data written in session 1 must be readable in session 2."""
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         db[b"persistent"] = b"yes_it_is"
 
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         assert db[b"persistent"] == b"yes_it_is"
 
 
 def test_persistence_100_keys(db_path):
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         db.begin(write=True)
         for i in range(100):
             db[f"p{i:04d}".encode()] = f"val{i}".encode()
         db.commit()
 
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         for i in range(100):
             assert db.get(f"p{i:04d}".encode()) == f"val{i}".encode()
 
@@ -259,7 +259,7 @@ def test_performance_10k_writes(tmp_path):
     path = str(tmp_path / "perf.db")
     N = 10_000
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         t0 = time.monotonic()
         db.begin(write=True)
         for i in range(N):

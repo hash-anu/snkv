@@ -7,7 +7,7 @@ cross-CF transactions, and persistence across close/reopen.
 
 import pytest
 import snkv
-from snkv import KVStore, NotFoundError, JOURNAL_WAL
+from snkv import KeyValueStore, NotFoundError, JOURNAL_WAL
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +17,7 @@ from snkv import KVStore, NotFoundError, JOURNAL_WAL
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / "cf.db")
-    with KVStore(path) as store:
+    with KeyValueStore(path) as store:
         yield store
 
 
@@ -32,13 +32,13 @@ def db_path(tmp_path):
 
 def test_cf_create_and_reopen(db_path):
     """CFs created in one session must be openable in the next."""
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         with db.create_column_family("users") as cf:
             cf[b"alice"] = b"admin"
         with db.create_column_family("sessions") as _:
             pass
 
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         names = db.list_column_families()
         assert "users" in names
         assert "sessions" in names
@@ -48,7 +48,7 @@ def test_cf_create_and_reopen(db_path):
 
 
 def test_cf_default_family(db):
-    """Default CF handle shares data with the top-level KVStore API."""
+    """Default CF handle shares data with the top-level KeyValueStore API."""
     with db.default_column_family() as cf:
         cf[b"via_cf"] = b"1"
 
@@ -135,12 +135,12 @@ def test_cf_drop_removes_from_list(db):
 def test_cf_drop_removes_data(db, db_path):
     """Data in a dropped CF must not be accessible after reopen."""
     path = db_path
-    with KVStore(path) as d:
+    with KeyValueStore(path) as d:
         with d.create_column_family("temp") as cf:
             cf[b"key"] = b"val"
         d.drop_column_family("temp")
 
-    with KVStore(path) as d:
+    with KeyValueStore(path) as d:
         assert "temp" not in d.list_column_families()
 
 
@@ -217,12 +217,12 @@ def test_cf_transaction_rollback_both_cfs(db):
 
 def test_cf_data_persists_across_sessions(db_path):
     """Data written to a CF in session 1 must be readable in session 2."""
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         with db.create_column_family("users") as cf:
             for i in range(50):
                 cf[f"user:{i}".encode()] = f"data{i}".encode()
 
-    with KVStore(db_path) as db:
+    with KeyValueStore(db_path) as db:
         with db.open_column_family("users") as cf:
             for i in range(50):
                 assert cf.get(f"user:{i}".encode()) == f"data{i}".encode()
@@ -231,11 +231,11 @@ def test_cf_data_persists_across_sessions(db_path):
 def test_cf_wal_mode(tmp_path):
     """Column families must work correctly in WAL journal mode."""
     path = str(tmp_path / "cf_wal.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         with db.create_column_family("wf") as cf:
             cf[b"wkey"] = b"wval"
             assert cf[b"wkey"] == b"wval"
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         with db.open_column_family("wf") as cf:
             assert cf[b"wkey"] == b"wval"

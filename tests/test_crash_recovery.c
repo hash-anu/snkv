@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "platform_compat.h"
 
 #define DB_FILE_WAL   "test_crash_wal.db"
@@ -70,21 +70,21 @@ static void make_value(char *buf, int buflen, const char *prefix, int seq) {
 }
 
 /* Count how many keys with given prefix exist in the DB */
-static int count_keys(KVStore *kv, const char *prefix, int max_seq) {
+static int count_keys(KeyValueStore *kv, const char *prefix, int max_seq) {
     int count = 0;
     int i;
     char key[64];
     for (i = 0; i < max_seq; i++) {
         int exists = 0;
         make_key(key, sizeof(key), prefix, i);
-        kvstore_exists(kv, key, (int)strlen(key), &exists);
+        keyvaluestore_exists(kv, key, (int)strlen(key), &exists);
         if (exists) count++;
     }
     return count;
 }
 
 /* Verify all keys [0, count) have correct values */
-static int verify_keys(KVStore *kv, const char *prefix, int count) {
+static int verify_keys(KeyValueStore *kv, const char *prefix, int count) {
     int i;
     char key[64], expected[64];
     for (i = 0; i < count; i++) {
@@ -93,8 +93,8 @@ static int verify_keys(KVStore *kv, const char *prefix, int count) {
         make_key(key, sizeof(key), prefix, i);
         make_value(expected, sizeof(expected), prefix, i);
 
-        int rc = kvstore_get(kv, key, (int)strlen(key), &got, &got_len);
-        if (rc != KVSTORE_OK) return 0;
+        int rc = keyvaluestore_get(kv, key, (int)strlen(key), &got, &got_len);
+        if (rc != KEYVALUESTORE_OK) return 0;
 
         int exp_len = (int)strlen(expected);
         if (got_len != exp_len || memcmp(got, expected, exp_len) != 0) {
@@ -107,17 +107,17 @@ static int verify_keys(KVStore *kv, const char *prefix, int count) {
 }
 
 /* Run integrity check, return 1 if OK */
-static int check_integrity(KVStore *kv) {
+static int check_integrity(KeyValueStore *kv) {
     char *errMsg = NULL;
-    int rc = kvstore_integrity_check(kv, &errMsg);
+    int rc = keyvaluestore_integrity_check(kv, &errMsg);
     if (errMsg) sqliteFree(errMsg);
-    return (rc == KVSTORE_OK);
+    return (rc == KEYVALUESTORE_OK);
 }
 
 /* ================================================================
 ** TEST 1: Committed data survives unclean close
 **
-** Write N keys and commit, then close WITHOUT calling kvstore_close
+** Write N keys and commit, then close WITHOUT calling keyvaluestore_close
 ** (simulate crash by just freeing -- but since we can't do that safely,
 ** we close normally, which is the minimum recovery path).
 ** Reopen and verify all committed data is present.
@@ -127,28 +127,28 @@ static void test_committed_survives_wal(void) {
     print_section("Committed data survives reopen (WAL mode)");
     cleanup(DB_FILE_WAL);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
     /* Phase 1: Write 500 keys and commit */
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 500; i++) {
         make_key(key, sizeof(key), "committed", i);
         make_value(value, sizeof(value), "committed", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    rc = kvstore_commit(kv);
-    print_result("Phase 1: Write 500 keys + commit", rc == KVSTORE_OK);
+    rc = keyvaluestore_commit(kv);
+    print_result("Phase 1: Write 500 keys + commit", rc == KEYVALUESTORE_OK);
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
     /* Phase 2: Reopen and verify */
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int found = count_keys(kv, "committed", 500);
     print_result("All 500 committed keys present", found == 500);
@@ -158,7 +158,7 @@ static void test_committed_survives_wal(void) {
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(DB_FILE_WAL);
 }
 
@@ -166,26 +166,26 @@ static void test_committed_survives_delete(void) {
     print_section("Committed data survives reopen (DELETE journal mode)");
     cleanup(DB_FILE_DEL);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(DB_FILE_DEL, &kv, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_DEL, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 500; i++) {
         make_key(key, sizeof(key), "committed", i);
         make_value(value, sizeof(value), "committed", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    rc = kvstore_commit(kv);
-    print_result("Phase 1: Write 500 keys + commit", rc == KVSTORE_OK);
+    rc = keyvaluestore_commit(kv);
+    print_result("Phase 1: Write 500 keys + commit", rc == KEYVALUESTORE_OK);
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
-    rc = kvstore_open(DB_FILE_DEL, &kv, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_DEL, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int found = count_keys(kv, "committed", 500);
     print_result("All 500 committed keys present", found == 500);
@@ -195,7 +195,7 @@ static void test_committed_survives_delete(void) {
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(DB_FILE_DEL);
 }
 
@@ -211,39 +211,39 @@ static void test_uncommitted_rolled_back(int journalMode, const char *mode_name)
     snprintf(title, sizeof(title), "Uncommitted data rolled back (%s)", mode_name);
     print_section(title);
 
-    const char *db = (journalMode == KVSTORE_JOURNAL_WAL) ? DB_FILE_WAL : DB_FILE_DEL;
+    const char *db = (journalMode == KEYVALUESTORE_JOURNAL_WAL) ? DB_FILE_WAL : DB_FILE_DEL;
     cleanup(db);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
     /* Phase 1: Write 200 keys and commit */
-    rc = kvstore_open(db, &kv, journalMode);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(db, &kv, journalMode);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 200; i++) {
         make_key(key, sizeof(key), "batch1", i);
         make_value(value, sizeof(value), "batch1", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    rc = kvstore_commit(kv);
-    print_result("Batch 1: 200 keys committed", rc == KVSTORE_OK);
+    rc = keyvaluestore_commit(kv);
+    print_result("Batch 1: 200 keys committed", rc == KEYVALUESTORE_OK);
 
     /* Phase 2: Write 300 more keys but DO NOT commit */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 300; i++) {
         make_key(key, sizeof(key), "batch2", i);
         make_value(value, sizeof(value), "batch2", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
     /* Simulate crash: close without committing */
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
     /* Phase 3: Reopen and verify */
-    rc = kvstore_open(db, &kv, journalMode);
-    if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
+    rc = keyvaluestore_open(db, &kv, journalMode);
+    if (rc != KEYVALUESTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int batch1_count = count_keys(kv, "batch1", 200);
     print_result("Batch 1 (committed) all present", batch1_count == 200);
@@ -256,7 +256,7 @@ static void test_uncommitted_rolled_back(int journalMode, const char *mode_name)
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -269,34 +269,34 @@ static void test_explicit_rollback(int journalMode, const char *mode_name) {
     snprintf(title, sizeof(title), "Explicit rollback discards data (%s)", mode_name);
     print_section(title);
 
-    const char *db = (journalMode == KVSTORE_JOURNAL_WAL) ? DB_FILE_WAL : DB_FILE_DEL;
+    const char *db = (journalMode == KEYVALUESTORE_JOURNAL_WAL) ? DB_FILE_WAL : DB_FILE_DEL;
     cleanup(db);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(db, &kv, journalMode);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(db, &kv, journalMode);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Commit some data first */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 100; i++) {
         make_key(key, sizeof(key), "keep", i);
         make_value(value, sizeof(value), "keep", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
 
     /* Write more data then rollback */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 200; i++) {
         make_key(key, sizeof(key), "discard", i);
         make_value(value, sizeof(value), "discard", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    rc = kvstore_rollback(kv);
-    print_result("Rollback succeeded", rc == KVSTORE_OK);
+    rc = keyvaluestore_rollback(kv);
+    print_result("Rollback succeeded", rc == KEYVALUESTORE_OK);
 
     /* Verify: 'keep' keys present, 'discard' keys gone */
     int keep_count = count_keys(kv, "keep", 100);
@@ -307,7 +307,7 @@ static void test_explicit_rollback(int journalMode, const char *mode_name) {
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -327,9 +327,9 @@ static void test_multiple_crash_cycles(void) {
     int total_expected = 0;
 
     for (cycle = 0; cycle < 5; cycle++) {
-        KVStore *kv = NULL;
-        rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-        if (rc != KVSTORE_OK) {
+        KeyValueStore *kv = NULL;
+        rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+        if (rc != KEYVALUESTORE_OK) {
             print_result("Open failed on cycle", 0);
             cleanup(DB_FILE_WAL);
             return;
@@ -350,31 +350,31 @@ static void test_multiple_crash_cycles(void) {
 
         /* Write 100 new keys for this cycle */
         snprintf(prefix, sizeof(prefix), "cycle%d", cycle);
-        kvstore_begin(kv, 1);
+        keyvaluestore_begin(kv, 1);
         for (i = 0; i < 100; i++) {
             make_key(key, sizeof(key), prefix, i);
             make_value(value, sizeof(value), prefix, i);
-            kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+            keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
         }
-        kvstore_commit(kv);
+        keyvaluestore_commit(kv);
         total_expected += 100;
 
         /* Also write uncommitted data that should be lost */
-        kvstore_begin(kv, 1);
+        keyvaluestore_begin(kv, 1);
         for (i = 0; i < 50; i++) {
             snprintf(prefix, sizeof(prefix), "ghost%d", cycle);
             make_key(key, sizeof(key), prefix, i);
             make_value(value, sizeof(value), prefix, i);
-            kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+            keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
         }
         /* Close without committing -- uncommitted data should be lost */
-        kvstore_close(kv);
+        keyvaluestore_close(kv);
     }
 
     /* Final verification */
-    KVStore *kv = NULL;
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) {
+    KeyValueStore *kv = NULL;
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) {
         print_result("Final reopen", 0);
         cleanup(DB_FILE_WAL);
         return;
@@ -408,7 +408,7 @@ static void test_multiple_crash_cycles(void) {
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(DB_FILE_WAL);
 }
 
@@ -424,39 +424,39 @@ static void test_large_txn_recovery(int journalMode, const char *mode_name) {
     snprintf(title, sizeof(title), "Large transaction recovery (%s)", mode_name);
     print_section(title);
 
-    const char *db = (journalMode == KVSTORE_JOURNAL_WAL) ? DB_FILE_WAL : DB_FILE_DEL;
+    const char *db = (journalMode == KEYVALUESTORE_JOURNAL_WAL) ? DB_FILE_WAL : DB_FILE_DEL;
     cleanup(db);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(db, &kv, journalMode);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(db, &kv, journalMode);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Write and commit 5000 keys */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 5000; i++) {
         make_key(key, sizeof(key), "large-ok", i);
         make_value(value, sizeof(value), "large-ok", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    rc = kvstore_commit(kv);
-    print_result("5000 keys committed", rc == KVSTORE_OK);
+    rc = keyvaluestore_commit(kv);
+    print_result("5000 keys committed", rc == KEYVALUESTORE_OK);
 
     /* Write 5000 more but don't commit */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 5000; i++) {
         make_key(key, sizeof(key), "large-lost", i);
         make_value(value, sizeof(value), "large-lost", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
     /* Crash: close without commit */
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
     /* Reopen and verify */
-    rc = kvstore_open(db, &kv, journalMode);
-    if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
+    rc = keyvaluestore_open(db, &kv, journalMode);
+    if (rc != KEYVALUESTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int ok_count = count_keys(kv, "large-ok", 5000);
     print_result("All 5000 committed keys present", ok_count == 5000);
@@ -469,7 +469,7 @@ static void test_large_txn_recovery(int journalMode, const char *mode_name) {
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -484,44 +484,44 @@ static void test_overwrite_recovery(void) {
     print_section("Overwrite + crash recovery (WAL mode)");
     cleanup(DB_FILE_WAL);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Version 1: write original values */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 200; i++) {
         snprintf(key, sizeof(key), "ow-key-%06d", i);
         snprintf(value, sizeof(value), "version-1-%06d", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
 
     /* Version 2: overwrite with new values and commit */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 200; i++) {
         snprintf(key, sizeof(key), "ow-key-%06d", i);
         snprintf(value, sizeof(value), "version-2-%06d", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
 
     /* Version 3: overwrite again but DON'T commit */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 200; i++) {
         snprintf(key, sizeof(key), "ow-key-%06d", i);
         snprintf(value, sizeof(value), "version-3-%06d", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
     /* Crash: close without commit */
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
     /* Reopen: should see version-2 values (last committed) */
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int v2_correct = 0;
     int v3_found = 0;
@@ -530,8 +530,8 @@ static void test_overwrite_recovery(void) {
         int got_len = 0;
         snprintf(key, sizeof(key), "ow-key-%06d", i);
 
-        rc = kvstore_get(kv, key, (int)strlen(key), &got, &got_len);
-        if (rc == KVSTORE_OK) {
+        rc = keyvaluestore_get(kv, key, (int)strlen(key), &got, &got_len);
+        if (rc == KEYVALUESTORE_OK) {
             char expected_v2[64];
             snprintf(expected_v2, sizeof(expected_v2), "version-2-%06d", i);
             int exp_len = (int)strlen(expected_v2);
@@ -554,7 +554,7 @@ static void test_overwrite_recovery(void) {
     print_result("No version-3 (uncommitted) values leaked", v3_found == 0);
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(DB_FILE_WAL);
 }
 
@@ -569,42 +569,42 @@ static void test_delete_recovery(void) {
     print_section("Delete + crash recovery (WAL mode)");
     cleanup(DB_FILE_WAL);
 
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     int rc, i;
     char key[64], value[64];
 
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) { print_result("Open DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) { print_result("Open DB", 0); return; }
 
     /* Write 300 keys */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 300; i++) {
         make_key(key, sizeof(key), "deltest", i);
         make_value(value, sizeof(value), "deltest", i);
-        kvstore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
+        keyvaluestore_put(kv, key, (int)strlen(key), value, (int)strlen(value));
     }
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
 
     /* Delete keys 0-99 and commit */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 0; i < 100; i++) {
         make_key(key, sizeof(key), "deltest", i);
-        kvstore_delete(kv, key, (int)strlen(key));
+        keyvaluestore_delete(kv, key, (int)strlen(key));
     }
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
 
     /* Delete keys 100-199 but DON'T commit */
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     for (i = 100; i < 200; i++) {
         make_key(key, sizeof(key), "deltest", i);
-        kvstore_delete(kv, key, (int)strlen(key));
+        keyvaluestore_delete(kv, key, (int)strlen(key));
     }
     /* Crash */
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
 
     /* Reopen: keys 0-99 should be gone, 100-299 should be present */
-    rc = kvstore_open(DB_FILE_WAL, &kv, KVSTORE_JOURNAL_WAL);
-    if (rc != KVSTORE_OK) { print_result("Reopen DB", 0); return; }
+    rc = keyvaluestore_open(DB_FILE_WAL, &kv, KEYVALUESTORE_JOURNAL_WAL);
+    if (rc != KEYVALUESTORE_OK) { print_result("Reopen DB", 0); return; }
 
     int deleted_count = count_keys(kv, "deltest", 100);  /* keys 0-99 */
     print_result("Committed deletes (0-99) stayed deleted", deleted_count == 0);
@@ -614,7 +614,7 @@ static void test_delete_recovery(void) {
     for (i = 100; i < 200; i++) {
         int exists = 0;
         make_key(key, sizeof(key), "deltest", i);
-        kvstore_exists(kv, key, (int)strlen(key), &exists);
+        keyvaluestore_exists(kv, key, (int)strlen(key), &exists);
         if (exists) restored++;
     }
     print_result("Uncommitted deletes (100-199) restored", restored == 100);
@@ -624,7 +624,7 @@ static void test_delete_recovery(void) {
     for (i = 200; i < 300; i++) {
         int exists = 0;
         make_key(key, sizeof(key), "deltest", i);
-        kvstore_exists(kv, key, (int)strlen(key), &exists);
+        keyvaluestore_exists(kv, key, (int)strlen(key), &exists);
         if (exists) untouched++;
     }
     print_result("Untouched keys (200-299) still present", untouched == 100);
@@ -637,8 +637,8 @@ static void test_delete_recovery(void) {
         make_key(key, sizeof(key), "deltest", i);
         make_value(value, sizeof(value), "deltest", i);
 
-        rc = kvstore_get(kv, key, (int)strlen(key), &got, &got_len);
-        if (rc != KVSTORE_OK) { restored_correct = 0; break; }
+        rc = keyvaluestore_get(kv, key, (int)strlen(key), &got, &got_len);
+        if (rc != KEYVALUESTORE_OK) { restored_correct = 0; break; }
 
         int exp_len = (int)strlen(value);
         if (got_len != exp_len || memcmp(got, value, exp_len) != 0) {
@@ -650,7 +650,7 @@ static void test_delete_recovery(void) {
 
     print_result("Integrity check", check_integrity(kv));
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(DB_FILE_WAL);
 }
 
@@ -667,19 +667,19 @@ int main(void) {
     test_committed_survives_delete();
 
     /* Test 2: Uncommitted data rolled back */
-    test_uncommitted_rolled_back(KVSTORE_JOURNAL_WAL, "WAL");
-    test_uncommitted_rolled_back(KVSTORE_JOURNAL_DELETE, "DELETE");
+    test_uncommitted_rolled_back(KEYVALUESTORE_JOURNAL_WAL, "WAL");
+    test_uncommitted_rolled_back(KEYVALUESTORE_JOURNAL_DELETE, "DELETE");
 
     /* Test 3: Explicit rollback */
-    test_explicit_rollback(KVSTORE_JOURNAL_WAL, "WAL");
-    test_explicit_rollback(KVSTORE_JOURNAL_DELETE, "DELETE");
+    test_explicit_rollback(KEYVALUESTORE_JOURNAL_WAL, "WAL");
+    test_explicit_rollback(KEYVALUESTORE_JOURNAL_DELETE, "DELETE");
 
     /* Test 4: Multiple commit/crash cycles */
     test_multiple_crash_cycles();
 
     /* Test 5: Large transaction recovery */
-    test_large_txn_recovery(KVSTORE_JOURNAL_WAL, "WAL");
-    test_large_txn_recovery(KVSTORE_JOURNAL_DELETE, "DELETE");
+    test_large_txn_recovery(KEYVALUESTORE_JOURNAL_WAL, "WAL");
+    test_large_txn_recovery(KEYVALUESTORE_JOURNAL_DELETE, "DELETE");
 
     /* Test 6: Overwrite + crash */
     test_overwrite_recovery();

@@ -12,7 +12,7 @@ ACID-compliant embedded key-value store built directly on SQLite's B-Tree engine
 ## Features
 
 - **Dict-style API** — `db["key"] = value`, `val = db["key"]`, `del db["key"]`, `"key" in db`
-- **Context managers** — `with KVStore(...) as db` and `with db.create_column_family(...) as cf` for guaranteed cleanup
+- **Context managers** — `with KeyValueStore(...) as db` and `with db.create_column_family(...) as cf` for guaranteed cleanup
 - **Prefix iterators** — efficient namespace scans with `db.prefix_iterator(b"user:")`
 - **WAL checkpoint control** — PASSIVE / FULL / RESTART / TRUNCATE modes via `db.checkpoint()`
 - **Auto-checkpoint** — set `wal_size_limit=N` to checkpoint automatically after every N WAL frames
@@ -111,9 +111,9 @@ python3 setup.py build_ext --inplace
 ## Quick Start
 
 ```python
-from snkv import KVStore
+from snkv import KeyValueStore
 
-with KVStore("mydb.db") as db:
+with KeyValueStore("mydb.db") as db:
     db["hello"] = "world"
     print(db["hello"].decode())   # world
 ```
@@ -125,9 +125,9 @@ with KVStore("mydb.db") as db:
 ### Opening a store
 
 ```python
-from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE, SYNC_NORMAL, SYNC_OFF, SYNC_FULL
+from snkv import KeyValueStore, JOURNAL_WAL, JOURNAL_DELETE, SYNC_NORMAL, SYNC_OFF, SYNC_FULL
 
-with KVStore(
+with KeyValueStore(
     "mydb.db",
     journal_mode=JOURNAL_WAL,   # JOURNAL_WAL (default) or JOURNAL_DELETE
     sync_level=SYNC_NORMAL,     # SYNC_NORMAL (default), SYNC_OFF, SYNC_FULL
@@ -344,17 +344,17 @@ PYTHONPATH=. python3 examples/transactions.py
 
 ## Thread Safety
 
-Each thread must use its own `KVStore` instance. WAL mode serialises concurrent writers
+Each thread must use its own `KeyValueStore` instance. WAL mode serialises concurrent writers
 at the SQLite level — a `BusyError` is raised (or retried up to `busy_timeout` ms) when
 two writers collide. Multiple readers always make progress concurrently in WAL mode.
 
 ```python
 import threading
-from snkv import KVStore, JOURNAL_WAL
+from snkv import KeyValueStore, JOURNAL_WAL
 
 def worker(db_path, worker_id):
     # Each thread opens its own connection
-    with KVStore(db_path, journal_mode=JOURNAL_WAL, busy_timeout=5000) as db:
+    with KeyValueStore(db_path, journal_mode=JOURNAL_WAL, busy_timeout=5000) as db:
         db[f"key_{worker_id}".encode()] = b"value"
 
 threads = [threading.Thread(target=worker, args=("mydb.db", i)) for i in range(4)]

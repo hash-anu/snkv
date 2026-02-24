@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
-** test_checkpoint.c -- Tests for kvstore_checkpoint() and walSizeLimit.
+** test_checkpoint.c -- Tests for keyvaluestore_checkpoint() and walSizeLimit.
 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "platform_compat.h"
 
 static int passed = 0;
@@ -44,11 +44,11 @@ static void test_passive_checkpoint(void) {
     const char *db = "ckpt_t1.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    KVStore *kv = NULL;
-    int rc = kvstore_open_v2(db, &kv, &cfg);
-    CHECK(rc == KVSTORE_OK, "open WAL store");
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
+    KeyValueStore *kv = NULL;
+    int rc = keyvaluestore_open_v2(db, &kv, &cfg);
+    CHECK(rc == KEYVALUESTORE_OK, "open WAL store");
 
     /* Write 50 records to build up some WAL frames */
     int i;
@@ -56,16 +56,16 @@ static void test_passive_checkpoint(void) {
     for (i = 0; i < 50; i++) {
         snprintf(key, sizeof(key), "key%04d", i);
         snprintf(val, sizeof(val), "value%04d", i);
-        kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
+        keyvaluestore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
 
     int nLog = -1, nCkpt = -1;
-    rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
-    CHECK(rc == KVSTORE_OK,    "PASSIVE checkpoint returns OK");
+    rc = keyvaluestore_checkpoint(kv, KEYVALUESTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+    CHECK(rc == KEYVALUESTORE_OK,    "PASSIVE checkpoint returns OK");
     CHECK(nLog  >= 0,          "pnLog output is non-negative");
     CHECK(nCkpt >= 0,          "pnCkpt output is non-negative");
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -74,17 +74,17 @@ static void test_truncate_checkpoint(void) {
     const char *db = "ckpt_t2.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    KVStore *kv = NULL;
-    kvstore_open_v2(db, &kv, &cfg);
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
+    KeyValueStore *kv = NULL;
+    keyvaluestore_open_v2(db, &kv, &cfg);
 
     int i;
     char key[32], val[64];
     for (i = 0; i < 100; i++) {
         snprintf(key, sizeof(key), "key%04d", i);
         snprintf(val, sizeof(val), "value%04d", i);
-        kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
+        keyvaluestore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
 
     /* WAL file should exist and have content before checkpoint.
@@ -98,11 +98,11 @@ static void test_truncate_checkpoint(void) {
 #endif
 
     int nLog = -1, nCkpt = -1;
-    int rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_TRUNCATE, &nLog, &nCkpt);
-    CHECK(rc == KVSTORE_OK, "TRUNCATE checkpoint returns OK");
+    int rc = keyvaluestore_checkpoint(kv, KEYVALUESTORE_CHECKPOINT_TRUNCATE, &nLog, &nCkpt);
+    CHECK(rc == KEYVALUESTORE_OK, "TRUNCATE checkpoint returns OK");
     CHECK(nLog == 0,        "pnLog == 0 after TRUNCATE (WAL cleared)");
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -111,12 +111,12 @@ static void test_walsizelimit_auto_checkpoint(void) {
     const char *db = "ckpt_t3.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
     cfg.walSizeLimit = 10;   /* checkpoint every 10 commits */
-    KVStore *kv = NULL;
-    int rc = kvstore_open_v2(db, &kv, &cfg);
-    CHECK(rc == KVSTORE_OK, "open with walSizeLimit=10");
+    KeyValueStore *kv = NULL;
+    int rc = keyvaluestore_open_v2(db, &kv, &cfg);
+    CHECK(rc == KEYVALUESTORE_OK, "open with walSizeLimit=10");
 
     /* Write 50 records -- 5 auto-checkpoints should have fired */
     int i;
@@ -124,21 +124,21 @@ static void test_walsizelimit_auto_checkpoint(void) {
     for (i = 0; i < 50; i++) {
         snprintf(key, sizeof(key), "key%04d", i);
         snprintf(val, sizeof(val), "value%04d", i);
-        kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
+        keyvaluestore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
 
     /* After auto-checkpoints the WAL should be small -- manually verify
     ** by running a final PASSIVE checkpoint and checking nLog is low. */
     int nLog = -1, nCkpt = -1;
-    rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
-    CHECK(rc == KVSTORE_OK, "manual checkpoint after auto-checkpoints succeeds");
+    rc = keyvaluestore_checkpoint(kv, KEYVALUESTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+    CHECK(rc == KEYVALUESTORE_OK, "manual checkpoint after auto-checkpoints succeeds");
     /* PASSIVE returns pnLog = total WAL frames, pnCkpt = frames successfully copied.
     ** If auto-checkpoints ran correctly, all frames are already in the DB so the
     ** manual checkpoint copies none new -- but pnLog == pnCkpt means no frames
     ** are blocked (i.e. auto-checkpoint did its job). */
     CHECK(nLog == nCkpt, "all WAL frames checkpointed -- auto-checkpoint was effective");
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -147,18 +147,18 @@ static void test_walsizelimit_disabled(void) {
     const char *db = "ckpt_t4.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
     cfg.walSizeLimit = 0;    /* no auto-checkpoint */
-    KVStore *kv = NULL;
-    kvstore_open_v2(db, &kv, &cfg);
+    KeyValueStore *kv = NULL;
+    keyvaluestore_open_v2(db, &kv, &cfg);
 
     int i;
     char key[32], val[64];
     for (i = 0; i < 100; i++) {
         snprintf(key, sizeof(key), "key%04d", i);
         snprintf(val, sizeof(val), "value%04d", i);
-        kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
+        keyvaluestore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
 
     char walPath[256];
@@ -169,7 +169,7 @@ static void test_walsizelimit_disabled(void) {
     CHECK(walSize > 0, "WAL file has grown (no auto-checkpoint)");
 #endif
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -178,16 +178,16 @@ static void test_null_output_params(void) {
     const char *db = "ckpt_t5.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    KVStore *kv = NULL;
-    kvstore_open_v2(db, &kv, &cfg);
-    kvstore_put(kv, "k", 1, "v", 1);
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
+    KeyValueStore *kv = NULL;
+    keyvaluestore_open_v2(db, &kv, &cfg);
+    keyvaluestore_put(kv, "k", 1, "v", 1);
 
-    int rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, NULL, NULL);
-    CHECK(rc == KVSTORE_OK, "checkpoint with NULL output params returns OK");
+    int rc = keyvaluestore_checkpoint(kv, KEYVALUESTORE_CHECKPOINT_PASSIVE, NULL, NULL);
+    CHECK(rc == KEYVALUESTORE_OK, "checkpoint with NULL output params returns OK");
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -196,18 +196,18 @@ static void test_checkpoint_during_write_transaction(void) {
     const char *db = "ckpt_t6.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    KVStore *kv = NULL;
-    kvstore_open_v2(db, &kv, &cfg);
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
+    KeyValueStore *kv = NULL;
+    keyvaluestore_open_v2(db, &kv, &cfg);
 
-    kvstore_begin(kv, 1);   /* open write transaction */
+    keyvaluestore_begin(kv, 1);   /* open write transaction */
 
-    int rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, NULL, NULL);
-    CHECK(rc == KVSTORE_BUSY, "checkpoint with open write transaction returns BUSY");
+    int rc = keyvaluestore_checkpoint(kv, KEYVALUESTORE_CHECKPOINT_PASSIVE, NULL, NULL);
+    CHECK(rc == KEYVALUESTORE_BUSY, "checkpoint with open write transaction returns BUSY");
 
-    kvstore_rollback(kv);
-    kvstore_close(kv);
+    keyvaluestore_rollback(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 
@@ -216,19 +216,19 @@ static void test_checkpoint_delete_journal(void) {
     const char *db = "ckpt_t7.db";
     cleanup(db);
 
-    KVStoreConfig cfg = {0};
-    cfg.journalMode = KVSTORE_JOURNAL_DELETE;
-    KVStore *kv = NULL;
-    kvstore_open_v2(db, &kv, &cfg);
-    kvstore_put(kv, "k", 1, "v", 1);
+    KeyValueStoreConfig cfg = {0};
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_DELETE;
+    KeyValueStore *kv = NULL;
+    keyvaluestore_open_v2(db, &kv, &cfg);
+    keyvaluestore_put(kv, "k", 1, "v", 1);
 
     int nLog = -1, nCkpt = -1;
-    int rc = kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
-    CHECK(rc == KVSTORE_OK, "checkpoint on DELETE-journal returns OK");
+    int rc = keyvaluestore_checkpoint(kv, KEYVALUESTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+    CHECK(rc == KEYVALUESTORE_OK, "checkpoint on DELETE-journal returns OK");
     CHECK(nLog  == 0, "pnLog == 0 on non-WAL database");
     CHECK(nCkpt == 0, "pnCkpt == 0 on non-WAL database");
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     cleanup(db);
 }
 

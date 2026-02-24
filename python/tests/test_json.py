@@ -10,7 +10,7 @@ import json
 import random
 import time
 import pytest
-from snkv import KVStore, JOURNAL_WAL
+from snkv import KeyValueStore, JOURNAL_WAL
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def test_basic_json_storage(tmp_path):
     doc = _make_records(1_000)
     raw = _json_bytes(doc)
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"doc"] = raw
         result = db[b"doc"]
 
@@ -82,11 +82,11 @@ def test_multiple_json_documents(tmp_path, n_records):
         for i in range(5)
     }
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         for key, val in docs.items():
             db[key.encode()] = val
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         for key, expected in docs.items():
             assert db[key.encode()] == expected
 
@@ -104,7 +104,7 @@ def test_json_column_families(tmp_path):
     products = {f"prod:{i}": _json_bytes({"sku": i, "price": i * 9.99})
                 for i in range(5)}
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         with db.create_column_family("users") as cf:
             for k, v in users.items():
                 cf[k.encode()] = v
@@ -113,7 +113,7 @@ def test_json_column_families(tmp_path):
             for k, v in products.items():
                 cf[k.encode()] = v
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         with db.open_column_family("users") as cf:
             for k, expected in users.items():
                 result = cf[k.encode()]
@@ -133,7 +133,7 @@ def test_json_column_families(tmp_path):
                 assert "sku" in parsed
 
     # list CFs
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         names = db.list_column_families()
         assert "users" in names
         assert "products" in names
@@ -150,7 +150,7 @@ def test_nested_json(tmp_path, depth):
     doc = _make_nested(depth)
     raw = _json_bytes(doc)
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[f"nested_{depth}".encode()] = raw
         result = db[f"nested_{depth}".encode()]
 
@@ -171,7 +171,7 @@ def test_batch_json_operations(tmp_path):
         for i in range(100)
     }
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.begin(write=True)
         for k, v in docs.items():
             db[k.encode()] = v
@@ -205,7 +205,7 @@ def test_very_large_json(tmp_path):
     raw = _json_bytes(doc)
     size_mb = len(raw) / 1024 / 1024
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         t0 = time.monotonic()
         db[b"large"] = raw
         db.sync()
@@ -235,7 +235,7 @@ def test_json_transaction_rollback(tmp_path):
     original = _json_bytes({"version": 1})
     updated  = _json_bytes({"version": 2})
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"doc"] = original
 
         db.begin(write=True)
@@ -251,10 +251,10 @@ def test_json_persistence_across_sessions(tmp_path):
     doc = _make_records(500)
     raw = _json_bytes(doc)
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"snapshot"] = raw
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         result = db[b"snapshot"]
         assert result == raw
         assert _from_bytes(result) == doc

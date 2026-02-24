@@ -11,76 +11,76 @@
 #include <inttypes.h>
 
 static void example_basic_scan(void) {
-    KVStore *pKV;
-    KVIterator *pIter;
+    KeyValueStore *pKV;
+    KeyValueIterator *pIter;
 
     printf("=== Basic Iteration ===\n");
 
-    kvstore_open("inventory.db", &pKV, KVSTORE_JOURNAL_WAL);
+    keyvaluestore_open("inventory.db", &pKV, KEYVALUESTORE_JOURNAL_WAL);
 
-    kvstore_put(pKV, "apple", 5, "50", 2);
-    kvstore_put(pKV, "banana", 6, "30", 2);
-    kvstore_put(pKV, "orange", 6, "40", 2);
-    kvstore_put(pKV, "grape", 5, "60", 2);
+    keyvaluestore_put(pKV, "apple", 5, "50", 2);
+    keyvaluestore_put(pKV, "banana", 6, "30", 2);
+    keyvaluestore_put(pKV, "orange", 6, "40", 2);
+    keyvaluestore_put(pKV, "grape", 5, "60", 2);
 
-    kvstore_iterator_create(pKV, &pIter);
+    keyvaluestore_iterator_create(pKV, &pIter);
 
     printf("%-10s %s\n", "Item", "Quantity");
     printf("------------------------\n");
 
-    for (kvstore_iterator_first(pIter);
-         !kvstore_iterator_eof(pIter);
-         kvstore_iterator_next(pIter)) {
+    for (keyvaluestore_iterator_first(pIter);
+         !keyvaluestore_iterator_eof(pIter);
+         keyvaluestore_iterator_next(pIter)) {
 
         void *pKey, *pValue;
         int nKey, nValue;
 
-        kvstore_iterator_key(pIter, &pKey, &nKey);
-        kvstore_iterator_value(pIter, &pValue, &nValue);
+        keyvaluestore_iterator_key(pIter, &pKey, &nKey);
+        keyvaluestore_iterator_value(pIter, &pValue, &nValue);
 
         printf("%-10.*s %.*s\n", nKey, (char*)pKey, nValue, (char*)pValue);
     }
 
-    kvstore_iterator_close(pIter);
-    kvstore_close(pKV);
+    keyvaluestore_iterator_close(pIter);
+    keyvaluestore_close(pKV);
     remove("inventory.db");
     printf("\n");
 }
 
 static void example_filtered_iteration(void) {
-    KVStore *pKV;
-    KVIterator *pIter;
+    KeyValueStore *pKV;
+    KeyValueIterator *pIter;
 
     printf("=== Filtered Iteration ===\n");
 
-    kvstore_open("roles.db", &pKV, KVSTORE_JOURNAL_WAL);
+    keyvaluestore_open("roles.db", &pKV, KEYVALUESTORE_JOURNAL_WAL);
 
-    kvstore_put(pKV, "user:alice", 10, "Regular User", 12);
-    kvstore_put(pKV, "user:bob", 8, "Regular User", 12);
-    kvstore_put(pKV, "admin:charlie", 13, "Administrator", 13);
-    kvstore_put(pKV, "admin:diana", 11, "Administrator", 13);
-    kvstore_put(pKV, "user:eve", 8, "Regular User", 12);
+    keyvaluestore_put(pKV, "user:alice", 10, "Regular User", 12);
+    keyvaluestore_put(pKV, "user:bob", 8, "Regular User", 12);
+    keyvaluestore_put(pKV, "admin:charlie", 13, "Administrator", 13);
+    keyvaluestore_put(pKV, "admin:diana", 11, "Administrator", 13);
+    keyvaluestore_put(pKV, "user:eve", 8, "Regular User", 12);
 
-    kvstore_iterator_create(pKV, &pIter);
+    keyvaluestore_iterator_create(pKV, &pIter);
 
     printf("Administrators:\n");
-    for (kvstore_iterator_first(pIter);
-         !kvstore_iterator_eof(pIter);
-         kvstore_iterator_next(pIter)) {
+    for (keyvaluestore_iterator_first(pIter);
+         !keyvaluestore_iterator_eof(pIter);
+         keyvaluestore_iterator_next(pIter)) {
 
         void *pKey, *pValue;
         int nKey, nValue;
 
-        kvstore_iterator_key(pIter, &pKey, &nKey);
+        keyvaluestore_iterator_key(pIter, &pKey, &nKey);
 
         if (nKey >= 6 && memcmp(pKey, "admin:", 6) == 0) {
-            kvstore_iterator_value(pIter, &pValue, &nValue);
+            keyvaluestore_iterator_value(pIter, &pValue, &nValue);
             printf("  %.*s: %.*s\n", nKey, (char*)pKey, nValue, (char*)pValue);
         }
     }
 
-    kvstore_iterator_close(pIter);
-    kvstore_close(pKV);
+    keyvaluestore_iterator_close(pIter);
+    keyvaluestore_close(pKV);
     remove("roles.db");
     printf("\n");
 }
@@ -93,21 +93,21 @@ typedef struct {
     int max_value_size;
 } StoreStats;
 
-static void calculate_stats(KVStore *pKV, StoreStats *stats) {
-    KVIterator *pIter;
+static void calculate_stats(KeyValueStore *pKV, StoreStats *stats) {
+    KeyValueIterator *pIter;
 
     memset(stats, 0, sizeof(StoreStats));
-    kvstore_iterator_create(pKV, &pIter);
+    keyvaluestore_iterator_create(pKV, &pIter);
 
-    for (kvstore_iterator_first(pIter);
-         !kvstore_iterator_eof(pIter);
-         kvstore_iterator_next(pIter)) {
+    for (keyvaluestore_iterator_first(pIter);
+         !keyvaluestore_iterator_eof(pIter);
+         keyvaluestore_iterator_next(pIter)) {
 
         void *pKey, *pValue;
         int nKey, nValue;
 
-        kvstore_iterator_key(pIter, &pKey, &nKey);
-        kvstore_iterator_value(pIter, &pValue, &nValue);
+        keyvaluestore_iterator_key(pIter, &pKey, &nKey);
+        keyvaluestore_iterator_value(pIter, &pValue, &nValue);
 
         stats->total_keys++;
         stats->total_key_bytes += nKey;
@@ -117,19 +117,19 @@ static void calculate_stats(KVStore *pKV, StoreStats *stats) {
         if (nValue > stats->max_value_size) stats->max_value_size = nValue;
     }
 
-    kvstore_iterator_close(pIter);
+    keyvaluestore_iterator_close(pIter);
 }
 
 static void example_statistics(void) {
-    KVStore *pKV;
+    KeyValueStore *pKV;
 
     printf("=== Store Statistics ===\n");
 
-    kvstore_open("data.db", &pKV, KVSTORE_JOURNAL_WAL);
+    keyvaluestore_open("data.db", &pKV, KEYVALUESTORE_JOURNAL_WAL);
 
-    kvstore_put(pKV, "a", 1, "short", 5);
-    kvstore_put(pKV, "longer_key", 10, "medium value", 12);
-    kvstore_put(pKV, "k", 1, "very long value string here", 27);
+    keyvaluestore_put(pKV, "a", 1, "short", 5);
+    keyvaluestore_put(pKV, "longer_key", 10, "medium value", 12);
+    keyvaluestore_put(pKV, "k", 1, "very long value string here", 27);
 
     StoreStats stats;
     calculate_stats(pKV, &stats);
@@ -145,56 +145,56 @@ static void example_statistics(void) {
            (double)stats.total_value_bytes / stats.total_keys);
 
     /* Also show the built-in kvstore stats */
-    KVStoreStats kstats;
-    kvstore_stats(pKV, &kstats);
+    KeyValueStoreStats kstats;
+    keyvaluestore_stats(pKV, &kstats);
     printf("\n  Built-in Stats:\n");
     printf("    Puts: %" PRIu64 "\n", kstats.nPuts);
     printf("    Gets: %" PRIu64 "\n", kstats.nGets);
     printf("    Iterations: %" PRIu64 "\n", kstats.nIterations);
 
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     remove("data.db");
     printf("\n");
 }
 
 static void example_prefix_iteration(void) {
-    KVStore *pKV;
-    KVIterator *pIter;
+    KeyValueStore *pKV;
+    KeyValueIterator *pIter;
 
     printf("=== Prefix Iteration ===\n");
 
-    kvstore_open("prefix.db", &pKV, KVSTORE_JOURNAL_WAL);
+    keyvaluestore_open("prefix.db", &pKV, KEYVALUESTORE_JOURNAL_WAL);
 
     /* Populate store */
-    kvstore_put(pKV, "user:alice", 10, "online", 6);
-    kvstore_put(pKV, "user:bob", 8, "offline", 7);
-    kvstore_put(pKV, "user:charlie", 12, "online", 6);
-    kvstore_put(pKV, "admin:root", 10, "active", 6);
-    kvstore_put(pKV, "admin:dba", 9, "inactive", 8);
+    keyvaluestore_put(pKV, "user:alice", 10, "online", 6);
+    keyvaluestore_put(pKV, "user:bob", 8, "offline", 7);
+    keyvaluestore_put(pKV, "user:charlie", 12, "online", 6);
+    keyvaluestore_put(pKV, "admin:root", 10, "active", 6);
+    keyvaluestore_put(pKV, "admin:dba", 9, "inactive", 8);
 
     /* Create prefix iterator for "user:" */
-    kvstore_prefix_iterator_create(pKV, "user:", 5, &pIter);
+    keyvaluestore_prefix_iterator_create(pKV, "user:", 5, &pIter);
 
     printf("%-15s %s\n", "Key", "Value");
     printf("-------------------------------\n");
 
-    for (kvstore_iterator_first(pIter);
-         !kvstore_iterator_eof(pIter);
-         kvstore_iterator_next(pIter)) {
+    for (keyvaluestore_iterator_first(pIter);
+         !keyvaluestore_iterator_eof(pIter);
+         keyvaluestore_iterator_next(pIter)) {
 
         void *pKey, *pValue;
         int nKey, nValue;
 
-        kvstore_iterator_key(pIter, &pKey, &nKey);
-        kvstore_iterator_value(pIter, &pValue, &nValue);
+        keyvaluestore_iterator_key(pIter, &pKey, &nKey);
+        keyvaluestore_iterator_value(pIter, &pValue, &nValue);
 
         printf("%-15.*s %.*s\n",
                nKey, (char*)pKey,
                nValue, (char*)pValue);
     }
 
-    kvstore_iterator_close(pIter);
-    kvstore_close(pKV);
+    keyvaluestore_iterator_close(pIter);
+    keyvaluestore_close(pKV);
     remove("prefix.db");
 
     printf("\n");

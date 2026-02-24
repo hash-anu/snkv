@@ -17,7 +17,7 @@ typedef struct {
     int visit_count;
 } Session;
 
-static int session_create(KVStore *pKV, const char *session_id,
+static int session_create(KeyValueStore *pKV, const char *session_id,
                           const char *user_id) {
     Session sess;
     memset(&sess, 0, sizeof(sess));
@@ -27,18 +27,18 @@ static int session_create(KVStore *pKV, const char *session_id,
     sess.last_access = sess.created_at;
     sess.visit_count = 1;
 
-    return kvstore_put(pKV, session_id, strlen(session_id),
+    return keyvaluestore_put(pKV, session_id, strlen(session_id),
                        &sess, sizeof(Session));
 }
 
-static int session_get(KVStore *pKV, const char *session_id, Session *pSess) {
+static int session_get(KeyValueStore *pKV, const char *session_id, Session *pSess) {
     void *pValue;
     int nValue;
     int rc;
 
-    rc = kvstore_get(pKV, session_id, strlen(session_id), &pValue, &nValue);
+    rc = keyvaluestore_get(pKV, session_id, strlen(session_id), &pValue, &nValue);
 
-    if (rc == KVSTORE_OK) {
+    if (rc == KEYVALUESTORE_OK) {
         memcpy(pSess, pValue, sizeof(Session));
         snkv_free(pValue);
 
@@ -46,33 +46,33 @@ static int session_get(KVStore *pKV, const char *session_id, Session *pSess) {
         pSess->last_access = time(NULL);
         pSess->visit_count++;
 
-        kvstore_put(pKV, session_id, strlen(session_id),
+        keyvaluestore_put(pKV, session_id, strlen(session_id),
                     pSess, sizeof(Session));
     }
 
     return rc;
 }
 
-static void session_delete(KVStore *pKV, const char *session_id) {
-    kvstore_delete(pKV, session_id, strlen(session_id));
+static void session_delete(KeyValueStore *pKV, const char *session_id) {
+    keyvaluestore_delete(pKV, session_id, strlen(session_id));
 }
 
-static int session_cleanup_expired(KVStore *pKV, int max_age_seconds) {
-    KVIterator *pIter;
+static int session_cleanup_expired(KeyValueStore *pKV, int max_age_seconds) {
+    KeyValueIterator *pIter;
     time_t now = time(NULL);
     int deleted = 0;
 
-    kvstore_iterator_create(pKV, &pIter);
+    keyvaluestore_iterator_create(pKV, &pIter);
 
-    for (kvstore_iterator_first(pIter);
-         !kvstore_iterator_eof(pIter);
-         kvstore_iterator_next(pIter)) {
+    for (keyvaluestore_iterator_first(pIter);
+         !keyvaluestore_iterator_eof(pIter);
+         keyvaluestore_iterator_next(pIter)) {
 
         void *pKey, *pValue;
         int nKey, nValue;
 
-        kvstore_iterator_key(pIter, &pKey, &nKey);
-        kvstore_iterator_value(pIter, &pValue, &nValue);
+        keyvaluestore_iterator_key(pIter, &pKey, &nKey);
+        keyvaluestore_iterator_value(pIter, &pValue, &nValue);
 
         if ((int)nValue >= (int)sizeof(Session)) {
             Session *pSess = (Session*)pValue;
@@ -81,24 +81,24 @@ static int session_cleanup_expired(KVStore *pKV, int max_age_seconds) {
                 memcpy(key_copy, pKey, nKey);
                 key_copy[nKey] = '\0';
 
-                kvstore_delete(pKV, key_copy, nKey);
+                keyvaluestore_delete(pKV, key_copy, nKey);
                 snkv_free(key_copy);
                 deleted++;
             }
         }
     }
 
-    kvstore_iterator_close(pIter);
+    keyvaluestore_iterator_close(pIter);
     return deleted;
 }
 
 int main(void) {
-    KVStore *pKV;
+    KeyValueStore *pKV;
     Session sess;
 
     printf("=== Session Store ===\n\n");
 
-    kvstore_open("sessions.db", &pKV, KVSTORE_JOURNAL_WAL);
+    keyvaluestore_open("sessions.db", &pKV, KEYVALUESTORE_JOURNAL_WAL);
 
     /* Create sessions */
     printf("Creating sessions...\n");
@@ -108,7 +108,7 @@ int main(void) {
 
     /* Access a session */
     printf("\nAccessing session...\n");
-    if (session_get(pKV, "sess_abc123", &sess) == KVSTORE_OK) {
+    if (session_get(pKV, "sess_abc123", &sess) == KEYVALUESTORE_OK) {
         printf("Session for user: %s\n", sess.user_id);
         printf("Visit count: %d\n", sess.visit_count);
     }
@@ -118,7 +118,7 @@ int main(void) {
     session_delete(pKV, "sess_ghi789");
 
     /* Verify deletion */
-    if (session_get(pKV, "sess_ghi789", &sess) == KVSTORE_NOTFOUND) {
+    if (session_get(pKV, "sess_ghi789", &sess) == KEYVALUESTORE_NOTFOUND) {
         printf("Session sess_ghi789: deleted successfully\n");
     }
 
@@ -127,7 +127,7 @@ int main(void) {
     int deleted = session_cleanup_expired(pKV, 3600);
     printf("Deleted %d expired sessions\n", deleted);
 
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     remove("sessions.db");
 
     printf("\nSession store example passed.\n");

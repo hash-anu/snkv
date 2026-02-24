@@ -14,7 +14,7 @@ embedded key-value store built on SQLite's B-Tree engine.
   - [Sync Level](#sync-level)
   - [Checkpoint Mode](#checkpoint-mode)
 - [Exceptions](#exceptions)
-- [KVStore](#kvstore)
+- [KeyValueStore](#kvstore)
   - [Opening a Store](#opening-a-store)
   - [Core Operations](#core-operations)
   - [Dict-like Interface](#dict-like-interface)
@@ -55,10 +55,10 @@ See the [README](../../README.md) for full platform-specific prerequisites.
 ## Quick Start
 
 ```python
-from snkv import KVStore
+from snkv import KeyValueStore
 
 # Open (or create) a database file
-with KVStore("mydb.db") as db:
+with KeyValueStore("mydb.db") as db:
     db["hello"] = "world"
     print(db["hello"].decode())    # world
     print(db.get("missing"))       # None (no exception)
@@ -119,25 +119,25 @@ snkv.Error          ← base class for all SNKV errors
 
 ---
 
-## KVStore
+## KeyValueStore
 
 The main entry point. Opens or creates a key-value store at a given path.
 
 ### Opening a Store
 
-#### `KVStore(path, *, journal_mode=JOURNAL_WAL, **config)`
+#### `KeyValueStore(path, *, journal_mode=JOURNAL_WAL, **config)`
 
 ```python
-from snkv import KVStore, JOURNAL_WAL, SYNC_NORMAL
+from snkv import KeyValueStore, JOURNAL_WAL, SYNC_NORMAL
 
 # Minimal — uses all defaults
-db = KVStore("mydb.db")
+db = KeyValueStore("mydb.db")
 
 # In-memory (no file, lost on close)
-db = KVStore()         # or KVStore(None)
+db = KeyValueStore()         # or KeyValueStore(None)
 
 # With advanced options
-db = KVStore(
+db = KeyValueStore(
     "mydb.db",
     journal_mode=JOURNAL_WAL,
     sync_level=SYNC_NORMAL,
@@ -165,7 +165,7 @@ db = KVStore(
 Always use as a context manager to guarantee proper cleanup:
 
 ```python
-with KVStore("mydb.db") as db:
+with KeyValueStore("mydb.db") as db:
     db["key"] = "value"
 # db is closed here
 ```
@@ -223,7 +223,7 @@ if db.exists("user:1"):
 
 ### Dict-like Interface
 
-`KVStore` supports the standard Python mapping-style operators.
+`KeyValueStore` supports the standard Python mapping-style operators.
 
 | Syntax | Equivalent method | Notes |
 |--------|-------------------|-------|
@@ -347,7 +347,7 @@ with db.open_column_family("users") as users:
         print(key, value)
 ```
 
-Always close a `ColumnFamily` handle (or use it as a context manager) before closing the `KVStore`.
+Always close a `ColumnFamily` handle (or use it as a context manager) before closing the `KeyValueStore`.
 
 ---
 
@@ -467,7 +467,7 @@ db.close()
 #### Context manager
 
 ```python
-with KVStore("mydb.db") as db:
+with KeyValueStore("mydb.db") as db:
     ...
 # Automatically calls db.close()
 ```
@@ -476,7 +476,7 @@ with KVStore("mydb.db") as db:
 
 ## ColumnFamily
 
-A logical namespace within a `KVStore`. Obtained via
+A logical namespace within a `KeyValueStore`. Obtained via
 `db.create_column_family()`, `db.open_column_family()`, or `db.default_column_family()`.
 
 ### Core Operations
@@ -518,7 +518,7 @@ cf.exists("alice")    # True / False
 
 ### Dict-like Interface
 
-`ColumnFamily` supports the same mapping-style operators as `KVStore`.
+`ColumnFamily` supports the same mapping-style operators as `KeyValueStore`.
 
 ```python
 cf["alice"] = "admin"
@@ -556,7 +556,7 @@ for key, value in cf.prefix_iterator("user:"):
 #### `close() -> None`
 
 Release the column family handle. Does **not** delete the column family or its data.
-Must be called before the parent `KVStore` is closed.
+Must be called before the parent `KeyValueStore` is closed.
 
 #### Context manager
 
@@ -570,8 +570,8 @@ with db.create_column_family("sessions") as cf:
 
 ## Iterator
 
-Ordered key-value iterator returned by `KVStore.iterator()`,
-`KVStore.prefix_iterator()`, `ColumnFamily.iterator()`, and
+Ordered key-value iterator returned by `KeyValueStore.iterator()`,
+`KeyValueStore.prefix_iterator()`, `ColumnFamily.iterator()`, and
 `ColumnFamily.prefix_iterator()`.
 
 Iterators reflect a point-in-time snapshot of the B-Tree cursor position.
@@ -685,7 +685,7 @@ with db.iterator() as it:
 
 **Thread safety:** The underlying C store is mutex-protected. Each Python method
 acquires a mutex around the C call and releases the GIL for blocking I/O, making
-it safe to share a `KVStore` across threads. Column family and iterator handles
+it safe to share a `KeyValueStore` across threads. Column family and iterator handles
 are not independently thread-safe — access them from one thread at a time.
 
 ---
@@ -694,13 +694,13 @@ are not independently thread-safe — access them from one thread at a time.
 
 ```python
 from snkv import (
-    KVStore,
+    KeyValueStore,
     JOURNAL_WAL, SYNC_NORMAL,
     CHECKPOINT_TRUNCATE,
     NotFoundError, CorruptError,
 )
 
-with KVStore("mydb.db",
+with KeyValueStore("mydb.db",
              journal_mode=JOURNAL_WAL,
              sync_level=SYNC_NORMAL,
              cache_size=2000,

@@ -9,14 +9,14 @@ Run:
 
 import os
 import snkv
-from snkv import KVStore, NotFoundError
+from snkv import KeyValueStore, NotFoundError
 
 DB_FILE = "basic_example.db"
 
 
 def hello_world():
     print("--- Hello World ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         db.put(b"greeting", b"Hello, SNKV!")
 
         value = db.get(b"greeting")
@@ -25,7 +25,7 @@ def hello_world():
 
 def crud_operations():
     print("\n--- CRUD Operations ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         # Create
         db["user:1"] = "Alice"
         db["user:2"] = "Bob"
@@ -51,7 +51,7 @@ def crud_operations():
 
 def existence_checks():
     print("\n--- Existence Checks ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         db["present"] = "yes"
 
         print(f"'present' exists: {db.exists('present')}")
@@ -62,7 +62,7 @@ def existence_checks():
 
 def error_handling():
     print("\n--- Error Handling ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         db["key"] = "value"
 
         # KeyError on missing key via [] syntax
@@ -84,7 +84,7 @@ def error_handling():
 
 def binary_data():
     print("\n--- Binary Keys and Values ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         # Keys and values can be arbitrary binary data
         binary_key   = bytes([0x00, 0x01, 0xFF])
         binary_value = bytes(range(256))
@@ -96,12 +96,12 @@ def binary_data():
 
 
 def in_memory_store():
-    print("\n--- In-Memory KVStore ---")
+    print("\n--- In-Memory KeyValueStore ---")
     # Pass None for path to use an in-memory database (no file created)
-    with KVStore(None) as db:
+    with KeyValueStore(None) as db:
         db["temp"] = "ephemeral data"
         print(f"In-memory value: {db['temp'].decode()}")
-    print("KVStore closed - data is gone (no file was created)")
+    print("KeyValueStore closed - data is gone (no file was created)")
 
 
 if __name__ == "__main__":

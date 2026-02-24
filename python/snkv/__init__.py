@@ -3,9 +3,9 @@ snkv - Python bindings for SNKV embedded key-value store.
 
 Quick start:
 
-    from snkv import KVStore
+    from snkv import KeyValueStore
 
-    with KVStore("mydb.db") as db:
+    with KeyValueStore("mydb.db") as db:
         db["hello"] = "world"
         print(db["hello"])          # b"world"
         print(db.get("hello"))      # b"world"
@@ -47,7 +47,7 @@ from ._snkv import (
     CHECKPOINT_TRUNCATE,
 )
 
-_KVStore       = _snkv.KVStore
+_KeyValueStore       = _snkv.KeyValueStore
 _ColumnFamily  = _snkv.ColumnFamily
 _Iterator      = _snkv.Iterator
 
@@ -75,8 +75,8 @@ def _enc(v: _Encodable) -> bytes:
 
 class Iterator:
     """
-    Ordered key-value iterator returned by KVStore.iterator() and
-    KVStore.prefix_iterator().
+    Ordered key-value iterator returned by KeyValueStore.iterator() and
+    KeyValueStore.prefix_iterator().
 
     Can be used as:
       - A Python iterator:  for key, value in db.iterator(): ...
@@ -148,8 +148,8 @@ class ColumnFamily:
     """
     A logical namespace within a SNKV store.
 
-    Obtained via KVStore.create_column_family(), KVStore.open_column_family(),
-    or KVStore.default_column_family().
+    Obtained via KeyValueStore.create_column_family(), KeyValueStore.open_column_family(),
+    or KeyValueStore.default_column_family().
 
     Usage:
 
@@ -234,10 +234,10 @@ class ColumnFamily:
 
 
 # ---------------------------------------------------------------------------
-# KVStore — main entry point
+# KeyValueStore — main entry point
 # ---------------------------------------------------------------------------
 
-class KVStore:
+class KeyValueStore:
     """
     SNKV key-value store.
 
@@ -251,7 +251,7 @@ class KVStore:
     journal_mode : int
         JOURNAL_WAL (default) or JOURNAL_DELETE.
     **config
-        Advanced options passed to kvstore_open_v2:
+        Advanced options passed to keyvaluestore_open_v2:
           sync_level     -- SYNC_OFF / SYNC_NORMAL (default) / SYNC_FULL
           cache_size     -- page cache size in pages (default 2000 ~= 8 MB)
           page_size      -- DB page size, new databases only (default 4096)
@@ -261,7 +261,7 @@ class KVStore:
 
     Quick start
     -----------
-        with KVStore("mydb.db") as db:
+        with KeyValueStore("mydb.db") as db:
             db.put(b"key", b"value")
             val = db.get(b"key")    # b"value"
             db["key2"] = "hello"
@@ -276,13 +276,13 @@ class KVStore:
         **config: int,
     ) -> None:
         if config:
-            self._db: _KVStore = _KVStore.open_v2(
+            self._db: _KeyValueStore = _KeyValueStore.open_v2(
                 path,
                 journal_mode=journal_mode,
                 **config,
             )
         else:
-            self._db = _KVStore(path, journal_mode)
+            self._db = _KeyValueStore(path, journal_mode)
 
     # --- Core KV operations ---
 
@@ -428,7 +428,7 @@ class KVStore:
         """Close the store and release all resources."""
         self._db.close()
 
-    def __enter__(self) -> "KVStore":
+    def __enter__(self) -> "KeyValueStore":
         return self
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
@@ -436,7 +436,7 @@ class KVStore:
         return False
 
     def __repr__(self) -> str:
-        return "snkv.KVStore()"
+        return "snkv.KeyValueStore()"
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +445,7 @@ class KVStore:
 
 __all__ = [
     # Main class
-    "KVStore",
+    "KeyValueStore",
     "ColumnFamily",
     "Iterator",
     # Exceptions

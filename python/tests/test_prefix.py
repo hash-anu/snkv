@@ -7,7 +7,7 @@ large-scale prefix, post-mutation iteration, and iterator re-seek.
 """
 
 import pytest
-from snkv import KVStore, JOURNAL_WAL
+from snkv import KeyValueStore, JOURNAL_WAL
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +17,7 @@ from snkv import KVStore, JOURNAL_WAL
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / "prefix.db")
-    with KVStore(path) as store:
+    with KeyValueStore(path) as store:
         yield store
 
 
@@ -204,7 +204,7 @@ def test_binary_key_prefix(db):
 def test_prefix_wal_mode(tmp_path):
     """Prefix iterator must work in WAL journal mode."""
     path = str(tmp_path / "wal_pfx.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.begin(write=True)
         for i in range(100):
             ns = i % 3
@@ -222,7 +222,7 @@ def test_prefix_wal_mode(tmp_path):
 def test_large_scale_prefix(tmp_path):
     """10 000 keys across 10 namespaces: each namespace returns 1 000 keys."""
     path = str(tmp_path / "large.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.begin(write=True)
         for i in range(10_000):
             ns = i % 10
@@ -237,7 +237,7 @@ def test_large_scale_prefix(tmp_path):
 def test_large_scale_sub_prefix(tmp_path):
     """A narrower sub-prefix must return only the matching subset."""
     path = str(tmp_path / "sub.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.begin(write=True)
         for i in range(10_000):
             ns = i % 10

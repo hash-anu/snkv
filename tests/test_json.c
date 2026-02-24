@@ -1,5 +1,5 @@
 /*
-** KVStore JSON Examples - Standalone Programs
+** KeyValueStore JSON Examples - Standalone Programs
 ** 
 ** This file contains complete, standalone examples demonstrating:
 ** 1. Inserting large JSON files into kvstore
@@ -8,10 +8,10 @@
 ** 4. Using column families for JSON organization
 ** 5. Batch operations with JSON data
 **
-** Compile with: gcc -o kvstore_json_examples kvstore_json_examples.c kvstore.c btree.c -I. -DSQLITE_THREADSAFE=1
+** Compile with: gcc -o keyvaluestore_json_examples keyvaluestore_json_examples.c keyvaluestore.c btree.c -I. -DSQLITE_THREADSAFE=1
 */
 
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -163,7 +163,7 @@ static int compareJSON(const char *json1, int len1, const char *json2, int len2)
 ** EXAMPLE 1: Basic JSON Insert, Fetch, and Verify
 ** ============================================================================ */
 int example1_basic_json_operations(void) {
-    KVStore *pKV = NULL;
+    KeyValueStore *pKV = NULL;
     int rc;
     char *jsonData = NULL;
     int jsonSize = 0;
@@ -173,8 +173,8 @@ int example1_basic_json_operations(void) {
     printf("\n=== EXAMPLE 1: Basic JSON Operations ===\n");
     
     /* Open kvstore */
-    rc = kvstore_open("example1.db", &pKV, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open("example1.db", &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
@@ -184,7 +184,7 @@ int example1_basic_json_operations(void) {
     jsonData = generateLargeJSON(1000, &jsonSize);
     if (!jsonData) {
         fprintf(stderr, "Failed to generate JSON\n");
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] Generated JSON document: %d bytes\n", jsonSize);
@@ -193,28 +193,28 @@ int example1_basic_json_operations(void) {
     if (!validateJSON(jsonData, jsonSize)) {
         fprintf(stderr, "Generated JSON is invalid!\n");
         free(jsonData);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] JSON validation passed\n");
     
     /* Insert JSON into kvstore */
     const char *key = "large_json_doc";
-    rc = kvstore_put(pKV, key, strlen(key), jsonData, jsonSize);
-    if (rc != KVSTORE_OK) {
-        fprintf(stderr, "Failed to put JSON: %d (%s)\n", rc, kvstore_errmsg(pKV));
+    rc = keyvaluestore_put(pKV, key, strlen(key), jsonData, jsonSize);
+    if (rc != KEYVALUESTORE_OK) {
+        fprintf(stderr, "Failed to put JSON: %d (%s)\n", rc, keyvaluestore_errmsg(pKV));
         free(jsonData);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] Inserted JSON document with key: %s\n", key);
     
     /* Fetch JSON back */
-    rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
-    if (rc != KVSTORE_OK) {
-        fprintf(stderr, "Failed to get JSON: %d (%s)\n", rc, kvstore_errmsg(pKV));
+    rc = keyvaluestore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
+    if (rc != KEYVALUESTORE_OK) {
+        fprintf(stderr, "Failed to get JSON: %d (%s)\n", rc, keyvaluestore_errmsg(pKV));
         free(jsonData);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] Fetched JSON document: %d bytes\n", fetchedSize);
@@ -239,14 +239,14 @@ int example1_basic_json_operations(void) {
     free(jsonData);
     
     /* Get statistics */
-    KVStoreStats stats;
-    kvstore_stats(pKV, &stats);
+    KeyValueStoreStats stats;
+    keyvaluestore_stats(pKV, &stats);
     printf("\nStatistics:\n");
     printf("  Puts: %" PRIu64 "\n", stats.nPuts);
     printf("  Gets: %" PRIu64 "\n", stats.nGets);
     printf("  Errors: %" PRIu64 "\n", stats.nErrors);
     
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     printf("\n[OK] Example 1 completed successfully!\n");
     
     return 0;
@@ -256,14 +256,14 @@ int example1_basic_json_operations(void) {
 ** EXAMPLE 2: Multiple JSON Documents with Different Sizes
 ** ============================================================================ */
 int example2_multiple_json_documents(void) {
-    KVStore *pKV = NULL;
+    KeyValueStore *pKV = NULL;
     int rc;
     int i;
     
     printf("\n=== EXAMPLE 2: Multiple JSON Documents ===\n");
     
-    rc = kvstore_open("example2.db", &pKV, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open("example2.db", &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
@@ -288,8 +288,8 @@ int example2_multiple_json_documents(void) {
             continue;
         }
         
-        rc = kvstore_put(pKV, key, strlen(key), jsonData, jsonSize);
-        if (rc != KVSTORE_OK) {
+        rc = keyvaluestore_put(pKV, key, strlen(key), jsonData, jsonSize);
+        if (rc != KEYVALUESTORE_OK) {
             fprintf(stderr, "Failed to insert document %d: %d\n", i, rc);
             free(jsonData);
             continue;
@@ -312,8 +312,8 @@ int example2_multiple_json_documents(void) {
         sprintf(key, "json_doc_%d_records", sizes[i]);
         expectedJSON = generateLargeJSON(sizes[i], &expectedSize);
         
-        rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
-        if (rc != KVSTORE_OK) {
+        rc = keyvaluestore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
+        if (rc != KEYVALUESTORE_OK) {
             fprintf(stderr, "  [X] Failed to fetch %s\n", key);
             free(expectedJSON);
             continue;
@@ -329,7 +329,7 @@ int example2_multiple_json_documents(void) {
         free(expectedJSON);
     }
     
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     printf("\n[OK] Example 2 completed successfully!\n");
     
     return 0;
@@ -339,34 +339,34 @@ int example2_multiple_json_documents(void) {
 ** EXAMPLE 3: Column Families for JSON Organization
 ** ============================================================================ */
 int example3_column_families_json(void) {
-    KVStore *pKV = NULL;
-    KVColumnFamily *pCF_Users = NULL;
-    KVColumnFamily *pCF_Products = NULL;
+    KeyValueStore *pKV = NULL;
+    KeyValueColumnFamily *pCF_Users = NULL;
+    KeyValueColumnFamily *pCF_Products = NULL;
     int rc;
     
     printf("\n=== EXAMPLE 3: Column Families for JSON ===\n");
     
-    rc = kvstore_open("example3.db", &pKV, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open("example3.db", &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
     printf("[OK] Opened kvstore\n");
     
     /* Create column families */
-    rc = kvstore_cf_create(pKV, "users", &pCF_Users);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_cf_create(pKV, "users", &pCF_Users);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to create users CF: %d\n", rc);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] Created 'users' column family\n");
     
-    rc = kvstore_cf_create(pKV, "products", &pCF_Products);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_cf_create(pKV, "products", &pCF_Products);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to create products CF: %d\n", rc);
-        kvstore_cf_close(pCF_Users);
-        kvstore_close(pKV);
+        keyvaluestore_cf_close(pCF_Users);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] Created 'products' column family\n");
@@ -389,8 +389,8 @@ int example3_column_families_json(void) {
             "}", 
             1000 + i, i, i, (long)time(NULL), (i % 2 == 0) ? "true" : "false");
         
-        rc = kvstore_cf_put(pCF_Users, key, strlen(key), json, jsonLen);
-        if (rc == KVSTORE_OK) {
+        rc = keyvaluestore_cf_put(pCF_Users, key, strlen(key), json, jsonLen);
+        if (rc == KEYVALUESTORE_OK) {
             printf("  [OK] Inserted %s (%d bytes)\n", key, jsonLen);
         } else {
             fprintf(stderr, "  [X] Failed to insert %s\n", key);
@@ -415,8 +415,8 @@ int example3_column_families_json(void) {
             "}",
             2000 + i, i, 10 + i * 5, 50 + i * 10, i % 3);
         
-        rc = kvstore_cf_put(pCF_Products, key, strlen(key), json, jsonLen);
-        if (rc == KVSTORE_OK) {
+        rc = keyvaluestore_cf_put(pCF_Products, key, strlen(key), json, jsonLen);
+        if (rc == KEYVALUESTORE_OK) {
             printf("  [OK] Inserted %s (%d bytes)\n", key, jsonLen);
         } else {
             fprintf(stderr, "  [X] Failed to insert %s\n", key);
@@ -431,9 +431,9 @@ int example3_column_families_json(void) {
         int size;
         
         sprintf(key, "user_%d", 1000 + i);
-        rc = kvstore_cf_get(pCF_Users, key, strlen(key), &data, &size);
+        rc = keyvaluestore_cf_get(pCF_Users, key, strlen(key), &data, &size);
         
-        if (rc == KVSTORE_OK) {
+        if (rc == KEYVALUESTORE_OK) {
             if (validateJSON((char*)data, size)) {
                 printf("  [OK] %s: valid JSON (%d bytes)\n", key, size);
             } else {
@@ -452,9 +452,9 @@ int example3_column_families_json(void) {
         int size;
         
         sprintf(key, "product_%d", 2000 + i);
-        rc = kvstore_cf_get(pCF_Products, key, strlen(key), &data, &size);
+        rc = keyvaluestore_cf_get(pCF_Products, key, strlen(key), &data, &size);
         
-        if (rc == KVSTORE_OK) {
+        if (rc == KEYVALUESTORE_OK) {
             if (validateJSON((char*)data, size)) {
                 printf("  [OK] %s: valid JSON (%d bytes)\n", key, size);
             } else {
@@ -469,8 +469,8 @@ int example3_column_families_json(void) {
     /* List all column families */
     char **cfNames;
     int cfCount;
-    rc = kvstore_cf_list(pKV, &cfNames, &cfCount);
-    if (rc == KVSTORE_OK) {
+    rc = keyvaluestore_cf_list(pKV, &cfNames, &cfCount);
+    if (rc == KEYVALUESTORE_OK) {
         printf("\nColumn families in database: %d\n", cfCount);
         for (int i = 0; i < cfCount; i++) {
             printf("  - %s\n", cfNames[i]);
@@ -479,9 +479,9 @@ int example3_column_families_json(void) {
         sqliteFree(cfNames);
     }
     
-    kvstore_cf_close(pCF_Users);
-    kvstore_cf_close(pCF_Products);
-    kvstore_close(pKV);
+    keyvaluestore_cf_close(pCF_Users);
+    keyvaluestore_cf_close(pCF_Products);
+    keyvaluestore_close(pKV);
     
     printf("\n[OK] Example 3 completed successfully!\n");
     return 0;
@@ -491,13 +491,13 @@ int example3_column_families_json(void) {
 ** EXAMPLE 4: Nested JSON and Complex Structures
 ** ============================================================================ */
 int example4_nested_json(void) {
-    KVStore *pKV = NULL;
+    KeyValueStore *pKV = NULL;
     int rc;
     
     printf("\n=== EXAMPLE 4: Nested JSON Structures ===\n");
     
-    rc = kvstore_open("example4.db", &pKV, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open("example4.db", &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
@@ -525,8 +525,8 @@ int example4_nested_json(void) {
         }
         
         /* Insert */
-        rc = kvstore_put(pKV, key, strlen(key), jsonData, jsonSize);
-        if (rc != KVSTORE_OK) {
+        rc = keyvaluestore_put(pKV, key, strlen(key), jsonData, jsonSize);
+        if (rc != KEYVALUESTORE_OK) {
             fprintf(stderr, "  [X] Failed to insert depth %d: %d\n", depths[i], rc);
             free(jsonData);
             continue;
@@ -535,8 +535,8 @@ int example4_nested_json(void) {
                depths[i], jsonSize);
         
         /* Fetch and verify */
-        rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
-        if (rc != KVSTORE_OK) {
+        rc = keyvaluestore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
+        if (rc != KEYVALUESTORE_OK) {
             fprintf(stderr, "  [X] Failed to fetch depth %d\n", depths[i]);
             free(jsonData);
             continue;
@@ -553,7 +553,7 @@ int example4_nested_json(void) {
         free(jsonData);
     }
     
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     printf("\n[OK] Example 4 completed successfully!\n");
     
     return 0;
@@ -563,14 +563,14 @@ int example4_nested_json(void) {
 ** EXAMPLE 5: Batch Operations and Transactions
 ** ============================================================================ */
 int example5_batch_json_operations(void) {
-    KVStore *pKV = NULL;
+    KeyValueStore *pKV = NULL;
     int rc;
     int numDocs = 100;
     
     printf("\n=== EXAMPLE 5: Batch JSON Operations ===\n");
     
-    rc = kvstore_open("example5.db", &pKV, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open("example5.db", &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
@@ -581,10 +581,10 @@ int example5_batch_json_operations(void) {
     
     clock_t start = clock();
     
-    rc = kvstore_begin(pKV, 1);  /* Begin write transaction */
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_begin(pKV, 1);  /* Begin write transaction */
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to begin transaction: %d\n", rc);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     
@@ -599,19 +599,19 @@ int example5_batch_json_operations(void) {
             "{\"id\":%d,\"name\":\"Document %d\",\"timestamp\":%ld}",
             i, i, (long)time(NULL));
         
-        rc = kvstore_put(pKV, key, strlen(key), json, jsonLen);
-        if (rc == KVSTORE_OK) {
+        rc = keyvaluestore_put(pKV, key, strlen(key), json, jsonLen);
+        if (rc == KEYVALUESTORE_OK) {
             successCount++;
         } else {
             fprintf(stderr, "Failed to insert doc %d: %d\n", i, rc);
         }
     }
     
-    rc = kvstore_commit(pKV);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_commit(pKV);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to commit transaction: %d\n", rc);
-        kvstore_rollback(pKV);
-        kvstore_close(pKV);
+        keyvaluestore_rollback(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     
@@ -634,9 +634,9 @@ int example5_batch_json_operations(void) {
         int idx = verifyIndices[i];
         
         sprintf(key, "batch_doc_%04d", idx);
-        rc = kvstore_get(pKV, key, strlen(key), &data, &size);
+        rc = keyvaluestore_get(pKV, key, strlen(key), &data, &size);
         
-        if (rc == KVSTORE_OK && validateJSON((char*)data, size)) {
+        if (rc == KEYVALUESTORE_OK && validateJSON((char*)data, size)) {
             printf("  [OK] Document %d verified\n", idx);
             sqliteFree(data);
         } else {
@@ -646,22 +646,22 @@ int example5_batch_json_operations(void) {
     
     /* Iterate and count */
     printf("\nIterating through all documents...\n");
-    KVIterator *pIter = NULL;
-    rc = kvstore_iterator_create(pKV, &pIter);
+    KeyValueIterator *pIter = NULL;
+    rc = keyvaluestore_iterator_create(pKV, &pIter);
     
-    if (rc == KVSTORE_OK) {
+    if (rc == KEYVALUESTORE_OK) {
         int count = 0;
         int validJSON = 0;
         
-        for (kvstore_iterator_first(pIter); 
-             !kvstore_iterator_eof(pIter); 
-             kvstore_iterator_next(pIter)) {
+        for (keyvaluestore_iterator_first(pIter); 
+             !keyvaluestore_iterator_eof(pIter); 
+             keyvaluestore_iterator_next(pIter)) {
             
             void *value;
             int valueSize;
             
-            rc = kvstore_iterator_value(pIter, &value, &valueSize);
-            if (rc == KVSTORE_OK) {
+            rc = keyvaluestore_iterator_value(pIter, &value, &valueSize);
+            if (rc == KEYVALUESTORE_OK) {
                 count++;
                 if (validateJSON((char*)value, valueSize)) {
                     validJSON++;
@@ -670,10 +670,10 @@ int example5_batch_json_operations(void) {
         }
         
         printf("  [OK] Found %d documents, %d with valid JSON\n", count, validJSON);
-        kvstore_iterator_close(pIter);
+        keyvaluestore_iterator_close(pIter);
     }
     
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     printf("\n[OK] Example 5 completed successfully!\n");
     
     return 0;
@@ -683,13 +683,13 @@ int example5_batch_json_operations(void) {
 ** EXAMPLE 6: Large JSON File (Multi-MB)
 ** ============================================================================ */
 int example6_very_large_json(void) {
-    KVStore *pKV = NULL;
+    KeyValueStore *pKV = NULL;
     int rc;
     
     printf("\n=== EXAMPLE 6: Very Large JSON (Multi-MB) ===\n");
     
-    rc = kvstore_open("example6.db", &pKV, KVSTORE_JOURNAL_DELETE);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open("example6.db", &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "Failed to open kvstore: %d\n", rc);
         return 1;
     }
@@ -704,7 +704,7 @@ int example6_very_large_json(void) {
     largeJSON = generateLargeJSON(50000, &largeSize);
     if (!largeJSON) {
         fprintf(stderr, "Failed to generate large JSON\n");
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     
@@ -716,7 +716,7 @@ int example6_very_large_json(void) {
     if (!validateJSON(largeJSON, largeSize)) {
         fprintf(stderr, "[X] Generated JSON is invalid!\n");
         free(largeJSON);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     printf("[OK] JSON validation passed\n");
@@ -726,15 +726,15 @@ int example6_very_large_json(void) {
     clock_t start = clock();
     
     const char *key = "very_large_json";
-    rc = kvstore_put(pKV, key, strlen(key), largeJSON, largeSize);
+    rc = keyvaluestore_put(pKV, key, strlen(key), largeJSON, largeSize);
     
     clock_t end = clock();
     double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     
-    if (rc != KVSTORE_OK) {
-        fprintf(stderr, "[X] Failed to insert: %d (%s)\n", rc, kvstore_errmsg(pKV));
+    if (rc != KEYVALUESTORE_OK) {
+        fprintf(stderr, "[X] Failed to insert: %d (%s)\n", rc, keyvaluestore_errmsg(pKV));
         free(largeJSON);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     
@@ -747,14 +747,14 @@ int example6_very_large_json(void) {
     int fetchedSize;
     
     start = clock();
-    rc = kvstore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
+    rc = keyvaluestore_get(pKV, key, strlen(key), &fetchedData, &fetchedSize);
     end = clock();
     elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     
-    if (rc != KVSTORE_OK) {
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "[X] Failed to fetch: %d\n", rc);
         free(largeJSON);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 1;
     }
     
@@ -779,14 +779,14 @@ int example6_very_large_json(void) {
     
     /* Sync to disk */
     printf("Syncing to disk...\n");
-    rc = kvstore_sync(pKV);
-    if (rc == KVSTORE_OK) {
+    rc = keyvaluestore_sync(pKV);
+    if (rc == KEYVALUESTORE_OK) {
         printf("[OK] Database synced successfully\n");
     }
     
     sqliteFree(fetchedData);
     free(largeJSON);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     
     printf("\n[OK] Example 6 completed successfully!\n");
     return 0;
@@ -799,7 +799,7 @@ int main(int argc, char **argv) {
     int runExample = 0;
     
     printf("+===========================================================+\n");
-    printf("|  KVStore JSON Examples - Large File Operations           |\n");
+    printf("|  KeyValueStore JSON Examples - Large File Operations           |\n");
     printf("+===========================================================+\n");
     
     /* Parse command line */

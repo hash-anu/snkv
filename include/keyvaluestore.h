@@ -9,8 +9,8 @@
 ** column families (multiple logical namespaces).
 */
 
-#ifndef _KVSTORE_H_
-#define _KVSTORE_H_
+#ifndef _KEYVALUESTORE_H_
+#define _KEYVALUESTORE_H_
 
 #include "sqliteInt.h"
 #include "btree.h"
@@ -33,85 +33,85 @@ extern "C" {
 #endif
 
 /*
-** KVStore handle - represents an open key-value store
+** KeyValueStore handle - represents an open key-value store
 */
-typedef struct KVStore KVStore;
+typedef struct KeyValueStore KeyValueStore;
 
 /*
 ** Column Family handle - represents a logical namespace
 */
-typedef struct KVColumnFamily KVColumnFamily;
+typedef struct KeyValueColumnFamily KeyValueColumnFamily;
 
 /*
 ** Error codes — numeric values match the corresponding SQLITE_* codes so
-** that KVSTORE_* and SQLITE_* comparisons are always consistent.
+** that KEYVALUESTORE_* and SQLITE_* comparisons are always consistent.
 */
-#define KVSTORE_OK        0   /* success */
-#define KVSTORE_ERROR     1   /* generic error */
-#define KVSTORE_BUSY      5   /* database locked by another connection */
-#define KVSTORE_LOCKED    6   /* database locked within same connection */
-#define KVSTORE_NOMEM     7   /* malloc() failed */
-#define KVSTORE_READONLY  8   /* attempt to write a read-only database */
-#define KVSTORE_CORRUPT   11  /* database file is malformed */
-#define KVSTORE_NOTFOUND  12  /* key or column family not found */
-#define KVSTORE_PROTOCOL  15  /* database lock protocol error */
+#define KEYVALUESTORE_OK        0   /* success */
+#define KEYVALUESTORE_ERROR     1   /* generic error */
+#define KEYVALUESTORE_BUSY      5   /* database locked by another connection */
+#define KEYVALUESTORE_LOCKED    6   /* database locked within same connection */
+#define KEYVALUESTORE_NOMEM     7   /* malloc() failed */
+#define KEYVALUESTORE_READONLY  8   /* attempt to write a read-only database */
+#define KEYVALUESTORE_CORRUPT   11  /* database file is malformed */
+#define KEYVALUESTORE_NOTFOUND  12  /* key or column family not found */
+#define KEYVALUESTORE_PROTOCOL  15  /* database lock protocol error */
 
 /*
 ** Maximum number of column families
 */
-#define KVSTORE_MAX_COLUMN_FAMILIES 64
+#define KEYVALUESTORE_MAX_COLUMN_FAMILIES 64
 
 /*
-** Journal modes for kvstore_open / KVStoreConfig.journalMode
+** Journal modes for keyvaluestore_open / KeyValueStoreConfig.journalMode
 */
-#define KVSTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
-#define KVSTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode */
+#define KEYVALUESTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
+#define KEYVALUESTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode */
 
 /*
-** Sync levels for KVStoreConfig.syncLevel
+** Sync levels for KeyValueStoreConfig.syncLevel
 **
-** KVSTORE_SYNC_OFF    — no fsync; fastest, but data may be lost on power
+** KEYVALUESTORE_SYNC_OFF    — no fsync; fastest, but data may be lost on power
 **                       failure (process crash is still safe in WAL mode).
-** KVSTORE_SYNC_NORMAL — (default) WAL checkpoint syncs once; survives process
+** KEYVALUESTORE_SYNC_NORMAL — (default) WAL checkpoint syncs once; survives process
 **                       crash, not necessarily power loss.
-** KVSTORE_SYNC_FULL   — fsync on every commit; power-safe, slower writes.
+** KEYVALUESTORE_SYNC_FULL   — fsync on every commit; power-safe, slower writes.
 */
-#define KVSTORE_SYNC_OFF     0
-#define KVSTORE_SYNC_NORMAL  1
-#define KVSTORE_SYNC_FULL    2
+#define KEYVALUESTORE_SYNC_OFF     0
+#define KEYVALUESTORE_SYNC_NORMAL  1
+#define KEYVALUESTORE_SYNC_FULL    2
 
 /*
-** Checkpoint modes for kvstore_checkpoint().
+** Checkpoint modes for keyvaluestore_checkpoint().
 ** These map directly to SQLITE_CHECKPOINT_* values.
 */
-#define KVSTORE_CHECKPOINT_PASSIVE   0  /* Copy frames w/o blocking; may not flush all */
-#define KVSTORE_CHECKPOINT_FULL      1  /* Wait for writers, then copy all frames       */
-#define KVSTORE_CHECKPOINT_RESTART   2  /* Like FULL, then reset WAL write position     */
-#define KVSTORE_CHECKPOINT_TRUNCATE  3  /* Like RESTART, then truncate the WAL file     */
+#define KEYVALUESTORE_CHECKPOINT_PASSIVE   0  /* Copy frames w/o blocking; may not flush all */
+#define KEYVALUESTORE_CHECKPOINT_FULL      1  /* Wait for writers, then copy all frames       */
+#define KEYVALUESTORE_CHECKPOINT_RESTART   2  /* Like FULL, then reset WAL write position     */
+#define KEYVALUESTORE_CHECKPOINT_TRUNCATE  3  /* Like RESTART, then truncate the WAL file     */
 
 /*
-** Configuration structure for kvstore_open_v2.
+** Configuration structure for keyvaluestore_open_v2.
 **
 ** Zero-initialize and set only the fields you need; unset fields use the
 ** documented defaults.
 **
-**   KVStoreConfig cfg = {0};
-**   cfg.journalMode = KVSTORE_JOURNAL_WAL;  // already the default
+**   KeyValueStoreConfig cfg = {0};
+**   cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;  // already the default
 **   cfg.busyTimeout = 5000;                 // retry up to 5 seconds
-**   kvstore_open_v2("mydb.db", &kv, &cfg);
+**   keyvaluestore_open_v2("mydb.db", &kv, &cfg);
 */
-typedef struct KVStoreConfig KVStoreConfig;
-struct KVStoreConfig {
+typedef struct KeyValueStoreConfig KeyValueStoreConfig;
+struct KeyValueStoreConfig {
   /*
-  ** journalMode — KVSTORE_JOURNAL_WAL (default) or KVSTORE_JOURNAL_DELETE.
+  ** journalMode — KEYVALUESTORE_JOURNAL_WAL (default) or KEYVALUESTORE_JOURNAL_DELETE.
   ** WAL mode allows concurrent readers with a single writer and is strongly
   ** recommended for most workloads.
   */
   int journalMode;
 
   /*
-  ** syncLevel — KVSTORE_SYNC_NORMAL (default), KVSTORE_SYNC_OFF, or
-  ** KVSTORE_SYNC_FULL.  Controls how aggressively the pager fsyncs.
+  ** syncLevel — KEYVALUESTORE_SYNC_NORMAL (default), KEYVALUESTORE_SYNC_OFF, or
+  ** KEYVALUESTORE_SYNC_FULL.  Controls how aggressively the pager fsyncs.
   ** In WAL mode NORMAL and FULL have nearly identical performance.
   */
   int syncLevel;
@@ -134,7 +134,7 @@ struct KVStoreConfig {
   /*
   ** readOnly — set to 1 to open the database read-only.  All write
   ** operations (put, delete, begin(wrflag=1), etc.) will return
-  ** KVSTORE_READONLY.  Default: 0 (read-write).
+  ** KEYVALUESTORE_READONLY.  Default: 0 (read-write).
   */
   int readOnly;
 
@@ -158,7 +158,7 @@ struct KVStoreConfig {
 ** Memory helpers — wrappers around the SQLite allocator.
 **
 ** snkv_malloc(n) — allocate n bytes, zero-initialised.
-** snkv_free(p)   — free a pointer returned by snkv_malloc or kvstore_get.
+** snkv_free(p)   — free a pointer returned by snkv_malloc or keyvaluestore_get.
 **
 ** When including snkv.h without SNKV_IMPLEMENTATION (header-only use),
 ** the sqlite3 allocator functions are forward-declared here so the
@@ -177,47 +177,47 @@ void  sqlite3_free(void *);
 **
 ** Parameters:
 **   zFilename - Path to the database file (NULL for in-memory)
-**   ppKV      - Output pointer to KVStore handle
-**   pConfig   - Configuration (NULL uses all defaults, same as kvstore_open
-**               with KVSTORE_JOURNAL_WAL)
+**   ppKV      - Output pointer to KeyValueStore handle
+**   pConfig   - Configuration (NULL uses all defaults, same as keyvaluestore_open
+**               with KEYVALUESTORE_JOURNAL_WAL)
 **
 ** Default values when pConfig is NULL or a field is 0:
-**   journalMode  KVSTORE_JOURNAL_WAL
-**   syncLevel    KVSTORE_SYNC_NORMAL
+**   journalMode  KEYVALUESTORE_JOURNAL_WAL
+**   syncLevel    KEYVALUESTORE_SYNC_NORMAL
 **   cacheSize    2000 pages (~8 MB)
 **   pageSize     4096 bytes (new databases only)
 **   readOnly     0 (read-write)
 **   busyTimeout  0 ms (fail immediately on lock)
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_open_v2(
+int keyvaluestore_open_v2(
   const char *zFilename,
-  KVStore **ppKV,
-  const KVStoreConfig *pConfig
+  KeyValueStore **ppKV,
+  const KeyValueStoreConfig *pConfig
 );
 
 /*
 ** Open a key-value store database file (simplified interface).
 **
-** Equivalent to kvstore_open_v2 with pConfig->journalMode = journalMode
+** Equivalent to keyvaluestore_open_v2 with pConfig->journalMode = journalMode
 ** and all other fields at their defaults.
 **
 ** Parameters:
 **   zFilename   - Path to the database file (NULL for in-memory)
-**   ppKV        - Output pointer to KVStore handle
-**   journalMode - KVSTORE_JOURNAL_DELETE or KVSTORE_JOURNAL_WAL
+**   ppKV        - Output pointer to KeyValueStore handle
+**   journalMode - KEYVALUESTORE_JOURNAL_DELETE or KEYVALUESTORE_JOURNAL_WAL
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: The database is always opened with incremental auto-vacuum enabled.
-**       Call kvstore_incremental_vacuum() to reclaim unused space on demand.
+**       Call keyvaluestore_incremental_vacuum() to reclaim unused space on demand.
 */
-int kvstore_open(
+int keyvaluestore_open(
   const char *zFilename,
-  KVStore **ppKV,
+  KeyValueStore **ppKV,
   int journalMode
 );
 
@@ -225,12 +225,12 @@ int kvstore_open(
 ** Close a key-value store and free all associated resources.
 **
 ** Parameters:
-**   pKV - KVStore handle to close
+**   pKV - KeyValueStore handle to close
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_close(KVStore *pKV);
+int keyvaluestore_close(KeyValueStore *pKV);
 
 /* ========== COLUMN FAMILY OPERATIONS ========== */
 
@@ -238,70 +238,70 @@ int kvstore_close(KVStore *pKV);
 ** Create a new column family.
 **
 ** Parameters:
-**   pKV    - KVStore handle
+**   pKV    - KeyValueStore handle
 **   zName  - Column family name (must be unique)
 **   ppCF   - Output pointer to column family handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: Column family names are limited to 255 characters
 */
-int kvstore_cf_create(
-  KVStore *pKV,
+int keyvaluestore_cf_create(
+  KeyValueStore *pKV,
   const char *zName,
-  KVColumnFamily **ppCF
+  KeyValueColumnFamily **ppCF
 );
 
 /*
 ** Open an existing column family.
 **
 ** Parameters:
-**   pKV    - KVStore handle
+**   pKV    - KeyValueStore handle
 **   zName  - Column family name
 **   ppCF   - Output pointer to column family handle
 **
 ** Returns:
-**   KVSTORE_OK on success
-**   KVSTORE_NOTFOUND if column family doesn't exist
+**   KEYVALUESTORE_OK on success
+**   KEYVALUESTORE_NOTFOUND if column family doesn't exist
 */
-int kvstore_cf_open(
-  KVStore *pKV,
+int keyvaluestore_cf_open(
+  KeyValueStore *pKV,
   const char *zName,
-  KVColumnFamily **ppCF
+  KeyValueColumnFamily **ppCF
 );
 
 /*
 ** Get the default column family (always exists).
 **
 ** Parameters:
-**   pKV  - KVStore handle
+**   pKV  - KeyValueStore handle
 **   ppCF - Output pointer to column family handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: The default column family is created automatically on database open
 */
-int kvstore_cf_get_default(
-  KVStore *pKV,
-  KVColumnFamily **ppCF
+int keyvaluestore_cf_get_default(
+  KeyValueStore *pKV,
+  KeyValueColumnFamily **ppCF
 );
 
 /*
 ** Drop a column family (delete all data and metadata).
 **
 ** Parameters:
-**   pKV   - KVStore handle
+**   pKV   - KeyValueStore handle
 **   zName - Column family name
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: Cannot drop the default column family
 */
-int kvstore_cf_drop(
-  KVStore *pKV,
+int keyvaluestore_cf_drop(
+  KeyValueStore *pKV,
   const char *zName
 );
 
@@ -309,17 +309,17 @@ int kvstore_cf_drop(
 ** List all column families in the database.
 **
 ** Parameters:
-**   pKV      - KVStore handle
+**   pKV      - KeyValueStore handle
 **   pazNames - Output array of column family names (caller must free)
 **   pnCount  - Output count of column families
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: Caller must free each name with sqliteFree(), then free the array
 */
-int kvstore_cf_list(
-  KVStore *pKV,
+int keyvaluestore_cf_list(
+  KeyValueStore *pKV,
   char ***pazNames,
   int *pnCount
 );
@@ -330,7 +330,7 @@ int kvstore_cf_list(
 ** Parameters:
 **   pCF - Column family handle
 */
-void kvstore_cf_close(KVColumnFamily *pCF);
+void keyvaluestore_cf_close(KeyValueColumnFamily *pCF);
 
 /* ========== KEY-VALUE OPERATIONS (DEFAULT CF) ========== */
 
@@ -338,19 +338,19 @@ void kvstore_cf_close(KVColumnFamily *pCF);
 ** Insert or update a key-value pair in the default column family.
 **
 ** Parameters:
-**   pKV      - KVStore handle
+**   pKV      - KeyValueStore handle
 **   pKey     - Pointer to key data
 **   nKey     - Length of key in bytes
 **   pValue   - Pointer to value data
 **   nValue   - Length of value in bytes
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: If the key already exists, its value will be updated.
 */
-int kvstore_put(
-  KVStore *pKV,
+int keyvaluestore_put(
+  KeyValueStore *pKV,
   const void *pKey,
   int nKey,
   const void *pValue,
@@ -361,21 +361,21 @@ int kvstore_put(
 ** Retrieve a value by key from the default column family.
 **
 ** Parameters:
-**   pKV      - KVStore handle
+**   pKV      - KeyValueStore handle
 **   pKey     - Pointer to key data
 **   nKey     - Length of key in bytes
 **   ppValue  - Output pointer to value data (caller must free)
 **   pnValue  - Output pointer to value length
 **
 ** Returns:
-**   KVSTORE_OK on success
-**   KVSTORE_NOTFOUND if key doesn't exist
+**   KEYVALUESTORE_OK on success
+**   KEYVALUESTORE_NOTFOUND if key doesn't exist
 **   Other error codes on failure
 **
 ** Note: Caller is responsible for freeing *ppValue with sqliteFree()
 */
-int kvstore_get(
-  KVStore *pKV,
+int keyvaluestore_get(
+  KeyValueStore *pKV,
   const void *pKey,
   int nKey,
   void **ppValue,
@@ -386,17 +386,17 @@ int kvstore_get(
 ** Delete a key-value pair from the default column family.
 **
 ** Parameters:
-**   pKV  - KVStore handle
+**   pKV  - KeyValueStore handle
 **   pKey - Pointer to key data
 **   nKey - Length of key in bytes
 **
 ** Returns:
-**   KVSTORE_OK on success
-**   KVSTORE_NOTFOUND if key doesn't exist
+**   KEYVALUESTORE_OK on success
+**   KEYVALUESTORE_NOTFOUND if key doesn't exist
 **   Other error codes on failure
 */
-int kvstore_delete(
-  KVStore *pKV,
+int keyvaluestore_delete(
+  KeyValueStore *pKV,
   const void *pKey,
   int nKey
 );
@@ -405,16 +405,16 @@ int kvstore_delete(
 ** Check if a key exists in the default column family.
 **
 ** Parameters:
-**   pKV     - KVStore handle
+**   pKV     - KeyValueStore handle
 **   pKey    - Pointer to key data
 **   nKey    - Length of key in bytes
 **   pExists - Output: 1 if exists, 0 if not
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_exists(
-  KVStore *pKV,
+int keyvaluestore_exists(
+  KeyValueStore *pKV,
   const void *pKey,
   int nKey,
   int *pExists
@@ -433,10 +433,10 @@ int kvstore_exists(
 **   nValue   - Length of value in bytes
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_cf_put(
-  KVColumnFamily *pCF,
+int keyvaluestore_cf_put(
+  KeyValueColumnFamily *pCF,
   const void *pKey,
   int nKey,
   const void *pValue,
@@ -454,11 +454,11 @@ int kvstore_cf_put(
 **   pnValue  - Output pointer to value length
 **
 ** Returns:
-**   KVSTORE_OK on success
-**   KVSTORE_NOTFOUND if key doesn't exist
+**   KEYVALUESTORE_OK on success
+**   KEYVALUESTORE_NOTFOUND if key doesn't exist
 */
-int kvstore_cf_get(
-  KVColumnFamily *pCF,
+int keyvaluestore_cf_get(
+  KeyValueColumnFamily *pCF,
   const void *pKey,
   int nKey,
   void **ppValue,
@@ -474,11 +474,11 @@ int kvstore_cf_get(
 **   nKey - Length of key in bytes
 **
 ** Returns:
-**   KVSTORE_OK on success
-**   KVSTORE_NOTFOUND if key doesn't exist
+**   KEYVALUESTORE_OK on success
+**   KEYVALUESTORE_NOTFOUND if key doesn't exist
 */
-int kvstore_cf_delete(
-  KVColumnFamily *pCF,
+int keyvaluestore_cf_delete(
+  KeyValueColumnFamily *pCF,
   const void *pKey,
   int nKey
 );
@@ -493,10 +493,10 @@ int kvstore_cf_delete(
 **   pExists - Output: 1 if exists, 0 if not
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_cf_exists(
-  KVColumnFamily *pCF,
+int keyvaluestore_cf_exists(
+  KeyValueColumnFamily *pCF,
   const void *pKey,
   int nKey,
   int *pExists
@@ -505,21 +505,21 @@ int kvstore_cf_exists(
 /*
 ** Iterator structure for traversing the key-value store
 */
-typedef struct KVIterator KVIterator;
+typedef struct KeyValueIterator KeyValueIterator;
 
 /*
 ** Create an iterator for the default column family.
 **
 ** Parameters:
-**   pKV   - KVStore handle
+**   pKV   - KeyValueStore handle
 **   ppIter - Output pointer to iterator
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_iterator_create(
-  KVStore *pKV,
-  KVIterator **ppIter
+int keyvaluestore_iterator_create(
+  KeyValueStore *pKV,
+  KeyValueIterator **ppIter
 );
 
 /*
@@ -530,35 +530,35 @@ int kvstore_iterator_create(
 **   ppIter - Output pointer to iterator
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_cf_iterator_create(
-  KVColumnFamily *pCF,
-  KVIterator **ppIter
+int keyvaluestore_cf_iterator_create(
+  KeyValueColumnFamily *pCF,
+  KeyValueIterator **ppIter
 );
 
 /*
 ** Create a prefix iterator for the default column family.
 ** The iterator is pre-positioned at the first key whose bytes start
-** with (pPrefix, nPrefix).  Subsequent kvstore_iterator_next() calls
+** with (pPrefix, nPrefix).  Subsequent keyvaluestore_iterator_next() calls
 ** automatically stop when keys no longer match the prefix.
 **
 ** Parameters:
-**   pKV      - KVStore handle
+**   pKV      - KeyValueStore handle
 **   pPrefix  - Prefix bytes to search for
 **   nPrefix  - Length of prefix in bytes
 **   ppIter   - Output pointer to iterator
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 **
 ** Note: The iterator is already positioned; do NOT call
-**       kvstore_iterator_first() — just read key/value directly.
+**       keyvaluestore_iterator_first() — just read key/value directly.
 */
-int kvstore_prefix_iterator_create(
-  KVStore *pKV,
+int keyvaluestore_prefix_iterator_create(
+  KeyValueStore *pKV,
   const void *pPrefix, int nPrefix,
-  KVIterator **ppIter
+  KeyValueIterator **ppIter
 );
 
 /*
@@ -571,12 +571,12 @@ int kvstore_prefix_iterator_create(
 **   ppIter   - Output pointer to iterator
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_cf_prefix_iterator_create(
-  KVColumnFamily *pCF,
+int keyvaluestore_cf_prefix_iterator_create(
+  KeyValueColumnFamily *pCF,
   const void *pPrefix, int nPrefix,
-  KVIterator **ppIter
+  KeyValueIterator **ppIter
 );
 
 /*
@@ -586,9 +586,9 @@ int kvstore_cf_prefix_iterator_create(
 **   pIter - Iterator handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_iterator_first(KVIterator *pIter);
+int keyvaluestore_iterator_first(KeyValueIterator *pIter);
 
 /*
 ** Move iterator to the next key-value pair.
@@ -597,9 +597,9 @@ int kvstore_iterator_first(KVIterator *pIter);
 **   pIter - Iterator handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_iterator_next(KVIterator *pIter);
+int keyvaluestore_iterator_next(KeyValueIterator *pIter);
 
 /*
 ** Check if iterator has reached the end.
@@ -610,7 +610,7 @@ int kvstore_iterator_next(KVIterator *pIter);
 ** Returns:
 **   1 if at end, 0 otherwise
 */
-int kvstore_iterator_eof(KVIterator *pIter);
+int keyvaluestore_iterator_eof(KeyValueIterator *pIter);
 
 /*
 ** Get current key from iterator.
@@ -621,10 +621,10 @@ int kvstore_iterator_eof(KVIterator *pIter);
 **   pnKey   - Output pointer to key length
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_iterator_key(
-  KVIterator *pIter,
+int keyvaluestore_iterator_key(
+  KeyValueIterator *pIter,
   void **ppKey,
   int *pnKey
 );
@@ -638,10 +638,10 @@ int kvstore_iterator_key(
 **   pnValue  - Output pointer to value length
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_iterator_value(
-  KVIterator *pIter,
+int keyvaluestore_iterator_value(
+  KeyValueIterator *pIter,
   void **ppValue,
   int *pnValue
 );
@@ -652,58 +652,58 @@ int kvstore_iterator_value(
 ** Parameters:
 **   pIter - Iterator handle
 */
-void kvstore_iterator_close(KVIterator *pIter);
+void keyvaluestore_iterator_close(KeyValueIterator *pIter);
 
 /*
 ** Begin a transaction.
 **
 ** Parameters:
-**   pKV      - KVStore handle
+**   pKV      - KeyValueStore handle
 **   wrflag   - 1 for write transaction, 0 for read-only
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_begin(KVStore *pKV, int wrflag);
+int keyvaluestore_begin(KeyValueStore *pKV, int wrflag);
 
 /*
 ** Commit the current transaction.
 **
 ** Parameters:
-**   pKV - KVStore handle
+**   pKV - KeyValueStore handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_commit(KVStore *pKV);
+int keyvaluestore_commit(KeyValueStore *pKV);
 
 /*
 ** Rollback the current transaction.
 **
 ** Parameters:
-**   pKV - KVStore handle
+**   pKV - KeyValueStore handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_rollback(KVStore *pKV);
+int keyvaluestore_rollback(KeyValueStore *pKV);
 
 /*
-** Get the last error message from a KVStore handle.
+** Get the last error message from a KeyValueStore handle.
 **
 ** Parameters:
-**   pKV - KVStore handle
+**   pKV - KeyValueStore handle
 **
 ** Returns:
 **   Error message string (do not free)
 */
-const char *kvstore_errmsg(KVStore *pKV);
+const char *keyvaluestore_errmsg(KeyValueStore *pKV);
 
 /*
 ** Statistics structure
 */
-typedef struct KVStoreStats KVStoreStats;
-struct KVStoreStats {
+typedef struct KeyValueStoreStats KeyValueStoreStats;
+struct KeyValueStoreStats {
   uint64_t nPuts;       /* Number of put operations */
   uint64_t nGets;       /* Number of get operations */
   uint64_t nDeletes;    /* Number of delete operations */
@@ -715,37 +715,37 @@ struct KVStoreStats {
 ** Get statistics from the key-value store.
 **
 ** Parameters:
-**   pKV    - KVStore handle
+**   pKV    - KeyValueStore handle
 **   pStats - Output statistics structure
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_stats(KVStore *pKV, KVStoreStats *pStats);
+int keyvaluestore_stats(KeyValueStore *pKV, KeyValueStoreStats *pStats);
 
 /*
 ** Perform an integrity check on the database.
 **
 ** Parameters:
-**   pKV      - KVStore handle
+**   pKV      - KeyValueStore handle
 **   pzErrMsg - Output pointer to error message (caller must free with sqliteFree)
 **
 ** Returns:
-**   KVSTORE_OK if database is ok
-**   KVSTORE_CORRUPT if corruption detected
+**   KEYVALUESTORE_OK if database is ok
+**   KEYVALUESTORE_CORRUPT if corruption detected
 */
-int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg);
+int keyvaluestore_integrity_check(KeyValueStore *pKV, char **pzErrMsg);
 
 /*
 ** Synchronize the database to disk.
 **
 ** Parameters:
-**   pKV - KVStore handle
+**   pKV - KeyValueStore handle
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_sync(KVStore *pKV);
+int keyvaluestore_sync(KeyValueStore *pKV);
 
 /*
 ** Run an incremental vacuum step, freeing up to nPage pages.
@@ -755,42 +755,42 @@ int kvstore_sync(KVStore *pKV);
 ** so this function can be called at any time to reclaim space.
 **
 ** Parameters:
-**   pKV    - KVStore handle
+**   pKV    - KeyValueStore handle
 **   nPage  - Maximum number of pages to free (0 = free all)
 **
 ** Returns:
-**   KVSTORE_OK on success, error code otherwise
+**   KEYVALUESTORE_OK on success, error code otherwise
 */
-int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
+int keyvaluestore_incremental_vacuum(KeyValueStore *pKV, int nPage);
 
 /*
 ** Run a WAL checkpoint on the database.
 **
 ** Copies WAL frames back into the main database file. Any open write
 ** transaction must be committed or rolled back before calling; calling
-** while a write transaction is active returns KVSTORE_BUSY.
+** while a write transaction is active returns KEYVALUESTORE_BUSY.
 **
 ** The persistent read transaction is temporarily released and restored
 ** around the checkpoint call (required by the btree layer).
 **
 ** Parameters:
-**   pKV    - KVStore handle
-**   mode   - KVSTORE_CHECKPOINT_PASSIVE / FULL / RESTART / TRUNCATE
+**   pKV    - KeyValueStore handle
+**   mode   - KEYVALUESTORE_CHECKPOINT_PASSIVE / FULL / RESTART / TRUNCATE
 **   pnLog  - Output: WAL frames total after checkpoint (may be NULL)
 **   pnCkpt - Output: frames successfully written to DB (may be NULL)
 **
 ** Returns:
-**   KVSTORE_OK    on success
-**   KVSTORE_BUSY  if a write transaction is currently open
-**   KVSTORE_ERROR on other failure
+**   KEYVALUESTORE_OK    on success
+**   KEYVALUESTORE_BUSY  if a write transaction is currently open
+**   KEYVALUESTORE_ERROR on other failure
 **
 ** Note: On non-WAL (DELETE journal) databases this is a no-op that
-**       returns KVSTORE_OK with *pnLog = *pnCkpt = 0.
+**       returns KEYVALUESTORE_OK with *pnLog = *pnCkpt = 0.
 */
-int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt);
+int keyvaluestore_checkpoint(KeyValueStore *pKV, int mode, int *pnLog, int *pnCkpt);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _KVSTORE_H_ */
+#endif /* _KEYVALUESTORE_H_ */

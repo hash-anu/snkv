@@ -1,6 +1,6 @@
-# KVStore Layer Operations
+# KeyValueStore Layer Operations
 
-All `kvstore_*` functions that make up the SNKV public API.
+All `keyvaluestore_*` functions that make up the SNKV public API.
 The kvstore layer sits on top of the B-tree layer, providing a simple
 key-value interface with column families, iterators, and transactions.
 
@@ -11,11 +11,11 @@ key-value interface with column families, iterators, and transactions.
 ```
  ┌─────────────────────────────────────────┐
  │           Application Code              │
- │  kvstore_open / put / get / close ...   │
+ │  keyvaluestore_open / put / get / close ...   │
  └────────────────────┬────────────────────┘
                       │ public API
  ┌────────────────────▼────────────────────┐
- │         kvstore.c  (THIS DOCUMENT)      │
+ │         keyvaluestore.c  (THIS DOCUMENT)      │
  │                                         │
  │  Persistent read transaction (inTrans)  │
  │  Cached read cursor per CF (pReadCur)   │
@@ -45,32 +45,32 @@ key-value interface with column families, iterators, and transactions.
 
 1.  [Data Structures](#1-data-structures)
 2.  [Storage Model: BLOBKEY Encoding](#2-storage-model-blobkey-encoding)
-3.  [kvstore_open_v2 / kvstore_open](#3-kvstore_open_v2--kvstore_open)
-4.  [kvstore_close](#4-kvstore_close)
-5.  [kvstore_begin](#5-kvstore_begin)
-6.  [kvstore_commit](#6-kvstore_commit)
-7.  [kvstore_rollback](#7-kvstore_rollback)
-8.  [kvstore_put](#8-kvstore_put)
-9.  [kvstore_get](#9-kvstore_get)
-10. [kvstore_delete](#10-kvstore_delete)
-11. [kvstore_exists](#11-kvstore_exists)
-12. [Column Family: kvstore_cf_create](#12-kvstore_cf_create)
-13. [Column Family: kvstore_cf_open](#13-kvstore_cf_open)
-14. [Column Family: kvstore_cf_drop](#14-kvstore_cf_drop)
-15. [Column Family: kvstore_cf_list](#15-kvstore_cf_list)
-16. [kvstore_iterator_create](#16-kvstore_iterator_create)
-17. [kvstore_iterator_first / next / eof](#17-kvstore_iterator_first--next--eof)
-18. [kvstore_iterator_key / value](#18-kvstore_iterator_key--value)
-19. [kvstore_iterator_close](#19-kvstore_iterator_close)
-20. [kvstore_prefix_iterator_create](#20-kvstore_prefix_iterator_create)
-21. [kvstore_incremental_vacuum](#21-kvstore_incremental_vacuum)
-22. [kvstore_integrity_check](#22-kvstore_integrity_check)
-23. [kvstore_sync](#23-kvstore_sync)
-24. [kvstore_stats](#24-kvstore_stats)
-25. [kvstore_errmsg](#25-kvstore_errmsg)
+3.  [keyvaluestore_open_v2 / keyvaluestore_open](#3-keyvaluestore_open_v2--keyvaluestore_open)
+4.  [keyvaluestore_close](#4-keyvaluestore_close)
+5.  [keyvaluestore_begin](#5-keyvaluestore_begin)
+6.  [keyvaluestore_commit](#6-keyvaluestore_commit)
+7.  [keyvaluestore_rollback](#7-keyvaluestore_rollback)
+8.  [keyvaluestore_put](#8-keyvaluestore_put)
+9.  [keyvaluestore_get](#9-keyvaluestore_get)
+10. [keyvaluestore_delete](#10-keyvaluestore_delete)
+11. [keyvaluestore_exists](#11-keyvaluestore_exists)
+12. [Column Family: keyvaluestore_cf_create](#12-keyvaluestore_cf_create)
+13. [Column Family: keyvaluestore_cf_open](#13-keyvaluestore_cf_open)
+14. [Column Family: keyvaluestore_cf_drop](#14-keyvaluestore_cf_drop)
+15. [Column Family: keyvaluestore_cf_list](#15-keyvaluestore_cf_list)
+16. [keyvaluestore_iterator_create](#16-keyvaluestore_iterator_create)
+17. [keyvaluestore_iterator_first / next / eof](#17-keyvaluestore_iterator_first--next--eof)
+18. [keyvaluestore_iterator_key / value](#18-keyvaluestore_iterator_key--value)
+19. [keyvaluestore_iterator_close](#19-keyvaluestore_iterator_close)
+20. [keyvaluestore_prefix_iterator_create](#20-keyvaluestore_prefix_iterator_create)
+21. [keyvaluestore_incremental_vacuum](#21-keyvaluestore_incremental_vacuum)
+22. [keyvaluestore_integrity_check](#22-keyvaluestore_integrity_check)
+23. [keyvaluestore_sync](#23-keyvaluestore_sync)
+24. [keyvaluestore_stats](#24-keyvaluestore_stats)
+25. [keyvaluestore_errmsg](#25-keyvaluestore_errmsg)
 26. [Thread Safety Model & Mutex Migration](#26-thread-safety-model)
 27. [Persistent Read Transaction & Auto-Transaction Pattern](#27-persistent-read-transaction--auto-transaction-pattern)
-28. [kvstore_checkpoint + WAL Auto-Checkpoint](#28-kvstore_checkpoint--wal-auto-checkpoint)
+28. [keyvaluestore_checkpoint + WAL Auto-Checkpoint](#28-keyvaluestore_checkpoint--wal-auto-checkpoint)
 
 ---
 
@@ -78,7 +78,7 @@ key-value interface with column families, iterators, and transactions.
 
 ```
   ┌──────────────────────────────────────────────────────────┐
-  │ KVStore                                                  │
+  │ KeyValueStore                                                  │
   │   pBt          → Btree*            B-tree handle         │
   │   db           → sqlite3*          required by btree     │
   │   pKeyInfo     → KeyInfo*          shared BLOBKEY cmp    │
@@ -88,9 +88,9 @@ key-value interface with column families, iterators, and transactions.
   │   closing      → int               1 while close() runs  │
   │   zErrMsg      → char*             last error message    │
   │   pMutex       → sqlite3_mutex*    SQLITE_MUTEX_RECURSIVE│
-  │   pDefaultCF   → KVColumnFamily*   default column family │
-  │   apCF[]       → KVColumnFamily**  open named CFs        │
-  │   stats        → KVStoreStats      {nPuts nGets nDel ...}│
+  │   pDefaultCF   → KeyValueColumnFamily*   default column family │
+  │   apCF[]       → KeyValueColumnFamily**  open named CFs        │
+  │   stats        → KeyValueStoreStats      {nPuts nGets nDel ...}│
   │   walSizeLimit → int               auto-ckpt every N commits (0=off)│
   │   walCommits   → int               commits since last auto-ckpt     │
   │                                                          │
@@ -107,8 +107,8 @@ key-value interface with column families, iterators, and transactions.
            │ pDefaultCF / apCF[i]
            ▼
   ┌──────────────────────────────────────────────────────────┐
-  │ KVColumnFamily                                           │
-  │   pKV          → KVStore*          parent store          │
+  │ KeyValueColumnFamily                                           │
+  │   pKV          → KeyValueStore*          parent store          │
   │   zName        → char*             CF name (heap)        │
   │   iTable       → int               B-tree root page      │
   │   refCount     → int               reference count       │
@@ -118,8 +118,8 @@ key-value interface with column families, iterators, and transactions.
   └──────────────────────────────────────────────────────────┘
 
   ┌──────────────────────────────────────────────────────────┐
-  │ KVIterator                                               │
-  │   pCF          → KVColumnFamily*   column family         │
+  │ KeyValueIterator                                               │
+  │   pCF          → KeyValueColumnFamily*   column family         │
   │   pCur         → BtCursor*         B-tree cursor (own)   │
   │   eof          → int               1 = past last entry   │
   │   isValid      → int               1 = usable            │
@@ -133,7 +133,7 @@ key-value interface with column families, iterators, and transactions.
   └──────────────────────────────────────────────────────────┘
 
   ┌──────────────────────────────────────────────────────────┐
-  │ KVStoreStats                                             │
+  │ KeyValueStoreStats                                             │
   │   nPuts        → u64               put count             │
   │   nGets        → u64               get count             │
   │   nDeletes     → u64               delete count          │
@@ -206,23 +206,23 @@ hash of the CF name (with linear probing for collisions):
 
 ---
 
-## 3. kvstore_open_v2 / kvstore_open
+## 3. keyvaluestore_open_v2 / keyvaluestore_open
 
-`kvstore_open_v2` is the primary open function. It accepts a `KVStoreConfig`
+`keyvaluestore_open_v2` is the primary open function. It accepts a `KeyValueStoreConfig`
 struct to control journal mode, sync level, cache size, page size, read-only
-access, and busy-retry timeout. `kvstore_open` is a thin backward-compatible
-wrapper that delegates to `kvstore_open_v2`.
+access, and busy-retry timeout. `keyvaluestore_open` is a thin backward-compatible
+wrapper that delegates to `keyvaluestore_open_v2`.
 
 ```
-  kvstore_open_v2("test.db", &kv, &cfg)
+  keyvaluestore_open_v2("test.db", &kv, &cfg)
           │
           ├── Step 1: sqlite3_initialize()
           │
           ├── Step 2: Resolve config defaults (zero-value → default)
           │     ┌────────────────────────────────────────────────────┐
-          │     │ cfg == NULL        → all-zero KVStoreConfig        │
-          │     │ journalMode == 0   → KVSTORE_JOURNAL_WAL           │
-          │     │ syncLevel   == 0   → KVSTORE_SYNC_NORMAL           │
+          │     │ cfg == NULL        → all-zero KeyValueStoreConfig        │
+          │     │ journalMode == 0   → KEYVALUESTORE_JOURNAL_WAL           │
+          │     │ syncLevel   == 0   → KEYVALUESTORE_SYNC_NORMAL           │
           │     │ cacheSize   == 0   → 2000 pages (~8 MB)            │
           │     │ pageSize    == 0   → 4096 bytes (B-tree default)   │
           │     │ readOnly    == 0   → read-write                    │
@@ -232,7 +232,7 @@ wrapper that delegates to `kvstore_open_v2`.
           │
           ├── Step 3: Allocate structures
           │     ┌────────────────────────────────────────────────────┐
-          │     │ KVStore {                                           │
+          │     │ KeyValueStore {                                           │
           │     │   db      = alloc sqlite3{}                         │
           │     │   pMutex  = sqlite3_mutex_alloc(RECURSIVE)          │
           │     │   closing = 0                                       │
@@ -316,7 +316,7 @@ wrapper that delegates to `kvstore_open_v2`.
           ├── Step 11a: [NEW DB] Initialize tables
           │     if readOnly:
           │       kvstoreTeardownNoLock(pKV)
-          │       return KVSTORE_READONLY
+          │       return KEYVALUESTORE_READONLY
           │               "cannot open empty database read-only"
           │     │
           │     ├── createDefaultCF()
@@ -324,7 +324,7 @@ wrapper that delegates to `kvstore_open_v2`.
           │     │     BtreeCreateTable(&pgno, BTREE_BLOBKEY)
           │     │     BtreeUpdateMeta(META_DEFAULT_CF_ROOT, pgno)
           │     │     BtreeCommit()
-          │     │     Allocate KVColumnFamily{iTable=pgno, pReadCur=NULL}
+          │     │     Allocate KeyValueColumnFamily{iTable=pgno, pReadCur=NULL}
           │     │
           │     └── initCFMetadataTable()
           │           BtreeBeginTrans(wrflag=1)
@@ -334,7 +334,7 @@ wrapper that delegates to `kvstore_open_v2`.
           │           BtreeCommit()
           │
           ├── Step 11b: [EXISTING DB] Restore handles
-          │     Allocate KVColumnFamily{iTable=root, pReadCur=NULL}
+          │     Allocate KeyValueColumnFamily{iTable=root, pReadCur=NULL}
           │     pKV->iMetaTable = meta
           │
           ├── Step 12: Allocate shared KeyInfo
@@ -360,15 +360,15 @@ wrapper that delegates to `kvstore_open_v2`.
                 sqlite3BtreeBeginTrans(pBt, 0, 0)
                 pKV->inTrans = 1   ← held for lifetime of store
                 *ppKV = pKV
-                return KVSTORE_OK
+                return KEYVALUESTORE_OK
 
-  kvstore_open — thin backward-compatible wrapper:
+  keyvaluestore_open — thin backward-compatible wrapper:
   ┌──────────────────────────────────────────────────────────┐
-  │ int kvstore_open(path, ppKV, journalMode) {              │
-  │   KVStoreConfig cfg;                                     │
+  │ int keyvaluestore_open(path, ppKV, journalMode) {              │
+  │   KeyValueStoreConfig cfg;                                     │
   │   memset(&cfg, 0, sizeof(cfg));                          │
   │   cfg.journalMode = journalMode;                         │
-  │   return kvstore_open_v2(path, ppKV, &cfg);              │
+  │   return keyvaluestore_open_v2(path, ppKV, &cfg);              │
   │ }                                                        │
   └──────────────────────────────────────────────────────────┘
   All other fields default: syncLevel=NORMAL, cacheSize=2000,
@@ -385,13 +385,13 @@ wrapper that delegates to `kvstore_open_v2`.
 
 ---
 
-## 4. kvstore_close
+## 4. keyvaluestore_close
 
 Closes a key-value store and frees all resources. Sets `closing=1`
 under the mutex so any racing API call returns early safely.
 
 ```
-  kvstore_close(kv)
+  keyvaluestore_close(kv)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── pKV->closing = 1          ← racing threads see this and bail
@@ -434,14 +434,14 @@ under the mutex so any racing API call returns early safely.
 
 ---
 
-## 5. kvstore_begin
+## 5. keyvaluestore_begin
 
 Begins a read or write transaction. The logic is more nuanced than a
 simple `BeginTrans` call because of the **persistent read transaction**
-that `kvstore_open` holds:
+that `keyvaluestore_open` holds:
 
 ```
-  kvstore_begin(kv, wrflag)
+  keyvaluestore_begin(kv, wrflag)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
@@ -483,7 +483,7 @@ that `kvstore_open` holds:
 
   Transaction state diagram:
 
-      kvstore_open()
+      keyvaluestore_open()
             │
             ▼
        inTrans = 1  ──────── get/exists ──────────► inTrans = 1
@@ -505,13 +505,13 @@ that `kvstore_open` holds:
 
 ---
 
-## 6. kvstore_commit
+## 6. keyvaluestore_commit
 
 Commits the current transaction, flushing changes to disk. After commit,
 immediately restores the persistent read transaction.
 
 ```
-  kvstore_commit(kv)
+  keyvaluestore_commit(kv)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
@@ -571,13 +571,13 @@ immediately restores the persistent read transaction.
 
 ---
 
-## 7. kvstore_rollback
+## 7. keyvaluestore_rollback
 
 Rolls back the current transaction, discarding all uncommitted changes.
 Restores the persistent read transaction afterward.
 
 ```
-  kvstore_rollback(kv)
+  keyvaluestore_rollback(kv)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
@@ -605,14 +605,14 @@ Restores the persistent read transaction afterward.
 
 ---
 
-## 8. kvstore_put
+## 8. keyvaluestore_put
 
 Inserts or updates a key-value pair (upsert semantics).
 
 ```
-  kvstore_put(kv, "user:1", 6, "Alice", 5)
+  keyvaluestore_put(kv, "user:1", 6, "Alice", 5)
           │
-          │  delegates to kvstore_cf_put_internal(pDefaultCF, ...)
+          │  delegates to keyvaluestore_cf_put_internal(pDefaultCF, ...)
           │
           ├── sqlite3_mutex_enter(pCF->pMutex)    ← CF lock first
           ├── sqlite3_mutex_enter(pKV->pMutex)    ← then store lock
@@ -688,16 +688,16 @@ Inserts or updates a key-value pair (upsert semantics).
 
 ---
 
-## 9. kvstore_get
+## 9. keyvaluestore_get
 
 Retrieves a value by key. Uses the **cached read cursor** (`pReadCur`) —
 no cursor malloc/free per call. The persistent read transaction normally
 makes `BeginTrans`/`Commit` a no-op as well.
 
 ```
-  kvstore_get(kv, "user:1", 6, &val, &nVal)
+  keyvaluestore_get(kv, "user:1", 6, &val, &nVal)
           │
-          │  delegates to kvstore_cf_get_internal(pDefaultCF, ...)
+          │  delegates to keyvaluestore_cf_get_internal(pDefaultCF, ...)
           │
           ├── sqlite3_mutex_enter(pCF->pMutex)
           ├── sqlite3_mutex_enter(pKV->pMutex)
@@ -738,7 +738,7 @@ makes `BeginTrans`/`Commit` a no-op as well.
           │     │
           │     └── found = (res == 0)
           │
-          ├── [NOT FOUND] → return KVSTORE_NOTFOUND
+          ├── [NOT FOUND] → return KEYVALUESTORE_NOTFOUND
           │
           ├── [FOUND] Read value from cursor
           │     ┌───────────────────────────────────────────────┐
@@ -782,15 +782,15 @@ makes `BeginTrans`/`Commit` a no-op as well.
 
 ---
 
-## 10. kvstore_delete
+## 10. keyvaluestore_delete
 
-Deletes a key-value pair. Returns `KVSTORE_NOTFOUND` if the key does
+Deletes a key-value pair. Returns `KEYVALUESTORE_NOTFOUND` if the key does
 not exist.
 
 ```
-  kvstore_delete(kv, "user:1", 6)
+  keyvaluestore_delete(kv, "user:1", 6)
           │
-          │  delegates to kvstore_cf_delete_internal(pDefaultCF, ...)
+          │  delegates to keyvaluestore_cf_delete_internal(pDefaultCF, ...)
           │
           ├── sqlite3_mutex_enter(pCF->pMutex)
           ├── sqlite3_mutex_enter(pKV->pMutex)
@@ -806,7 +806,7 @@ not exist.
           ├── Seek to key
           │     kvstoreSeekKey(pCur, pKeyInfo, "user:1", 6, &found)
           │
-          ├── [NOT FOUND] → rollback autoTrans, return KVSTORE_NOTFOUND
+          ├── [NOT FOUND] → rollback autoTrans, return KEYVALUESTORE_NOTFOUND
           │
           ├── [FOUND] Delete cell
           │     sqlite3BtreeDelete(pCur, 0)
@@ -835,15 +835,15 @@ not exist.
 
 ---
 
-## 11. kvstore_exists
+## 11. keyvaluestore_exists
 
 Checks if a key exists without reading or copying the value.
 Cheapest point lookup — only B-tree traversal, no payload read.
 
 ```
-  kvstore_exists(kv, "user:1", 6, &exists)
+  keyvaluestore_exists(kv, "user:1", 6, &exists)
           │
-          │  delegates to kvstore_cf_exists_internal(pDefaultCF, ...)
+          │  delegates to keyvaluestore_cf_exists_internal(pDefaultCF, ...)
           │
           ├── sqlite3_mutex_enter(pCF->pMutex)
           ├── sqlite3_mutex_enter(pKV->pMutex)
@@ -869,12 +869,12 @@ Cheapest point lookup — only B-tree traversal, no payload read.
 
 ---
 
-## 12. kvstore_cf_create
+## 12. keyvaluestore_cf_create
 
 Creates a new named column family (a separate BLOBKEY B-tree table).
 
 ```
-  kvstore_cf_create(kv, "logs", &cf)
+  keyvaluestore_cf_create(kv, "logs", &cf)
           │
           ├── Validate name: non-null, 1..255 chars, not "default"
           │
@@ -919,9 +919,9 @@ Creates a new named column family (a separate BLOBKEY B-tree table).
           │     BtreeCommit(pBt), inTrans=0
           │     Restore persistent read: BtreeBeginTrans(0) → inTrans=1
           │
-          ├── Allocate KVColumnFamily
+          ├── Allocate KeyValueColumnFamily
           │     ┌───────────────────────────────────────┐
-          │     │ KVColumnFamily {                       │
+          │     │ KeyValueColumnFamily {                       │
           │     │   pKV      = kv                        │
           │     │   zName    = "logs"                    │
           │     │   iTable   = 5    (new root page)      │
@@ -932,19 +932,19 @@ Creates a new named column family (a separate BLOBKEY B-tree table).
           │     └───────────────────────────────────────┘
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK, *ppCF = cf
+              return KEYVALUESTORE_OK, *ppCF = cf
 ```
 
 ---
 
-## 13. kvstore_cf_open
+## 13. keyvaluestore_cf_open
 
 Opens an existing column family by name.
 
 ```
-  kvstore_cf_open(kv, "logs", &cf)
+  keyvaluestore_cf_open(kv, "logs", &cf)
           │
-          ├── If name == "default" → kvstore_cf_get_default()
+          ├── If name == "default" → keyvaluestore_cf_get_default()
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
@@ -961,15 +961,15 @@ Opens an existing column family by name.
           │     └── Linear probe if hash collision
           │         Compare stored name bytes at each slot
           │
-          ├── [NOT FOUND] → return KVSTORE_NOTFOUND
+          ├── [NOT FOUND] → return KEYVALUESTORE_NOTFOUND
           │
           ├── Read table root from metadata payload
           │     BtreePayload(pCur, 4+nameLen, 4, rootBytes)
           │     iTable = decode_BE(rootBytes)
           │
-          ├── Allocate KVColumnFamily
+          ├── Allocate KeyValueColumnFamily
           │     ┌───────────────────────────────────────┐
-          │     │ KVColumnFamily {                       │
+          │     │ KeyValueColumnFamily {                       │
           │     │   iTable   = iTable                   │
           │     │   zName    = "logs"                   │
           │     │   refCount = 1                        │
@@ -979,17 +979,17 @@ Opens an existing column family by name.
           │     └───────────────────────────────────────┘
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK, *ppCF = cf
+              return KEYVALUESTORE_OK, *ppCF = cf
 ```
 
 ---
 
-## 14. kvstore_cf_drop
+## 14. keyvaluestore_cf_drop
 
 Drops a column family, deleting all its data and metadata.
 
 ```
-  kvstore_cf_drop(kv, "logs")
+  keyvaluestore_cf_drop(kv, "logs")
           │
           ├── Cannot drop "default" → error
           │
@@ -1024,17 +1024,17 @@ Drops a column family, deleting all its data and metadata.
           │     Restore persistent read: BtreeBeginTrans(0) → inTrans=1
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK
+              return KEYVALUESTORE_OK
 ```
 
 ---
 
-## 15. kvstore_cf_list
+## 15. keyvaluestore_cf_list
 
 Lists all column families in the database.
 
 ```
-  kvstore_cf_list(kv, &names, &count)
+  keyvaluestore_cf_list(kv, &names, &count)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
@@ -1057,26 +1057,26 @@ Lists all column families in the database.
           │   *pnCount  = N
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK
+              return KEYVALUESTORE_OK
 ```
 
 ---
 
-## 16. kvstore_iterator_create
+## 16. keyvaluestore_iterator_create
 
 Creates an iterator for traversing all key-value pairs.
 
 ```
-  kvstore_iterator_create(kv, &iter)
+  keyvaluestore_iterator_create(kv, &iter)
           │
-          │  delegates to kvstore_cf_iterator_create(pDefaultCF, ...)
+          │  delegates to keyvaluestore_cf_iterator_create(pDefaultCF, ...)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
           │
-          ├── Allocate KVIterator
+          ├── Allocate KeyValueIterator
           │     ┌──────────────────────────────────────────┐
-          │     │ KVIterator {                              │
+          │     │ KeyValueIterator {                              │
           │     │   pCF       = defaultCF                  │
           │     │   eof       = 1   (not positioned yet)   │
           │     │   isValid   = 1                          │
@@ -1105,20 +1105,20 @@ Creates an iterator for traversing all key-value pairs.
           │
           ├── pKV->stats.nIterations++
           ├── sqlite3_mutex_leave(pKV->pMutex)
-          └── return KVSTORE_OK, *ppIter = iter
+          └── return KEYVALUESTORE_OK, *ppIter = iter
 
   Note: Iterator has its OWN cursor (not pCF->pReadCur).
-  Call kvstore_iterator_first() to move to the first entry.
+  Call keyvaluestore_iterator_first() to move to the first entry.
 ```
 
 ---
 
-## 17. kvstore_iterator_first / next / eof
+## 17. keyvaluestore_iterator_first / next / eof
 
 Positions and advances the iterator through key-value pairs.
 
 ```
-  kvstore_iterator_first(iter)
+  keyvaluestore_iterator_first(iter)
           │
           ├── [No prefix filter]
           │     sqlite3BtreeFirst(pCur, &res)
@@ -1136,7 +1136,7 @@ Positions and advances the iterator through key-value pairs.
                 iter->eof = !match
 
 
-  kvstore_iterator_next(iter)
+  keyvaluestore_iterator_next(iter)
           │
           ├── if iter->eof → return OK (no-op)
           │
@@ -1156,20 +1156,20 @@ Positions and advances the iterator through key-value pairs.
                   key past prefix?              → iter->eof = 1
 
 
-  kvstore_iterator_eof(iter)
+  keyvaluestore_iterator_eof(iter)
           │
           └── return iter->eof   (1 = past last entry, 0 = has data)
 ```
 
 ---
 
-## 18. kvstore_iterator_key / value
+## 18. keyvaluestore_iterator_key / value
 
 Reads the current key or value from the iterator's cursor position.
 Buffers are reused across calls (grown with realloc if needed).
 
 ```
-  kvstore_iterator_key(iter, &key, &nKey)
+  keyvaluestore_iterator_key(iter, &key, &nKey)
           │
           ├── payloadSz = sqlite3BtreePayloadSize(pCur)
           │
@@ -1192,7 +1192,7 @@ Buffers are reused across calls (grown with realloc if needed).
           └── *pnKey = keyLen
 
 
-  kvstore_iterator_value(iter, &val, &nVal)
+  keyvaluestore_iterator_value(iter, &val, &nVal)
           │
           ├── BtreePayload(pCur, 0, 4, hdr) → keyLen
           │     valLen = payloadSz - 4 - keyLen
@@ -1212,13 +1212,13 @@ Buffers are reused across calls (grown with realloc if needed).
 
 ---
 
-## 19. kvstore_iterator_close
+## 19. keyvaluestore_iterator_close
 
 Closes an iterator and frees all associated resources. Handles the
 persistent read transaction correctly based on `ownsTrans`.
 
 ```
-  kvstore_iterator_close(iter)
+  keyvaluestore_iterator_close(iter)
           │
           ├── iter->isValid = 0
           │
@@ -1245,7 +1245,7 @@ persistent read transaction correctly based on `ownsTrans`.
           │     └──────────────────────────────────────────────┘
           │
           ├── Release CF reference
-          │     kvstore_cf_close(pCF)   → refCount--
+          │     keyvaluestore_cf_close(pCF)   → refCount--
           │
           ├── Free buffers
           │     sqlite3_free(pKeyBuf)
@@ -1257,15 +1257,15 @@ persistent read transaction correctly based on `ownsTrans`.
 
 ---
 
-## 20. kvstore_prefix_iterator_create
+## 20. keyvaluestore_prefix_iterator_create
 
 Creates an iterator that only returns keys starting with a given prefix.
 Uses a direct B-tree seek to the first matching key (O(log n), not O(n)).
 
 ```
-  kvstore_prefix_iterator_create(kv, "user:", 5, &iter)
+  keyvaluestore_prefix_iterator_create(kv, "user:", 5, &iter)
           │
-          ├── Create normal iterator via kvstore_cf_iterator_create()
+          ├── Create normal iterator via keyvaluestore_cf_iterator_create()
           │
           ├── Store prefix copy in iterator
           │     pIter->pPrefix = sqlite3_malloc(5)
@@ -1273,7 +1273,7 @@ Uses a direct B-tree seek to the first matching key (O(log n), not O(n)).
           │     pIter->nPrefix = 5
           │
           ├── Position at first matching key
-          │     kvstore_iterator_first(iter)
+          │     keyvaluestore_iterator_first(iter)
           │     │
           │     ├── Build UnpackedRecord on STACK for prefix
           │     │     UnpackedRecord idxKey;  ← stack
@@ -1301,7 +1301,7 @@ Uses a direct B-tree seek to the first matching key (O(log n), not O(n)).
 
   Subsequent next() calls:
   ┌────────────────────────────────────────────────────────────┐
-  │ kvstore_iterator_next(iter)                                │
+  │ keyvaluestore_iterator_next(iter)                                │
   │   sqlite3BtreeNext(pCur)                                  │
   │   kvstoreIterCheckPrefix(iter)                            │
   │     key = "user:2" → starts with "user:" → continue      │
@@ -1316,13 +1316,13 @@ Uses a direct B-tree seek to the first matching key (O(log n), not O(n)).
 
 ---
 
-## 21. kvstore_incremental_vacuum
+## 21. keyvaluestore_incremental_vacuum
 
 Reclaims unused pages from the freelist and shrinks the database file.
 Databases always open with incremental auto-vacuum enabled.
 
 ```
-  kvstore_incremental_vacuum(kv, nPage)
+  keyvaluestore_incremental_vacuum(kv, nPage)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing or isCorrupted → return error
@@ -1368,14 +1368,14 @@ Databases always open with incremental auto-vacuum enabled.
           │     Restore persistent read: BtreeBeginTrans(0) → inTrans=1
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK
+              return KEYVALUESTORE_OK
 
   File size timeline:
   ┌────────────────────────────────────────────────────────────┐
   │  insert 2000 records  → file ~500 KB                       │
   │  delete 1800 records  → file still ~500 KB                 │
   │                         (freed pages sit on freelist)      │
-  │  kvstore_incremental_vacuum(kv, 0)                         │
+  │  keyvaluestore_incremental_vacuum(kv, 0)                         │
   │                       → file shrinks to ~50 KB             │
   │                                                            │
   │  Without vacuum: freed pages are reused for future inserts │
@@ -1385,12 +1385,12 @@ Databases always open with incremental auto-vacuum enabled.
 
 ---
 
-## 22. kvstore_integrity_check
+## 22. keyvaluestore_integrity_check
 
 Performs a deep integrity check on the entire database.
 
 ```
-  kvstore_integrity_check(kv, &errMsg)
+  keyvaluestore_integrity_check(kv, &errMsg)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing → return error
@@ -1422,23 +1422,23 @@ Performs a deep integrity check on the entire database.
           ├── [nErr > 0]
           │     pKV->isCorrupted = 1
           │     *pzErrMsg = zErr   (caller must free with sqliteFree)
-          │     return KVSTORE_CORRUPT
+          │     return KEYVALUESTORE_CORRUPT
           │
           ├── [nErr == 0]
-          │     return KVSTORE_OK
+          │     return KEYVALUESTORE_OK
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
 ```
 
 ---
 
-## 23. kvstore_sync
+## 23. keyvaluestore_sync
 
 Synchronizes the database to disk by committing any active write
 transaction. After sync there is no active write transaction.
 
 ```
-  kvstore_sync(kv)
+  keyvaluestore_sync(kv)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── if closing or isCorrupted → return error
@@ -1453,17 +1453,17 @@ transaction. After sync there is no active write transaction.
           ├── if inTrans <= 1: no-op (reads are already consistent)
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK
+              return KEYVALUESTORE_OK
 ```
 
 ---
 
-## 24. kvstore_stats
+## 24. keyvaluestore_stats
 
 Returns a snapshot of operation counters. Thread-safe copy under mutex.
 
 ```
-  kvstore_stats(kv, &stats)
+  keyvaluestore_stats(kv, &stats)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           │
@@ -1474,18 +1474,18 @@ Returns a snapshot of operation counters. Thread-safe copy under mutex.
           │   stats.nErrors     = pKV->stats.nErrors
           │
           └── sqlite3_mutex_leave(pKV->pMutex)
-              return KVSTORE_OK
+              return KEYVALUESTORE_OK
 ```
 
 ---
 
-## 25. kvstore_errmsg
+## 25. keyvaluestore_errmsg
 
-Returns the last error message string. String is owned by KVStore —
+Returns the last error message string. String is owned by KeyValueStore —
 do NOT free the returned pointer.
 
 ```
-  kvstore_errmsg(kv)
+  keyvaluestore_errmsg(kv)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           ├── return pKV->zErrMsg ? pKV->zErrMsg : "no error"
@@ -1530,7 +1530,7 @@ do NOT free the returned pointer.
   Shutdown safety (closing flag):
 
   ┌──────────────────────────────────────────────────────────────┐
-  │ kvstore_close():                                             │
+  │ keyvaluestore_close():                                             │
   │   lock(pKV->pMutex)                                         │
   │   pKV->closing = 1           ← all API calls see this       │
   │   ... free resources ...                                     │
@@ -1538,7 +1538,7 @@ do NOT free the returned pointer.
   │                                                              │
   │ Every public API:                                            │
   │   lock(pKV->pMutex)                                         │
-  │   if (pKV->closing) { unlock; return KVSTORE_ERROR; }       │
+  │   if (pKV->closing) { unlock; return KEYVALUESTORE_ERROR; }       │
   │                                                              │
   │ Guarantees: no thread can use the store after close starts.  │
   │ No use-after-free possible.                                  │
@@ -1549,41 +1549,41 @@ do NOT free the returned pointer.
   ┌──────────────────────────────────────────────────────────────┐
   │ Allows the same thread to re-acquire its own lock.           │
   │                                                              │
-  │ Example: kvstore_iterator_close()                            │
-  │   → calls kvstore_cf_close()                                 │
+  │ Example: keyvaluestore_iterator_close()                            │
+  │   → calls keyvaluestore_cf_close()                                 │
   │       → may call sqlite3_mutex_enter(pKV->pMutex)           │
   │         while pKV->pMutex is already held by the caller.     │
   │         Without recursive, this would deadlock.              │
   └──────────────────────────────────────────────────────────────┘
 ```
 
-### Mutex Migration: kvstore_mutex → sqlite3_mutex
+### Mutex Migration: keyvaluestore_mutex → sqlite3_mutex
 
-The original implementation had a custom `kvstore_mutex` abstraction
-backed by `kvstore_mutex.c`. That file has been **deleted**. All locking
+The original implementation had a custom `keyvaluestore_mutex` abstraction
+backed by `keyvaluestore_mutex.c`. That file has been **deleted**. All locking
 now uses SQLite's native `sqlite3_mutex` API directly.
 
 ```
   BEFORE (removed):                   AFTER (current):
   ─────────────────                   ────────────────
-  kvstore_mutex.c  ← deleted          (no separate file)
-  kvstore_mutex.h  ← deleted          (no separate header)
+  keyvaluestore_mutex.c  ← deleted          (no separate file)
+  keyvaluestore_mutex.h  ← deleted          (no separate header)
 
-  struct KVStore {                     struct KVStore {
-    kvstore_mutex *pMutex;               sqlite3_mutex *pMutex;
+  struct KeyValueStore {                     struct KeyValueStore {
+    keyvaluestore_mutex *pMutex;               sqlite3_mutex *pMutex;
   };                                   };
 
-  struct KVColumnFamily {              struct KVColumnFamily {
-    kvstore_mutex *pMutex;               sqlite3_mutex *pMutex;
+  struct KeyValueColumnFamily {              struct KeyValueColumnFamily {
+    keyvaluestore_mutex *pMutex;               sqlite3_mutex *pMutex;
   };                                   };
 
-  kvstore_mutex_alloc()                sqlite3_mutex_alloc(
+  keyvaluestore_mutex_alloc()                sqlite3_mutex_alloc(
     pthread_mutex_init(&m, NULL)         SQLITE_MUTEX_RECURSIVE)
     // default mutex — NOT recursive    // recursive by type flag
 
-  kvstore_mutex_enter(m)               sqlite3_mutex_enter(m)
-  kvstore_mutex_leave(m)               sqlite3_mutex_leave(m)
-  kvstore_mutex_free(m)                sqlite3_mutex_free(m)
+  keyvaluestore_mutex_enter(m)               sqlite3_mutex_enter(m)
+  keyvaluestore_mutex_leave(m)               sqlite3_mutex_leave(m)
+  keyvaluestore_mutex_free(m)                sqlite3_mutex_free(m)
 ```
 
 **Why the change?**
@@ -1608,7 +1608,7 @@ now uses SQLite's native `sqlite3_mutex` API directly.
   │   closing after acquiring the mutex and return early.        │
   ├──────────────────────────────────────────────────────────────┤
   │ Problem 3: Code duplication                                  │
-  │   kvstore_mutex.c reimplemented what SQLite already provides │
+  │   keyvaluestore_mutex.c reimplemented what SQLite already provides │
   │   (platform-aware, well-tested mutex primitives).            │
   │                                                              │
   │   FIXED: use sqlite3_mutex_alloc/enter/leave/free directly.  │
@@ -1619,13 +1619,13 @@ now uses SQLite's native `sqlite3_mutex` API directly.
 **Allocation site:**
 
 ```
-  kvstore_open_v2():
+  keyvaluestore_open_v2():
     pKV->pMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
 
-  kvstore_cf_create() / kvstore_cf_open():
+  keyvaluestore_cf_create() / keyvaluestore_cf_open():
     pCF->pMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
 
-  kvstore_close():
+  keyvaluestore_close():
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_free(pKV->pMutex);   ← freed LAST, after all
                                           other resources are gone
@@ -1637,14 +1637,14 @@ now uses SQLite's native `sqlite3_mutex` API directly.
 
 ### Persistent Read Transaction
 
-`kvstore_open` ends by opening a read transaction that stays open for
+`keyvaluestore_open` ends by opening a read transaction that stays open for
 the lifetime of the connection (`inTrans=1`). This means every
-`kvstore_get` and `kvstore_exists` — without an explicit `kvstore_begin`
+`keyvaluestore_get` and `keyvaluestore_exists` — without an explicit `keyvaluestore_begin`
 — pays zero `BeginTrans`/`Commit` overhead.
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
-  │ KVStore connection lifetime                                  │
+  │ KeyValueStore connection lifetime                                  │
   │                                                              │
   │  open()          ──► BeginTrans(read)  ──► inTrans = 1      │
   │                                                              │
@@ -1673,13 +1673,13 @@ the lifetime of the connection (`inTrans=1`). This means every
 
 ### Cached Read Cursor per CF
 
-Each `KVColumnFamily` has a `pReadCur` — a `BtCursor*` that stays open
+Each `KeyValueColumnFamily` has a `pReadCur` — a `BtCursor*` that stays open
 across all `get` and `exists` calls on that CF. It is opened lazily on
 the first call and reused on every subsequent call.
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
-  │ KVColumnFamily                                               │
+  │ KeyValueColumnFamily                                               │
   │   iTable   = 5                                               │
   │   pReadCur ──────────────────────────────────────────────►  │
   │             BtCursor (open, held permanently)                │
@@ -1707,11 +1707,11 @@ the first call and reused on every subsequent call.
 ### Auto-Transaction for Write Paths
 
 Write operations (put, delete, cf_create, cf_drop) that have no
-explicit `kvstore_begin` start their own transaction and restore the
+explicit `keyvaluestore_begin` start their own transaction and restore the
 persistent read afterward:
 
 ```
-  kvstore_put / delete / cf_create / cf_drop
+  keyvaluestore_put / delete / cf_create / cf_drop
           │
           ├── [inTrans == 2]  write already active → no autoTrans
           │
@@ -1742,20 +1742,20 @@ persistent read afterward:
                  set it up again)
 
   Benefit: single operations need no explicit begin/commit:
-    kvstore_put(kv, "k", 1, "v", 1)
+    keyvaluestore_put(kv, "k", 1, "v", 1)
     // internally: commit_read → begin_write → insert → commit
     //             → [auto-ckpt if walSizeLimit hit] → begin_read
 
   Batched operations use explicit transaction (one commit for all):
-    kvstore_begin(kv, 1)                // commit_read → begin_write
-    kvstore_put(kv, "k1", 2, "v1", 2)  // no autoTrans
-    kvstore_put(kv, "k2", 2, "v2", 2)  // no autoTrans
-    kvstore_commit(kv)                  // commit → begin_read
+    keyvaluestore_begin(kv, 1)                // commit_read → begin_write
+    keyvaluestore_put(kv, "k1", 2, "v1", 2)  // no autoTrans
+    keyvaluestore_put(kv, "k2", 2, "v2", 2)  // no autoTrans
+    keyvaluestore_commit(kv)                  // commit → begin_read
 ```
 
 ---
 
-## 28. kvstore_checkpoint + WAL Auto-Checkpoint
+## 28. keyvaluestore_checkpoint + WAL Auto-Checkpoint
 
 ### Background: Why the WAL grows unboundedly by default
 
@@ -1763,7 +1763,7 @@ SNKV opens the B-tree layer directly via `sqlite3BtreeOpen` and never calls
 `sqlite3Open`. SQLite's default 1000-frame auto-checkpoint hook is registered
 inside `sqlite3OpenTail` → `sqlite3_wal_hook`. Because `sqlite3Open` is never
 called, that hook is never installed. The WAL grows without bound until
-`kvstore_close()` triggers `sqlite3WalClose` on the last connection, which
+`keyvaluestore_close()` triggers `sqlite3WalClose` on the last connection, which
 performs a final checkpoint.
 
 ```
@@ -1773,7 +1773,7 @@ performs a final checkpoint.
   │  └── sqlite3OpenTail()        │          │   (no OpenTail, no wal hook)  │
   │        └── sqlite3_wal_hook() │          │                               │
   │              registers auto-  │          │  WAL grows freely until       │
-  │              checkpoint at    │          │  kvstore_close() calls        │
+  │              checkpoint at    │          │  keyvaluestore_close() calls        │
   │              1000 frames      │          │  sqlite3WalClose()            │
   └───────────────────────────────┘          └───────────────────────────────┘
 ```
@@ -1785,7 +1785,7 @@ The write lock is already released by `sqlite3BtreeCommit` at this point,
 so `sqlite3BtreeCheckpoint` can acquire it safely.
 
 Why commit counter (not WAL frame count)?
-- `Btree` is an opaque typedef in `kvstore.c` (only `btree.h` is included,
+- `Btree` is an opaque typedef in `keyvaluestore.c` (only `btree.h` is included,
   not `btreeInt.h`). Accessing `pKV->pBt->pBt->pPager` would be a compile
   error ("invalid use of incomplete typedef 'Btree'").
 - A commit counter is sufficient: `walCommits` cannot overflow because it
@@ -1824,7 +1824,7 @@ Why commit counter (not WAL frame count)?
   ...
 ```
 
-### kvstore_checkpoint() — public API
+### keyvaluestore_checkpoint() — public API
 
 Exposes manual checkpoint control. Callers can use any of the four SQLite
 checkpoint modes. An active write transaction causes an immediate `BUSY`
@@ -1832,15 +1832,15 @@ return; the persistent read transaction is silently released and restored
 around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
 
 ```
-  kvstore_checkpoint(pKV, mode, pnLog, pnCkpt)
+  keyvaluestore_checkpoint(pKV, mode, pnLog, pnCkpt)
           │
           ├── sqlite3_mutex_enter(pKV->pMutex)
           │
-          ├── if closing → return KVSTORE_ERROR
+          ├── if closing → return KEYVALUESTORE_ERROR
           │
           ├── if inTrans == 2  (write transaction active)
           │     kvstoreSetError("commit or rollback the write transaction first")
-          │     return KVSTORE_BUSY
+          │     return KEYVALUESTORE_BUSY
           │
           ├── zero-init output params
           │     if pnLog  → *pnLog  = 0
@@ -1874,7 +1874,7 @@ around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
           │     │   pnLog == 0      → WAL was truncated (TRUNCATE mode only)  │
           │     │                                                              │
           │     │ Non-WAL database (DELETE journal mode):                     │
-          │     │   returns KVSTORE_OK, pnLog=0, pnCkpt=0  (no-op)           │
+          │     │   returns KEYVALUESTORE_OK, pnLog=0, pnCkpt=0  (no-op)           │
           │     └──────────────────────────────────────────────────────────────┘
           │
           ├── Restore persistent read transaction
@@ -1885,7 +1885,7 @@ around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
           │     kvstoreSetError("checkpoint failed: error %d", rc)
           │
           ├── sqlite3_mutex_leave(pKV->pMutex)
-          └── return rc  (KVSTORE_OK | KVSTORE_BUSY | KVSTORE_ERROR)
+          └── return rc  (KEYVALUESTORE_OK | KEYVALUESTORE_BUSY | KEYVALUESTORE_ERROR)
 
   State diagram around checkpoint:
 
@@ -1896,15 +1896,15 @@ around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
 
   Write transaction guard:
 
-    kvstore_begin(kv, 1)  →  inTrans=2
-    kvstore_checkpoint(kv, PASSIVE, NULL, NULL)
-        → returns KVSTORE_BUSY immediately (write txn not committed)
-    kvstore_rollback(kv)  →  inTrans=1
-    kvstore_checkpoint(kv, PASSIVE, NULL, NULL)
+    keyvaluestore_begin(kv, 1)  →  inTrans=2
+    keyvaluestore_checkpoint(kv, PASSIVE, NULL, NULL)
+        → returns KEYVALUESTORE_BUSY immediately (write txn not committed)
+    keyvaluestore_rollback(kv)  →  inTrans=1
+    keyvaluestore_checkpoint(kv, PASSIVE, NULL, NULL)
         → succeeds: releases read, checkpoints, restores read
 ```
 
-### Choosing between walSizeLimit and kvstore_checkpoint
+### Choosing between walSizeLimit and keyvaluestore_checkpoint
 
 ```
   ┌──────────────────────┬──────────────────────────────────────────────────┐
@@ -1914,7 +1914,7 @@ around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
   │ (auto, PASSIVE)      │ a PASSIVE checkpoint automatically. No caller     │
   │                      │ involvement needed. Suitable for most workloads.  │
   ├──────────────────────┼──────────────────────────────────────────────────┤
-  │ kvstore_checkpoint() │ Explicit control: run at shutdown, after a large  │
+  │ keyvaluestore_checkpoint() │ Explicit control: run at shutdown, after a large  │
   │ (any mode)           │ batch, or to shrink the WAL (TRUNCATE mode).      │
   │                      │ Combine with walSizeLimit=0 for full manual       │
   │                      │ control of when checkpoints occur.                │
@@ -1927,41 +1927,41 @@ around the checkpoint operation (required by `sqlite3BtreeCheckpoint`).
 
 | kvstore function             | btree calls                                                                             |
 |------------------------------|-----------------------------------------------------------------------------------------|
-| `kvstore_open_v2`            | `BtreeOpen`, `SetPageSize`, `SetCacheSize`, `SetPagerFlags`, `SetAutoVacuum`, `SetVersion`, `GetMeta`, `CreateTable`, `UpdateMeta`, `BeginTrans(0)` |
-| `kvstore_open`               | delegates to `kvstore_open_v2` (sets `journalMode`; all other fields default) |
-| `kvstore_close`              | `BtreeRollback` (if txn active), `BtreeClose`                                          |
-| `kvstore_begin`              | `BtreeCommit` (if inTrans=1) + `BtreeBeginTrans(wrflag)`                               |
-| `kvstore_commit`             | `BtreeCommit` + `kvstoreAutoCheckpoint` (TRANS_NONE window) + `BtreeBeginTrans(0)`     |
-| `kvstore_rollback`           | `BtreeRollback` + `BtreeBeginTrans(0)` (restore persistent read)                       |
-| `kvstore_put`                | `BtreeCursor(write)`, `BtreeInsert`, `BtreeCloseCursor`                                |
-| `kvstore_get`                | `kvstoreGetReadCursor` (cached, no open/close), `BtreeIndexMoveto`, `BtreePayload` ×2  |
-| `kvstore_delete`             | `BtreeCursor(write)`, `BtreeIndexMoveto`, `BtreeDelete`, `BtreeCloseCursor`            |
-| `kvstore_exists`             | `kvstoreGetReadCursor` (cached, no open/close), `BtreeIndexMoveto`                     |
-| `kvstore_cf_create`          | `BtreeCreateTable(BLOBKEY)`, `BtreeInsert` (meta), `UpdateMeta`                        |
-| `kvstore_cf_open`            | `BtreeCursor` (meta), `BtreeTableMoveto`, `BtreePayload`                               |
-| `kvstore_cf_drop`            | `BtreeDropTable`, `BtreeDelete` (meta), `UpdateMeta`                                   |
-| `kvstore_cf_list`            | `BtreeCursor` (meta), `BtreeFirst`, `BtreeNext`, `BtreePayload`                        |
-| `kvstore_iterator_create`    | `BtreeCursor` (own cursor, not pReadCur)                                               |
-| `kvstore_iterator_first`     | `BtreeFirst` or `BtreeIndexMoveto` (prefix seek)                                       |
-| `kvstore_iterator_next`      | `BtreeNext`                                                                             |
-| `kvstore_iterator_key/value` | `BtreePayloadSize`, `BtreePayload`                                                     |
-| `kvstore_iterator_close`     | `BtreeCloseCursor`, `BtreeCommit` (only if ownsTrans)                                  |
-| `kvstore_incremental_vacuum` | `BtreeIncrVacuum` (loop)                                                               |
-| `kvstore_integrity_check`    | `BtreeIntegrityCheck`                                                                   |
-| `kvstore_sync`               | `BtreeCommit` + `BtreeBeginTrans(0)`                                                   |
-| `kvstore_checkpoint`         | `BtreeCommit` (release read) + `BtreeCheckpoint(mode)` + `BtreeBeginTrans(0)` (restore read) |
+| `keyvaluestore_open_v2`            | `BtreeOpen`, `SetPageSize`, `SetCacheSize`, `SetPagerFlags`, `SetAutoVacuum`, `SetVersion`, `GetMeta`, `CreateTable`, `UpdateMeta`, `BeginTrans(0)` |
+| `keyvaluestore_open`               | delegates to `keyvaluestore_open_v2` (sets `journalMode`; all other fields default) |
+| `keyvaluestore_close`              | `BtreeRollback` (if txn active), `BtreeClose`                                          |
+| `keyvaluestore_begin`              | `BtreeCommit` (if inTrans=1) + `BtreeBeginTrans(wrflag)`                               |
+| `keyvaluestore_commit`             | `BtreeCommit` + `kvstoreAutoCheckpoint` (TRANS_NONE window) + `BtreeBeginTrans(0)`     |
+| `keyvaluestore_rollback`           | `BtreeRollback` + `BtreeBeginTrans(0)` (restore persistent read)                       |
+| `keyvaluestore_put`                | `BtreeCursor(write)`, `BtreeInsert`, `BtreeCloseCursor`                                |
+| `keyvaluestore_get`                | `kvstoreGetReadCursor` (cached, no open/close), `BtreeIndexMoveto`, `BtreePayload` ×2  |
+| `keyvaluestore_delete`             | `BtreeCursor(write)`, `BtreeIndexMoveto`, `BtreeDelete`, `BtreeCloseCursor`            |
+| `keyvaluestore_exists`             | `kvstoreGetReadCursor` (cached, no open/close), `BtreeIndexMoveto`                     |
+| `keyvaluestore_cf_create`          | `BtreeCreateTable(BLOBKEY)`, `BtreeInsert` (meta), `UpdateMeta`                        |
+| `keyvaluestore_cf_open`            | `BtreeCursor` (meta), `BtreeTableMoveto`, `BtreePayload`                               |
+| `keyvaluestore_cf_drop`            | `BtreeDropTable`, `BtreeDelete` (meta), `UpdateMeta`                                   |
+| `keyvaluestore_cf_list`            | `BtreeCursor` (meta), `BtreeFirst`, `BtreeNext`, `BtreePayload`                        |
+| `keyvaluestore_iterator_create`    | `BtreeCursor` (own cursor, not pReadCur)                                               |
+| `keyvaluestore_iterator_first`     | `BtreeFirst` or `BtreeIndexMoveto` (prefix seek)                                       |
+| `keyvaluestore_iterator_next`      | `BtreeNext`                                                                             |
+| `keyvaluestore_iterator_key/value` | `BtreePayloadSize`, `BtreePayload`                                                     |
+| `keyvaluestore_iterator_close`     | `BtreeCloseCursor`, `BtreeCommit` (only if ownsTrans)                                  |
+| `keyvaluestore_incremental_vacuum` | `BtreeIncrVacuum` (loop)                                                               |
+| `keyvaluestore_integrity_check`    | `BtreeIntegrityCheck`                                                                   |
+| `keyvaluestore_sync`               | `BtreeCommit` + `BtreeBeginTrans(0)`                                                   |
+| `keyvaluestore_checkpoint`         | `BtreeCommit` (release read) + `BtreeCheckpoint(mode)` + `BtreeBeginTrans(0)` (restore read) |
 | `kvstoreAutoCheckpoint`      | `BtreeCheckpoint(PASSIVE)` — called in TRANS_NONE window after each committed write    |
 
 ---
 
 ## Full Stack Trace Example
 
-A complete `kvstore_put` showing all four layers:
+A complete `keyvaluestore_put` showing all four layers:
 
 ```
-  kvstore_put(kv, "hello", 5, "world", 5)
+  keyvaluestore_put(kv, "hello", 5, "world", 5)
   │
-  │ LAYER 4: kvstore.c
+  │ LAYER 4: keyvaluestore.c
   ├── lock CF mutex → lock KV mutex
   ├── if inTrans==1: BtreeCommit(read) → inTrans=0
   ├── BtreeBeginTrans(1,0)             → inTrans=2  (autoTrans)

@@ -8,7 +8,7 @@ reads alongside a single active writer, so readers always make progress.
 
 import threading
 import pytest
-from snkv import KVStore, JOURNAL_WAL
+from snkv import KeyValueStore, JOURNAL_WAL
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ def _expected_value(writer_id: int, key_idx: int) -> bytes:
 def _writer(db_path: str, writer_id: int, errors: list, lock: threading.Lock) -> None:
     """Write KEYS_PER_WRITER keys in auto-committed batches."""
     try:
-        with KVStore(db_path, journal_mode=JOURNAL_WAL, busy_timeout=15_000) as db:
+        with KeyValueStore(db_path, journal_mode=JOURNAL_WAL, busy_timeout=15_000) as db:
             for batch_start in range(0, KEYS_PER_WRITER, BATCH):
                 db.begin(write=True)
                 for i in range(batch_start, min(batch_start + BATCH, KEYS_PER_WRITER)):
@@ -49,7 +49,7 @@ def _writer(db_path: str, writer_id: int, errors: list, lock: threading.Lock) ->
 def _reader(db_path: str, reader_id: int, errors: list, lock: threading.Lock) -> None:
     """Scan all possible keys READER_ROUNDS times; flag any value corruption."""
     try:
-        with KVStore(db_path, journal_mode=JOURNAL_WAL, busy_timeout=15_000) as db:
+        with KeyValueStore(db_path, journal_mode=JOURNAL_WAL, busy_timeout=15_000) as db:
             for _ in range(READER_ROUNDS):
                 for wid in range(NUM_WRITERS):
                     for kid in range(KEYS_PER_WRITER):
@@ -74,7 +74,7 @@ def test_concurrent_write_read(tmp_path):
     """Writers + concurrent readers: no corruption, all keys land."""
     path = str(tmp_path / "conc.db")
     # pre-create the database so readers can open it immediately
-    with KVStore(path, journal_mode=JOURNAL_WAL):
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL):
         pass
 
     errors: list = []
@@ -93,7 +93,7 @@ def test_concurrent_write_read(tmp_path):
 
     assert not errors, "Thread errors:\n" + "\n".join(errors)
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         for wid in range(NUM_WRITERS):
             for kid in range(KEYS_PER_WRITER):
                 key = f"w{wid:02d}_{kid:06d}".encode()
@@ -104,7 +104,7 @@ def test_concurrent_write_read(tmp_path):
 def test_concurrent_writes_only(tmp_path):
     """Multiple writer connections: all writes land without data loss."""
     path = str(tmp_path / "writers_only.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL):
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL):
         pass
 
     errors: list = []
@@ -121,7 +121,7 @@ def test_concurrent_writes_only(tmp_path):
 
     assert not errors, "\n".join(errors)
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         total = sum(
             1 for wid in range(NUM_WRITERS)
             for kid in range(KEYS_PER_WRITER)
@@ -133,7 +133,7 @@ def test_concurrent_writes_only(tmp_path):
 def test_concurrent_integrity_after_writes(tmp_path):
     """integrity_check must pass after concurrent writes."""
     path = str(tmp_path / "integrity.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL):
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL):
         pass
 
     errors: list = []
@@ -150,5 +150,5 @@ def test_concurrent_integrity_after_writes(tmp_path):
 
     assert not errors, "\n".join(errors)
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.integrity_check()
