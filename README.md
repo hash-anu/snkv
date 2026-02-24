@@ -138,6 +138,8 @@ with KVStore("mydb.db") as db:
 Full documentation — installation, API reference, examples, and thread-safety notes — is in
 **[python/README.md](python/README.md)**.
 
+![SNKV Python API Demo](demo.gif)
+
 ---
 
 ### 10 GB Crash-Safety Stress Test
