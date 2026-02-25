@@ -7,6 +7,8 @@
 Idiomatic Python 3.8+ bindings for [SNKV](https://github.com/hash-anu/snkv) — a lightweight,
 ACID-compliant embedded key-value store built directly on SQLite's B-Tree engine.
 
+If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes a long way!
+
 ---
 
 ## Features
