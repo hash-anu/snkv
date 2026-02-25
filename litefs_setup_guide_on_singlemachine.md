@@ -14,7 +14,7 @@ This document contains all steps to set up SNKV with LiteFS using a single machi
 │  ┌──────────────┐              ┌──────────────┐                 │
 │  │ snkv_writer  │              │ snkv_reader  │                 │
 │  │              │              │              │                 │
-│  │ kvstore_put()│              │ kvstore_get()│                 │
+│  │ keyvaluestore_put()│              │ keyvaluestore_get()│                 │
 │  └──────┬───────┘              └───────▲──────┘                 │
 │         │                              │                        │
 │         ▼                              │                        │
@@ -199,23 +199,23 @@ lease:
 ## 5. SNKV Writer - 10 MB Test (`snkv_writer.c`)
 
 ```c
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 int main(void) {
-    KVStore *kv;
-    kvstore_open("./mnt1/snkv.db",
+    KeyValueStore *kv;
+    keyvaluestore_open("./mnt1/snkv.db",
                  &kv,
-                 KVSTORE_JOURNAL_WAL);
+                 KEYVALUESTORE_JOURNAL_WAL);
     
     // Create a 1 MB buffer with repeating pattern
     size_t chunk_size = 1024 * 1024; // 1 MB
     char *data = malloc(chunk_size);
     if (!data) {
         fprintf(stderr, "Failed to allocate memory\n");
-        kvstore_close(kv);
+        keyvaluestore_close(kv);
         return 1;
     }
     
@@ -230,14 +230,14 @@ int main(void) {
         char key[32];
         snprintf(key, sizeof(key), "chunk_%d", i);
         
-        kvstore_put(kv, key, strlen(key), data, chunk_size);
+        keyvaluestore_put(kv, key, strlen(key), data, chunk_size);
         printf("Wrote chunk %d (%zu bytes)\n", i, chunk_size);
     }
     
     printf("Total written: 10 MB\n");
     
     free(data);
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     return 0;
 }
 ```
@@ -245,19 +245,19 @@ int main(void) {
 ## 6. SNKV Reader - 10 MB Verification (`snkv_reader.c`)
 
 ```c
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 int main(void) {
-    KVStore *kv;
+    KeyValueStore *kv;
     void *val;
     int n;
     
-    kvstore_open("./mnt2/snkv.db",
+    keyvaluestore_open("./mnt2/snkv.db",
                  &kv,
-                 KVSTORE_JOURNAL_WAL);
+                 KEYVALUESTORE_JOURNAL_WAL);
     
     printf("Reading 10 MB of data...\n");
     size_t total_read = 0;
@@ -269,7 +269,7 @@ int main(void) {
         char key[32];
         snprintf(key, sizeof(key), "chunk_%d", i);
         
-        if (kvstore_get(kv, key, strlen(key), &val, &n) == 0) {
+        if (keyvaluestore_get(kv, key, strlen(key), &val, &n) == 0) {
             total_read += n;
             
             // Check size
@@ -321,7 +321,7 @@ int main(void) {
     printf("Data integrity: %s\n", all_valid ? "✓ PASS" : "✗ FAIL");
     printf("========================================\n");
     
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     return all_valid ? 0 : 1;
 }
 ```

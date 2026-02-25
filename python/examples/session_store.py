@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Session KVStore Example
+Session KeyValueStore Example
 Demonstrates: Real-world web session management with create/get/cleanup
 
 This example simulates how SNKV could back a web session store.
@@ -15,7 +15,7 @@ import json
 import os
 import time
 import uuid
-from snkv import KVStore, NotFoundError
+from snkv import KeyValueStore, NotFoundError
 
 DB_FILE = "session_store_example.db"
 
@@ -29,7 +29,7 @@ class SessionStore:
     """Minimal web session store backed by SNKV."""
 
     def __init__(self, db_path: str) -> None:
-        self._db = KVStore(db_path, wal_size_limit=100)
+        self._db = KeyValueStore(db_path, wal_size_limit=100)
         # Use a dedicated column family to isolate sessions
         try:
             self._cf = self._db.open_column_family("sessions")

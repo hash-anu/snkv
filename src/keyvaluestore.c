@@ -21,7 +21,7 @@
 **   hash as rowid (only used for column family name → root page mapping).
 */
 
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "pager.h"
 #include <string.h>
 #include <assert.h>
@@ -30,20 +30,20 @@
 /*
 ** Compile-time configuration
 */
-#ifndef KVSTORE_MAX_KEY_SIZE
-# define KVSTORE_MAX_KEY_SIZE   (64 * 1024)  /* 64KB max key size */
+#ifndef KEYVALUESTORE_MAX_KEY_SIZE
+# define KEYVALUESTORE_MAX_KEY_SIZE   (64 * 1024)  /* 64KB max key size */
 #endif
 
-#ifndef KVSTORE_MAX_VALUE_SIZE
-# define KVSTORE_MAX_VALUE_SIZE (10 * 1024 * 1024)  /* 10MB max value size */
+#ifndef KEYVALUESTORE_MAX_VALUE_SIZE
+# define KEYVALUESTORE_MAX_VALUE_SIZE (10 * 1024 * 1024)  /* 10MB max value size */
 #endif
 
-#ifndef KVSTORE_DEFAULT_CACHE_SIZE
-# define KVSTORE_DEFAULT_CACHE_SIZE 2000  /* 2000 pages default cache */
+#ifndef KEYVALUESTORE_DEFAULT_CACHE_SIZE
+# define KEYVALUESTORE_DEFAULT_CACHE_SIZE 2000  /* 2000 pages default cache */
 #endif
 
-#ifndef KVSTORE_MAX_CF_NAME
-# define KVSTORE_MAX_CF_NAME 255  /* Maximum column family name length */
+#ifndef KEYVALUESTORE_MAX_CF_NAME
+# define KEYVALUESTORE_MAX_CF_NAME 255  /* Maximum column family name length */
 #endif
 
 /* (collision probes removed — BLOBKEY storage uses direct key comparison) */
@@ -131,8 +131,8 @@ static void kvstoreFreeCursor(BtCursor *pCur){
 /*
 ** Column Family structure
 */
-struct KVColumnFamily {
-  KVStore *pKV;      /* Parent store */
+struct KeyValueColumnFamily {
+  KeyValueStore *pKV;      /* Parent store */
   char *zName;       /* Column family name */
   int iTable;        /* Root page of this CF's btree */
   int refCount;      /* Reference count */
@@ -141,9 +141,9 @@ struct KVColumnFamily {
 };
 
 /*
-** KVStore structure - represents an open key-value store
+** KeyValueStore structure - represents an open key-value store
 */
-struct KVStore {
+struct KeyValueStore {
   Btree *pBt;        /* Underlying btree handle */
   sqlite3 *db;       /* Database connection (required by btree) */
   KeyInfo *pKeyInfo; /* Shared KeyInfo for BLOBKEY cursor comparisons */
@@ -154,15 +154,15 @@ struct KVStore {
 
   /* Thread safety */
   sqlite3_mutex *pMutex;  /* Recursive mutex protecting store operations (SQLITE_MUTEX_RECURSIVE) */
-  int closing;            /* Set to 1 when kvstore_close() is in progress */
+  int closing;            /* Set to 1 when keyvaluestore_close() is in progress */
 
   /* WAL auto-checkpoint */
   int walSizeLimit;       /* Checkpoint every N commits (0 = disabled) */
   int walCommits;         /* Write commits since last auto-checkpoint */
 
   /* Column families */
-  KVColumnFamily *pDefaultCF;  /* Default column family */
-  KVColumnFamily **apCF;       /* Array of open column families */
+  KeyValueColumnFamily *pDefaultCF;  /* Default column family */
+  KeyValueColumnFamily **apCF;       /* Array of open column families */
   int nCF;                     /* Number of open column families */
   int nCFAlloc;                /* Allocated size of apCF array */
 
@@ -179,8 +179,8 @@ struct KVStore {
 /*
 ** Iterator structure for traversing the store
 */
-struct KVIterator {
-  KVColumnFamily *pCF;  /* Column family being iterated */
+struct KeyValueIterator {
+  KeyValueColumnFamily *pCF;  /* Column family being iterated */
   BtCursor *pCur;    /* Btree cursor */
   int eof;           /* End-of-file flag */
   int ownsTrans;     /* 1 if iterator started its own transaction */
@@ -199,7 +199,7 @@ struct KVIterator {
 ** CURSOR_REQUIRESSEEK when pages are modified, restoring it on next seek).
 ** Caller must hold both pCF->pMutex and pKV->pMutex.
 */
-static BtCursor *kvstoreGetReadCursor(KVColumnFamily *pCF){
+static BtCursor *kvstoreGetReadCursor(KeyValueColumnFamily *pCF){
   if( pCF->pReadCur ) return pCF->pReadCur;
   BtCursor *pCur = kvstoreAllocCursor();
   if( !pCur ) return NULL;
@@ -216,7 +216,7 @@ static BtCursor *kvstoreGetReadCursor(KVColumnFamily *pCF){
 /*
 ** Set error message (caller must hold mutex)
 */
-static void kvstoreSetError(KVStore *pKV, const char *zFormat, ...){
+static void kvstoreSetError(KeyValueStore *pKV, const char *zFormat, ...){
   va_list ap;
   if( pKV->zErrMsg ){
     sqlite3_free(pKV->zErrMsg);
@@ -233,7 +233,7 @@ static void kvstoreSetError(KVStore *pKV, const char *zFormat, ...){
 /*
 ** Get last error message
 */
-const char *kvstore_errmsg(KVStore *pKV){
+const char *keyvaluestore_errmsg(KeyValueStore *pKV){
   const char *zMsg;
 
   if( !pKV ){
@@ -255,7 +255,7 @@ const char *kvstore_errmsg(KVStore *pKV){
 ** Validate key and value sizes (caller must hold mutex)
 */
 static int kvstoreValidateKeyValue(
-  KVStore *pKV,
+  KeyValueStore *pKV,
   const void *pKey,
   int nKey,
   const void *pValue,
@@ -263,33 +263,33 @@ static int kvstoreValidateKeyValue(
 ){
   if( pKey == NULL || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key: null or zero length");
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
-  if( nKey > KVSTORE_MAX_KEY_SIZE ){
+  if( nKey > KEYVALUESTORE_MAX_KEY_SIZE ){
     kvstoreSetError(pKV, "key too large: %d bytes (max %d)",
-                    nKey, KVSTORE_MAX_KEY_SIZE);
-    return KVSTORE_ERROR;
+                    nKey, KEYVALUESTORE_MAX_KEY_SIZE);
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pValue == NULL && nValue != 0 ){
     kvstoreSetError(pKV, "invalid value: null pointer with non-zero length");
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
-  if( nValue > KVSTORE_MAX_VALUE_SIZE ){
+  if( nValue > KEYVALUESTORE_MAX_VALUE_SIZE ){
     kvstoreSetError(pKV, "value too large: %d bytes (max %d)",
-                    nValue, KVSTORE_MAX_VALUE_SIZE);
-    return KVSTORE_ERROR;
+                    nValue, KEYVALUESTORE_MAX_VALUE_SIZE);
+    return KEYVALUESTORE_ERROR;
   }
 
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Check if store is corrupted (caller must hold mutex)
 */
-static int kvstoreCheckCorruption(KVStore *pKV, int rc){
+static int kvstoreCheckCorruption(KeyValueStore *pKV, int rc){
   if( rc == SQLITE_CORRUPT || rc == SQLITE_NOTADB ){
     pKV->isCorrupted = 1;
     kvstoreSetError(pKV, "database corruption detected");
@@ -343,8 +343,8 @@ static int kvstoreSeekKey(
 ** The metadata table stores CF name → root page mappings using INTKEY
 ** with FNV-1a hash as rowid.
 ** ====================================================================== */
-#ifndef KVSTORE_MAX_COLLISION_PROBES
-# define KVSTORE_MAX_COLLISION_PROBES 64
+#ifndef KEYVALUESTORE_MAX_COLLISION_PROBES
+# define KEYVALUESTORE_MAX_COLLISION_PROBES 64
 #endif
 
 static i64 kvstoreMetaHashKey(const void *pKey, int nKey){
@@ -369,7 +369,7 @@ static int kvstoreMetaSeekKey(
   i64 baseHash = kvstoreMetaHashKey(pKey, nKey);
   int probe;
   *pFound = 0;
-  for(probe = 0; probe < KVSTORE_MAX_COLLISION_PROBES; probe++){
+  for(probe = 0; probe < KEYVALUESTORE_MAX_COLLISION_PROBES; probe++){
     i64 tryRowid = baseHash + probe;
     int res = 0;
     int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
@@ -406,7 +406,7 @@ static int kvstoreMetaFindSlot(
 ){
   i64 baseHash = kvstoreMetaHashKey(pKey, nKey);
   int probe;
-  for(probe = 0; probe < KVSTORE_MAX_COLLISION_PROBES; probe++){
+  for(probe = 0; probe < KEYVALUESTORE_MAX_COLLISION_PROBES; probe++){
     i64 tryRowid = baseHash + probe;
     int res = 0;
     int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
@@ -422,7 +422,7 @@ static int kvstoreMetaFindSlot(
 /*
 ** Initialize CF metadata table (caller must hold mutex)
 */
-static int initCFMetadataTable(KVStore *pKV){
+static int initCFMetadataTable(KeyValueStore *pKV){
   int rc;
   Pgno pgno;
 
@@ -458,9 +458,9 @@ static int initCFMetadataTable(KVStore *pKV){
 /*
 ** Create default column family (caller must hold mutex)
 */
-static int createDefaultCF(KVStore *pKV){
+static int createDefaultCF(KeyValueStore *pKV){
   int rc;
-  KVColumnFamily *pCF;
+  KeyValueColumnFamily *pCF;
   Pgno pgno;
 
   rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
@@ -484,8 +484,8 @@ static int createDefaultCF(KVStore *pKV){
   if( rc != SQLITE_OK ) return rc;
 
   /* Create CF structure */
-  pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
-  if( !pCF ) return KVSTORE_NOMEM;
+  pCF = (KeyValueColumnFamily*)sqlite3MallocZero(sizeof(KeyValueColumnFamily));
+  if( !pCF ) return KEYVALUESTORE_NOMEM;
 
   pCF->pKV = pKV;
   pCF->zName = sqliteStrDup(DEFAULT_CF_NAME);
@@ -497,20 +497,20 @@ static int createDefaultCF(KVStore *pKV){
   if( !pCF->pMutex ){
     sqlite3_free(pCF->zName);
     sqlite3_free(pCF);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   pKV->pDefaultCF = pCF;
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /* ======================================================================
-** Busy-handler callback for kvstore_open_v2(busyTimeout > 0).
+** Busy-handler callback for keyvaluestore_open_v2(busyTimeout > 0).
 **
 ** SQLite calls this every time a lock cannot be acquired.  We sleep 1 ms
 ** per call and give up once the total elapsed time exceeds busyTimeout.
 **
-** pArg — points to a KVBusyCtx embedded in the KVStore allocation.
+** pArg — points to a KVBusyCtx embedded in the KeyValueStore allocation.
 ** nBusy — number of previous busy calls for this operation.
 ** Returns 1 to retry, 0 to surface SQLITE_BUSY to the caller.
 ** ====================================================================== */
@@ -530,10 +530,10 @@ static int kvstoreBusyHandler(void *pArg, int nBusy){
 
 /* ======================================================================
 ** Shared teardown helper — releases all resources owned by a partially or
-** fully initialised KVStore.  Used by both kvstore_open_v2 error paths
-** and kvstore_close.
+** fully initialised KeyValueStore.  Used by both keyvaluestore_open_v2 error paths
+** and keyvaluestore_close.
 ** ====================================================================== */
-static void kvstoreTeardownNoLock(KVStore *pKV){
+static void kvstoreTeardownNoLock(KeyValueStore *pKV){
   int i;
   if( pKV->pDefaultCF ){
     if( pKV->pDefaultCF->pReadCur ) kvstoreFreeCursor(pKV->pDefaultCF->pReadCur);
@@ -567,7 +567,7 @@ static void kvstoreTeardownNoLock(KVStore *pKV){
 ** walSizeLimit threshold is reached. Called in the TRANS_NONE window
 ** (after sqlite3BtreeCommit, before the read transaction is restored).
 */
-static void kvstoreAutoCheckpoint(KVStore *pKV){
+static void kvstoreAutoCheckpoint(KeyValueStore *pKV){
   if( pKV->walSizeLimit > 0 ){
     pKV->walCommits++;
     if( pKV->walCommits >= pKV->walSizeLimit ){
@@ -580,26 +580,26 @@ static void kvstoreAutoCheckpoint(KVStore *pKV){
 /*
 ** Open a key-value store with full configuration control.
 */
-int kvstore_open_v2(
+int keyvaluestore_open_v2(
   const char *zFilename,
-  KVStore **ppKV,
-  const KVStoreConfig *pConfig
+  KeyValueStore **ppKV,
+  const KeyValueStoreConfig *pConfig
 ){
-  KVStore *pKV;
+  KeyValueStore *pKV;
   int rc;
 
   /* Resolve configuration — use defaults for any zero/unset field */
-  int journalMode  = pConfig ? pConfig->journalMode  : KVSTORE_JOURNAL_WAL;
-  int syncLevel    = pConfig ? pConfig->syncLevel    : KVSTORE_SYNC_NORMAL;
+  int journalMode  = pConfig ? pConfig->journalMode  : KEYVALUESTORE_JOURNAL_WAL;
+  int syncLevel    = pConfig ? pConfig->syncLevel    : KEYVALUESTORE_SYNC_NORMAL;
   int cacheSize    = pConfig ? pConfig->cacheSize    : 0;
   int pageSize     = pConfig ? pConfig->pageSize     : 0;
   int readOnly     = pConfig ? pConfig->readOnly     : 0;
   int busyTimeout  = pConfig ? pConfig->busyTimeout  : 0;
 
-  if( cacheSize <= 0 ) cacheSize = KVSTORE_DEFAULT_CACHE_SIZE;
+  if( cacheSize <= 0 ) cacheSize = KEYVALUESTORE_DEFAULT_CACHE_SIZE;
 
   if( ppKV == NULL ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
   *ppKV = NULL;
 
@@ -607,17 +607,17 @@ int kvstore_open_v2(
   rc = sqlite3_initialize();
   if( rc != SQLITE_OK ) return rc;
 
-  /* Allocate KVStore structure */
-  pKV = (KVStore*)sqlite3MallocZero(sizeof(KVStore));
+  /* Allocate KeyValueStore structure */
+  pKV = (KeyValueStore*)sqlite3MallocZero(sizeof(KeyValueStore));
   if( pKV == NULL ){
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   /* Create main mutex */
   pKV->pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
   if( !pKV->pMutex ){
     sqlite3_free(pKV);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   /* Create a minimal sqlite3 structure (required by btree) */
@@ -625,7 +625,7 @@ int kvstore_open_v2(
   if( pKV->db == NULL ){
     sqlite3_mutex_free(pKV->pMutex);
     sqlite3_free(pKV);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
   pKV->db->mutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
   pKV->db->aLimit[SQLITE_LIMIT_LENGTH] = SQLITE_MAX_LENGTH;
@@ -638,7 +638,7 @@ int kvstore_open_v2(
       sqlite3_free(pKV->db);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
-      return KVSTORE_NOMEM;
+      return KEYVALUESTORE_NOMEM;
     }
     ctx->timeoutMs = busyTimeout;
     ctx->pVfs      = sqlite3_vfs_find(0);
@@ -687,10 +687,10 @@ int kvstore_open_v2(
   sqlite3BtreeSetCacheSize(pKV->pBt, cacheSize);
 
   /* Set synchronous level via pager flags.
-  ** KVSTORE_SYNC_* maps to PAGER_SYNCHRONOUS_* with a +1 offset:
-  **   KVSTORE_SYNC_OFF    (0) → PAGER_SYNCHRONOUS_OFF    (0x01)
-  **   KVSTORE_SYNC_NORMAL (1) → PAGER_SYNCHRONOUS_NORMAL (0x02)
-  **   KVSTORE_SYNC_FULL   (2) → PAGER_SYNCHRONOUS_FULL   (0x03)
+  ** KEYVALUESTORE_SYNC_* maps to PAGER_SYNCHRONOUS_* with a +1 offset:
+  **   KEYVALUESTORE_SYNC_OFF    (0) → PAGER_SYNCHRONOUS_OFF    (0x01)
+  **   KEYVALUESTORE_SYNC_NORMAL (1) → PAGER_SYNCHRONOUS_NORMAL (0x02)
+  **   KEYVALUESTORE_SYNC_FULL   (2) → PAGER_SYNCHRONOUS_FULL   (0x03)
   ** PAGER_CACHESPILL allows dirty pages to spill under memory pressure. */
   {
     unsigned syncFlag = (unsigned)(syncLevel + 1) | PAGER_CACHESPILL;
@@ -715,7 +715,7 @@ int kvstore_open_v2(
     ** sqlite3BtreeSetVersion(2) writes the WAL marker into the header.
     ** sqlite3BtreeSetVersion(1) reverts to rollback-journal mode. */
     {
-      int ver = (journalMode == KVSTORE_JOURNAL_WAL) ? 2 : 1;
+      int ver = (journalMode == KEYVALUESTORE_JOURNAL_WAL) ? 2 : 1;
       rc = sqlite3BtreeSetVersion(pKV->pBt, ver);
       if( rc == SQLITE_OK ){
         rc = sqlite3BtreeCommit(pKV->pBt);  /* SetVersion leaves a txn open */
@@ -758,7 +758,7 @@ int kvstore_open_v2(
       kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
-      return KVSTORE_READONLY;
+      return KEYVALUESTORE_READONLY;
     }
     rc = createDefaultCF(pKV);
     if( rc != SQLITE_OK ){
@@ -776,12 +776,12 @@ int kvstore_open_v2(
     }
   }else{
     /* Existing database — open the default CF */
-    KVColumnFamily *pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
+    KeyValueColumnFamily *pCF = (KeyValueColumnFamily*)sqlite3MallocZero(sizeof(KeyValueColumnFamily));
     if( !pCF ){
       kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
-      return KVSTORE_NOMEM;
+      return KEYVALUESTORE_NOMEM;
     }
     pCF->pKV    = pKV;
     pCF->zName  = sqliteStrDup(DEFAULT_CF_NAME);
@@ -794,7 +794,7 @@ int kvstore_open_v2(
       kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
-      return KVSTORE_NOMEM;
+      return KEYVALUESTORE_NOMEM;
     }
     pKV->pDefaultCF = pCF;
     pKV->iMetaTable = (int)cfMetaRoot;
@@ -807,7 +807,7 @@ int kvstore_open_v2(
       kvstoreTeardownNoLock(pKV);
       sqlite3_mutex_free(pKV->pMutex);
       sqlite3_free(pKV);
-      return KVSTORE_NOMEM;
+      return KEYVALUESTORE_NOMEM;
     }
     pKI->nRef      = 1;
     pKI->enc       = SQLITE_UTF8;
@@ -831,33 +831,33 @@ int kvstore_open_v2(
   pKV->walSizeLimit = pConfig ? pConfig->walSizeLimit : 0;
 
   *ppKV = pKV;
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Open a key-value store database file (simplified interface).
-** Delegates to kvstore_open_v2 with journalMode set and all other
+** Delegates to keyvaluestore_open_v2 with journalMode set and all other
 ** fields at their defaults.
 */
-int kvstore_open(
+int keyvaluestore_open(
   const char *zFilename,
-  KVStore **ppKV,
+  KeyValueStore **ppKV,
   int journalMode
 ){
-  KVStoreConfig cfg;
+  KeyValueStoreConfig cfg;
   memset(&cfg, 0, sizeof(cfg));
   cfg.journalMode = journalMode;
-  return kvstore_open_v2(zFilename, ppKV, &cfg);
+  return keyvaluestore_open_v2(zFilename, ppKV, &cfg);
 }
 
 /*
 ** Close a key-value store.
 */
-int kvstore_close(KVStore *pKV){
+int keyvaluestore_close(KeyValueStore *pKV){
   int rc, i;
 
   if( pKV == NULL ){
-    return KVSTORE_OK;
+    return KEYVALUESTORE_OK;
   }
 
   /* Acquire mutex and signal closure so racing threads bail out cleanly */
@@ -928,37 +928,37 @@ int kvstore_close(KVStore *pKV){
 /*
 ** Begin a transaction.
 */
-int kvstore_begin(KVStore *pKV, int wrflag){
+int keyvaluestore_begin(KeyValueStore *pKV, int wrflag){
   int rc;
 
   if( pKV == NULL ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot begin transaction: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   if( pKV->inTrans == 2 ){
     /* Write transaction already active — reject */
     kvstoreSetError(pKV, "transaction already active");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->inTrans == 1 && !wrflag ){
     /* Persistent read is already open; just reuse it */
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_OK;
+    return KEYVALUESTORE_OK;
   }
 
   /* inTrans==1 && wrflag: SQLite forbids upgrading a read that holds the
@@ -985,24 +985,24 @@ int kvstore_begin(KVStore *pKV, int wrflag){
 /*
 ** Commit the current transaction.
 */
-int kvstore_commit(KVStore *pKV){
+int keyvaluestore_commit(KeyValueStore *pKV){
   int rc;
 
   if( pKV == NULL ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
     kvstoreSetError(pKV, "no active transaction to commit");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   rc = sqlite3BtreeCommit(pKV->pBt);
@@ -1026,23 +1026,23 @@ int kvstore_commit(KVStore *pKV){
 /*
 ** Rollback the current transaction.
 */
-int kvstore_rollback(KVStore *pKV){
+int keyvaluestore_rollback(KeyValueStore *pKV){
   int rc;
 
   if( pKV == NULL ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_OK; /* No transaction to rollback */
+    return KEYVALUESTORE_OK; /* No transaction to rollback */
   }
 
   rc = sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
@@ -1067,21 +1067,21 @@ int kvstore_rollback(KVStore *pKV){
 /*
 ** Run a WAL checkpoint on the database.
 */
-int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt){
+int keyvaluestore_checkpoint(KeyValueStore *pKV, int mode, int *pnLog, int *pnCkpt){
   int rc;
-  if( pKV == NULL ) return KVSTORE_ERROR;
+  if( pKV == NULL ) return KEYVALUESTORE_ERROR;
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->inTrans == 2 ){
     kvstoreSetError(pKV, "commit or rollback the write transaction first");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_BUSY;
+    return KEYVALUESTORE_BUSY;
   }
 
   if( pnLog  ) *pnLog  = 0;
@@ -1114,22 +1114,22 @@ int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt){
 }
 
 /* Forward declaration for CF operations */
-static int kvstore_cf_put_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_put_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey,
   const void *pValue, int nValue
 );
-static int kvstore_cf_get_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_get_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey,
   void **ppValue, int *pnValue
 );
-static int kvstore_cf_delete_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_delete_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey
 );
-static int kvstore_cf_exists_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_exists_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey,
   int *pExists
 );
@@ -1137,63 +1137,63 @@ static int kvstore_cf_exists_internal(
 /*
 ** Default CF operations (wrappers)
 */
-int kvstore_put(KVStore *pKV, const void *pKey, int nKey,
+int keyvaluestore_put(KeyValueStore *pKV, const void *pKey, int nKey,
                 const void *pValue, int nValue){
-  if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
-  return kvstore_cf_put_internal(pKV->pDefaultCF, pKey, nKey, pValue, nValue);
+  if( !pKV || !pKV->pDefaultCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_put_internal(pKV->pDefaultCF, pKey, nKey, pValue, nValue);
 }
 
-int kvstore_get(KVStore *pKV, const void *pKey, int nKey,
+int keyvaluestore_get(KeyValueStore *pKV, const void *pKey, int nKey,
                 void **ppValue, int *pnValue){
-  if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
-  return kvstore_cf_get_internal(pKV->pDefaultCF, pKey, nKey, ppValue, pnValue);
+  if( !pKV || !pKV->pDefaultCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_get_internal(pKV->pDefaultCF, pKey, nKey, ppValue, pnValue);
 }
 
-int kvstore_delete(KVStore *pKV, const void *pKey, int nKey){
-  if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
-  return kvstore_cf_delete_internal(pKV->pDefaultCF, pKey, nKey);
+int keyvaluestore_delete(KeyValueStore *pKV, const void *pKey, int nKey){
+  if( !pKV || !pKV->pDefaultCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_delete_internal(pKV->pDefaultCF, pKey, nKey);
 }
 
-int kvstore_exists(KVStore *pKV, const void *pKey, int nKey, int *pExists){
-  if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
-  return kvstore_cf_exists_internal(pKV->pDefaultCF, pKey, nKey, pExists);
+int keyvaluestore_exists(KeyValueStore *pKV, const void *pKey, int nKey, int *pExists){
+  if( !pKV || !pKV->pDefaultCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_exists_internal(pKV->pDefaultCF, pKey, nKey, pExists);
 }
 
 /*
 ** Get default column family
 */
-int kvstore_cf_get_default(KVStore *pKV, KVColumnFamily **ppCF){
+int keyvaluestore_cf_get_default(KeyValueStore *pKV, KeyValueColumnFamily **ppCF){
   if( !pKV || !ppCF ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->pDefaultCF ){
     kvstoreSetError(pKV, "default column family not initialized");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   pKV->pDefaultCF->refCount++;
   *ppCF = pKV->pDefaultCF;
 
   sqlite3_mutex_leave(pKV->pMutex);
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Create a new column family
 */
-int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
+int keyvaluestore_cf_create(KeyValueStore *pKV, const char *zName, KeyValueColumnFamily **ppCF){
   int rc;
   BtCursor *pCur = NULL;
-  KVColumnFamily *pCF = NULL;
+  KeyValueColumnFamily *pCF = NULL;
   int autoTrans = 0;
   Pgno pgno;
   u32 cfCount;
@@ -1202,29 +1202,29 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   if( !pKV || !zName || !ppCF ){
     if( pKV ) kvstoreSetError(pKV, "invalid parameters to cf_create");
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   *ppCF = NULL;
 
   nNameLen = strlen(zName);
-  if( nNameLen == 0 || nNameLen > KVSTORE_MAX_CF_NAME ){
+  if( nNameLen == 0 || nNameLen > KEYVALUESTORE_MAX_CF_NAME ){
     sqlite3_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "invalid column family name length");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Check if default CF */
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
-    return kvstore_cf_get_default(pKV, ppCF);
+    return keyvaluestore_cf_get_default(pKV, ppCF);
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Start write transaction (release persistent read first if active). */
@@ -1271,7 +1271,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstoreSetError(pKV, "column family already exists: %s", zName);
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Create new btree table for this CF (BLOBKEY) */
@@ -1369,17 +1369,17 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   }
 
   /* Create CF structure */
-  pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
+  pCF = (KeyValueColumnFamily*)sqlite3MallocZero(sizeof(KeyValueColumnFamily));
   if( !pCF ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   zNameCopy = sqliteStrDup(zName);
   if( !zNameCopy ){
     sqlite3_free(pCF);
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   pCF->pKV = pKV;
@@ -1393,22 +1393,22 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     sqlite3_free(zNameCopy);
     sqlite3_free(pCF);
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   sqlite3_mutex_leave(pKV->pMutex);
 
   *ppCF = pCF;
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Open existing column family
 */
-int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
+int keyvaluestore_cf_open(KeyValueStore *pKV, const char *zName, KeyValueColumnFamily **ppCF){
   int rc;
   BtCursor *pCur = NULL;
-  KVColumnFamily *pCF = NULL;
+  KeyValueColumnFamily *pCF = NULL;
   int autoTrans = 0;
   i64 nNameLen;
   int iTable;
@@ -1420,7 +1420,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       kvstoreSetError(pKV, "invalid parameters to cf_open");
       sqlite3_mutex_leave(pKV->pMutex);
     }
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   *ppCF = NULL;
@@ -1428,14 +1428,14 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   /* Check if default CF */
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
-    return kvstore_cf_get_default(pKV, ppCF);
+    return keyvaluestore_cf_get_default(pKV, ppCF);
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Start read transaction if needed */
@@ -1471,7 +1471,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     sqlite3_mutex_leave(pKV->pMutex);
-    return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
+    return (rc == SQLITE_OK) ? KEYVALUESTORE_NOTFOUND : rc;
   }
 
   /* Re-position cursor on the found rowid and read data */
@@ -1482,7 +1482,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
       sqlite3_mutex_leave(pKV->pMutex);
-      return KVSTORE_CORRUPT;
+      return KEYVALUESTORE_CORRUPT;
     }
   }
 
@@ -1492,7 +1492,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   /* Read table root bytes (last 4 bytes of value portion) */
@@ -1515,17 +1515,17 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
            (tableRootBytes[2] << 8) | tableRootBytes[3];
 
   /* Create CF structure */
-  pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
+  pCF = (KeyValueColumnFamily*)sqlite3MallocZero(sizeof(KeyValueColumnFamily));
   if( !pCF ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   zNameCopy = sqliteStrDup(zName);
   if( !zNameCopy ){
     sqlite3_free(pCF);
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   pCF->pKV = pKV;
@@ -1539,20 +1539,20 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     sqlite3_free(zNameCopy);
     sqlite3_free(pCF);
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   sqlite3_mutex_leave(pKV->pMutex);
 
   *ppCF = pCF;
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Close column family handle
 */
-void kvstore_cf_close(KVColumnFamily *pCF){
-  KVStore *pKV;
+void keyvaluestore_cf_close(KeyValueColumnFamily *pCF){
+  KeyValueStore *pKV;
   int shouldFree = 0;
 
   if( !pCF ) return;
@@ -1583,15 +1583,15 @@ void kvstore_cf_close(KVColumnFamily *pCF){
 /*
 ** Internal implementation: Put to column family
 */
-static int kvstore_cf_put_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_put_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey,
   const void *pValue, int nValue
 ){
   BtCursor *pCur = NULL;
   int rc;
   int autoTrans = 0;
-  KVStore *pKV = pCF->pKV;
+  KeyValueStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
   sqlite3_mutex_enter(pKV->pMutex);
@@ -1599,18 +1599,18 @@ static int kvstore_cf_put_internal(
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot put: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   rc = kvstoreValidateKeyValue(pKV, pKey, nKey, pValue, nValue);
-  if( rc != KVSTORE_OK ){
+  if( rc != KEYVALUESTORE_OK ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
     return rc;
@@ -1711,20 +1711,20 @@ static int kvstore_cf_put_internal(
 /*
 ** Internal implementation: Get from column family
 */
-static int kvstore_cf_get_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_get_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey,
   void **ppValue, int *pnValue
 ){
   BtCursor *pCur = NULL;
   int rc;
-  KVStore *pKV = pCF->pKV;
+  KeyValueStore *pKV = pCF->pKV;
 
   if( !ppValue || !pnValue ){
     sqlite3_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "invalid parameters to get");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   *ppValue = NULL;
@@ -1736,21 +1736,21 @@ static int kvstore_cf_get_internal(
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot get: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
@@ -1777,7 +1777,7 @@ static int kvstore_cf_get_internal(
   if( rc != SQLITE_OK || !found ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
+    return (rc == SQLITE_OK) ? KEYVALUESTORE_NOTFOUND : rc;
   }
 
   /* Cursor is positioned on the matching entry — read the value portion. */
@@ -1821,14 +1821,14 @@ static int kvstore_cf_get_internal(
 /*
 ** Internal implementation: Delete from column family
 */
-static int kvstore_cf_delete_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_delete_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey
 ){
   BtCursor *pCur = NULL;
   int rc;
   int autoTrans = 0;
-  KVStore *pKV = pCF->pKV;
+  KeyValueStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
   sqlite3_mutex_enter(pKV->pMutex);
@@ -1836,21 +1836,21 @@ static int kvstore_cf_delete_internal(
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot delete: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->inTrans != 2 ){
@@ -1892,7 +1892,7 @@ static int kvstore_cf_delete_internal(
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
+    return (rc == SQLITE_OK) ? KEYVALUESTORE_NOTFOUND : rc;
   }
 
   /* Cursor is already positioned — delete the entry */
@@ -1932,20 +1932,20 @@ static int kvstore_cf_delete_internal(
 /*
 ** Internal implementation: Check existence in column family
 */
-static int kvstore_cf_exists_internal(
-  KVColumnFamily *pCF,
+static int keyvaluestore_cf_exists_internal(
+  KeyValueColumnFamily *pCF,
   const void *pKey, int nKey,
   int *pExists
 ){
   BtCursor *pCur = NULL;
   int rc;
-  KVStore *pKV = pCF->pKV;
+  KeyValueStore *pKV = pCF->pKV;
 
   if( !pExists ){
     sqlite3_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "invalid parameters to exists");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   *pExists = 0;
@@ -1956,21 +1956,21 @@ static int kvstore_cf_exists_internal(
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot check existence: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
@@ -2008,48 +2008,48 @@ static int kvstore_cf_exists_internal(
 /*
 ** Public CF operations - just call internal versions
 */
-int kvstore_cf_put(KVColumnFamily *pCF, const void *pKey, int nKey,
+int keyvaluestore_cf_put(KeyValueColumnFamily *pCF, const void *pKey, int nKey,
                    const void *pValue, int nValue){
-  if( !pCF ) return KVSTORE_ERROR;
-  return kvstore_cf_put_internal(pCF, pKey, nKey, pValue, nValue);
+  if( !pCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_put_internal(pCF, pKey, nKey, pValue, nValue);
 }
 
-int kvstore_cf_get(KVColumnFamily *pCF, const void *pKey, int nKey,
+int keyvaluestore_cf_get(KeyValueColumnFamily *pCF, const void *pKey, int nKey,
                    void **ppValue, int *pnValue){
-  if( !pCF ) return KVSTORE_ERROR;
-  return kvstore_cf_get_internal(pCF, pKey, nKey, ppValue, pnValue);
+  if( !pCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_get_internal(pCF, pKey, nKey, ppValue, pnValue);
 }
 
-int kvstore_cf_delete(KVColumnFamily *pCF, const void *pKey, int nKey){
-  if( !pCF ) return KVSTORE_ERROR;
-  return kvstore_cf_delete_internal(pCF, pKey, nKey);
+int keyvaluestore_cf_delete(KeyValueColumnFamily *pCF, const void *pKey, int nKey){
+  if( !pCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_delete_internal(pCF, pKey, nKey);
 }
 
-int kvstore_cf_exists(KVColumnFamily *pCF, const void *pKey, int nKey, int *pExists){
-  if( !pCF ) return KVSTORE_ERROR;
-  return kvstore_cf_exists_internal(pCF, pKey, nKey, pExists);
+int keyvaluestore_cf_exists(KeyValueColumnFamily *pCF, const void *pKey, int nKey, int *pExists){
+  if( !pCF ) return KEYVALUESTORE_ERROR;
+  return keyvaluestore_cf_exists_internal(pCF, pKey, nKey, pExists);
 }
 
 /*
 ** Create an iterator for default CF
 */
-int kvstore_iterator_create(KVStore *pKV, KVIterator **ppIter){
+int keyvaluestore_iterator_create(KeyValueStore *pKV, KeyValueIterator **ppIter){
   if( !pKV || !pKV->pDefaultCF ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
-  return kvstore_cf_iterator_create(pKV->pDefaultCF, ppIter);
+  return keyvaluestore_cf_iterator_create(pKV->pDefaultCF, ppIter);
 }
 
 /*
 ** Create an iterator for specific CF
 */
-int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
-  KVIterator *pIter;
+int keyvaluestore_cf_iterator_create(KeyValueColumnFamily *pCF, KeyValueIterator **ppIter){
+  KeyValueIterator *pIter;
   int rc;
-  KVStore *pKV;
+  KeyValueStore *pKV;
 
   if( !pCF || !ppIter ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   pKV = pCF->pKV;
@@ -2059,20 +2059,20 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot create iterator: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
-  pIter = (KVIterator*)sqlite3MallocZero(sizeof(KVIterator));
+  pIter = (KeyValueIterator*)sqlite3MallocZero(sizeof(KeyValueIterator));
   if( !pIter ){
     kvstoreSetError(pKV, "out of memory allocating iterator");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   pIter->pCF = pCF;
@@ -2122,73 +2122,73 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
   sqlite3_mutex_leave(pKV->pMutex);
 
   *ppIter = pIter;
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Create a prefix iterator for a specific column family.
 ** The iterator is positioned at the first key >= prefix.
-** Subsequent calls to kvstore_iterator_next will stop when keys
+** Subsequent calls to keyvaluestore_iterator_next will stop when keys
 ** no longer start with the prefix.
 */
-int kvstore_cf_prefix_iterator_create(
-  KVColumnFamily *pCF,
+int keyvaluestore_cf_prefix_iterator_create(
+  KeyValueColumnFamily *pCF,
   const void *pPrefix, int nPrefix,
-  KVIterator **ppIter
+  KeyValueIterator **ppIter
 ){
   int rc;
-  KVIterator *pIter;
+  KeyValueIterator *pIter;
 
   if( !pCF || !ppIter || !pPrefix || nPrefix <= 0 ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Create a normal iterator first */
-  rc = kvstore_cf_iterator_create(pCF, ppIter);
-  if( rc != KVSTORE_OK ) return rc;
+  rc = keyvaluestore_cf_iterator_create(pCF, ppIter);
+  if( rc != KEYVALUESTORE_OK ) return rc;
 
   pIter = *ppIter;
 
   /* Store a copy of the prefix */
   pIter->pPrefix = sqlite3Malloc(nPrefix);
   if( !pIter->pPrefix ){
-    kvstore_iterator_close(pIter);
+    keyvaluestore_iterator_close(pIter);
     *ppIter = NULL;
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
   memcpy(pIter->pPrefix, pPrefix, nPrefix);
   pIter->nPrefix = nPrefix;
 
   /* Position iterator at the first matching key */
-  rc = kvstore_iterator_first(pIter);
-  if( rc != KVSTORE_OK ){
-    kvstore_iterator_close(pIter);
+  rc = keyvaluestore_iterator_first(pIter);
+  if( rc != KEYVALUESTORE_OK ){
+    keyvaluestore_iterator_close(pIter);
     *ppIter = NULL;
     return rc;
   }
 
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Create a prefix iterator for the default column family.
 */
-int kvstore_prefix_iterator_create(
-  KVStore *pKV,
+int keyvaluestore_prefix_iterator_create(
+  KeyValueStore *pKV,
   const void *pPrefix, int nPrefix,
-  KVIterator **ppIter
+  KeyValueIterator **ppIter
 ){
   if( !pKV || !pKV->pDefaultCF ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
-  return kvstore_cf_prefix_iterator_create(pKV->pDefaultCF, pPrefix, nPrefix, ppIter);
+  return keyvaluestore_cf_prefix_iterator_create(pKV->pDefaultCF, pPrefix, nPrefix, ppIter);
 }
 
 /*
 ** Check if the current cursor entry's key starts with the iterator's prefix.
 ** Returns 1 if match (or no prefix filter), 0 otherwise.
 */
-static int kvstoreIterCheckPrefix(KVIterator *pIter){
+static int kvstoreIterCheckPrefix(KeyValueIterator *pIter){
   unsigned char hdr[4];
   int rc, keyLen;
 
@@ -2221,16 +2221,16 @@ static int kvstoreIterCheckPrefix(KVIterator *pIter){
 /*
 ** Move iterator to first entry
 */
-int kvstore_iterator_first(KVIterator *pIter){
+int keyvaluestore_iterator_first(KeyValueIterator *pIter){
   int rc, res;
 
   if( !pIter || !pIter->isValid ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pIter->pPrefix ){
     /* Prefix iterator: seek to the first key >= prefix */
-    KVStore *pKV = pIter->pCF->pKV;
+    KeyValueStore *pKV = pIter->pCF->pKV;
     UnpackedRecord *pIdxKey = sqlite3VdbeAllocUnpackedRecord(pKV->pKeyInfo);
     if( !pIdxKey ) return SQLITE_NOMEM;
 
@@ -2269,15 +2269,15 @@ int kvstore_iterator_first(KVIterator *pIter){
 /*
 ** Move iterator to next entry
 */
-int kvstore_iterator_next(KVIterator *pIter){
+int keyvaluestore_iterator_next(KeyValueIterator *pIter){
   int rc;
 
   if( !pIter || !pIter->isValid ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pIter->eof ){
-    return KVSTORE_OK;
+    return KEYVALUESTORE_OK;
   }
 
   rc = sqlite3BtreeNext(pIter->pCur, 0);
@@ -2297,7 +2297,7 @@ int kvstore_iterator_next(KVIterator *pIter){
 /*
 ** Check if iterator is at end
 */
-int kvstore_iterator_eof(KVIterator *pIter){
+int keyvaluestore_iterator_eof(KeyValueIterator *pIter){
   if( !pIter || !pIter->isValid ){
     return 1;
   }
@@ -2308,30 +2308,30 @@ int kvstore_iterator_eof(KVIterator *pIter){
 ** Get current key from iterator.
 ** Reads the encoded payload and extracts the key portion.
 */
-int kvstore_iterator_key(KVIterator *pIter, void **ppKey, int *pnKey){
+int keyvaluestore_iterator_key(KeyValueIterator *pIter, void **ppKey, int *pnKey){
   int rc;
 
   if( !pIter || !pIter->isValid || !ppKey || !pnKey ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pIter->eof ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
-  if( payloadSz < 4 ) return KVSTORE_CORRUPT;
+  if( payloadSz < 4 ) return KEYVALUESTORE_CORRUPT;
 
   unsigned char hdr[4];
   rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
   if( rc != SQLITE_OK ) return rc;
 
   int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
-  if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return KVSTORE_CORRUPT;
+  if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return KEYVALUESTORE_CORRUPT;
 
   if( pIter->nKeyBuf < keyLen ){
     void *pNew = sqlite3Realloc(pIter->pKeyBuf, keyLen);
-    if( !pNew ) return KVSTORE_NOMEM;
+    if( !pNew ) return KEYVALUESTORE_NOMEM;
     pIter->pKeyBuf = pNew;
     pIter->nKeyBuf = keyLen;
   }
@@ -2342,26 +2342,26 @@ int kvstore_iterator_key(KVIterator *pIter, void **ppKey, int *pnKey){
   *ppKey = pIter->pKeyBuf;
   *pnKey = keyLen;
 
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Get current value from iterator.
 ** Reads the encoded payload and extracts the value portion.
 */
-int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
+int keyvaluestore_iterator_value(KeyValueIterator *pIter, void **ppValue, int *pnValue){
   int rc;
 
   if( !pIter || !pIter->isValid || !ppValue || !pnValue ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pIter->eof ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
-  if( payloadSz < 4 ) return KVSTORE_CORRUPT;
+  if( payloadSz < 4 ) return KEYVALUESTORE_CORRUPT;
 
   unsigned char hdr[4];
   rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
@@ -2369,17 +2369,17 @@ int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
 
   int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
   int valLen = (int)payloadSz - 4 - keyLen;
-  if( valLen < 0 ) return KVSTORE_CORRUPT;
+  if( valLen < 0 ) return KEYVALUESTORE_CORRUPT;
 
   if( valLen == 0 ){
     *ppValue = NULL;
     *pnValue = 0;
-    return KVSTORE_OK;
+    return KEYVALUESTORE_OK;
   }
 
   if( pIter->nValBuf < valLen ){
     void *pNew = sqlite3Realloc(pIter->pValBuf, valLen);
-    if( !pNew ) return KVSTORE_NOMEM;
+    if( !pNew ) return KEYVALUESTORE_NOMEM;
     pIter->pValBuf = pNew;
     pIter->nValBuf = valLen;
   }
@@ -2390,14 +2390,14 @@ int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
   *ppValue = pIter->pValBuf;
   *pnValue = valLen;
 
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Close an iterator
 */
-void kvstore_iterator_close(KVIterator *pIter){
-  KVStore *pKV;
+void keyvaluestore_iterator_close(KeyValueIterator *pIter){
+  KeyValueStore *pKV;
 
   if( !pIter ){
     return;
@@ -2419,7 +2419,7 @@ void kvstore_iterator_close(KVIterator *pIter){
   }
 
   if( pIter->pCF ){
-    kvstore_cf_close(pIter->pCF);
+    keyvaluestore_cf_close(pIter->pCF);
   }
 
   if( pIter->pKeyBuf ){
@@ -2440,16 +2440,16 @@ void kvstore_iterator_close(KVIterator *pIter){
 /*
 ** Get statistics
 */
-int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
+int keyvaluestore_stats(KeyValueStore *pKV, KeyValueStoreStats *pStats){
   if( !pKV || !pStats ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   pStats->nPuts = pKV->stats.nPuts;
@@ -2460,13 +2460,13 @@ int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
 
   sqlite3_mutex_leave(pKV->pMutex);
 
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Perform database integrity check
 */
-int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
+int keyvaluestore_integrity_check(KeyValueStore *pKV, char **pzErrMsg){
   int rc;
   Pgno *aRoot;
   int nRoot;
@@ -2475,7 +2475,7 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
   char *zErr = NULL;
 
   if( !pKV ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pzErrMsg ){
@@ -2486,7 +2486,7 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
@@ -2511,7 +2511,7 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
     if( !aRoot ){
       if( hadTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
       sqlite3_mutex_leave(pKV->pMutex);
-      return KVSTORE_NOMEM;
+      return KEYVALUESTORE_NOMEM;
     }
 
     /* Page 1 is always used (file header / master page) */
@@ -2593,13 +2593,13 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
       sqlite3_free(zErr);
     }
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   if( zErr ) sqlite3_free(zErr);
 
   sqlite3_mutex_leave(pKV->pMutex);
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
@@ -2608,24 +2608,24 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
 ** We do a commit+begin cycle to flush to disk if a write transaction
 ** is active, otherwise this is a no-op (reads are already consistent).
 */
-int kvstore_sync(KVStore *pKV){
+int keyvaluestore_sync(KeyValueStore *pKV){
   int rc = SQLITE_OK;
 
   if( !pKV ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot sync: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   if( pKV->inTrans == 2 ){
@@ -2647,24 +2647,24 @@ int kvstore_sync(KVStore *pKV){
 ** Run incremental vacuum, freeing up to nPage pages.
 ** Pass nPage=0 to free all unused pages.
 */
-int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
+int keyvaluestore_incremental_vacuum(KeyValueStore *pKV, int nPage){
   int rc;
 
   if( !pKV ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot vacuum: database is corrupted");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   /* Begin a write transaction if none is active */
@@ -2735,7 +2735,7 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
 /*
 ** List all column families
 */
-int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
+int keyvaluestore_cf_list(KeyValueStore *pKV, char ***pazNames, int *pnCount){
   int rc;
   BtCursor *pCur = NULL;
   int autoTrans = 0;
@@ -2744,7 +2744,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   int nAlloc = 8;
 
   if( !pKV || !pazNames || !pnCount ){
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   *pazNames = NULL;
@@ -2752,7 +2752,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
 
   azNames = (char**)sqlite3MallocZero(nAlloc * sizeof(char*));
   if( !azNames ){
-    return KVSTORE_NOMEM;
+    return KEYVALUESTORE_NOMEM;
   }
 
   sqlite3_mutex_enter(pKV->pMutex);
@@ -2760,7 +2760,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
     sqlite3_free(azNames);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
@@ -2804,7 +2804,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
       int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
       if( nameLen > 0 && 4 + nameLen <= (int)payloadSz ){
         char *name = (char*)sqlite3Malloc(nameLen + 1);
-        if( !name ){ rc = KVSTORE_NOMEM; break; }
+        if( !name ){ rc = KEYVALUESTORE_NOMEM; break; }
 
         rc = sqlite3BtreePayload(pCur, 4, nameLen, name);
         if( rc != SQLITE_OK ){ sqlite3_free(name); break; }
@@ -2813,7 +2813,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
         if( nCount >= nAlloc ){
           nAlloc *= 2;
           char **azNew = (char**)sqlite3Realloc(azNames, nAlloc * sizeof(char*));
-          if( !azNew ){ sqlite3_free(name); rc = KVSTORE_NOMEM; break; }
+          if( !azNew ){ sqlite3_free(name); rc = KEYVALUESTORE_NOMEM; break; }
           azNames = azNew;
         }
 
@@ -2837,7 +2837,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
 
   sqlite3_mutex_leave(pKV->pMutex);
 
-  if( rc != KVSTORE_OK ){
+  if( rc != KEYVALUESTORE_OK ){
     int i;
     for(i = 0; i < nCount; i++){
       sqlite3_free(azNames[i]);
@@ -2849,13 +2849,13 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   *pazNames = azNames;
   *pnCount = nCount;
 
-  return KVSTORE_OK;
+  return KEYVALUESTORE_OK;
 }
 
 /*
 ** Drop a column family
 */
-int kvstore_cf_drop(KVStore *pKV, const char *zName){
+int keyvaluestore_cf_drop(KeyValueStore *pKV, const char *zName){
   int rc;
   BtCursor *pCur = NULL;
   int autoTrans = 0;
@@ -2870,7 +2870,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
       kvstoreSetError(pKV, "invalid parameters to cf_drop");
       sqlite3_mutex_leave(pKV->pMutex);
     }
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Cannot drop default CF */
@@ -2878,7 +2878,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     sqlite3_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "cannot drop default column family");
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   nNameLen = strlen(zName);
@@ -2887,7 +2887,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
 
   if( pKV->closing ){
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_ERROR;
+    return KEYVALUESTORE_ERROR;
   }
 
   /* Start write transaction (release persistent read first if active). */
@@ -2927,7 +2927,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     sqlite3_mutex_leave(pKV->pMutex);
-    return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
+    return (rc == SQLITE_OK) ? KEYVALUESTORE_NOTFOUND : rc;
   }
 
   /* Read the table root from payload */
@@ -2938,7 +2938,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
       sqlite3_mutex_leave(pKV->pMutex);
-      return KVSTORE_CORRUPT;
+      return KEYVALUESTORE_CORRUPT;
     }
   }
 
@@ -2947,7 +2947,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
     sqlite3_mutex_leave(pKV->pMutex);
-    return KVSTORE_CORRUPT;
+    return KEYVALUESTORE_CORRUPT;
   }
 
   unsigned char tableRootBytes[4];

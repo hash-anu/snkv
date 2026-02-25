@@ -9,14 +9,14 @@ Run:
 """
 
 import os
-from snkv import KVStore
+from snkv import KeyValueStore
 
 DB_FILE = "iterators_example.db"
 
 
 def full_scan():
     print("--- Full Scan (for loop) ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         for i in range(5):
             db[f"key:{i:03d}"] = f"value_{i}"
 
@@ -27,7 +27,7 @@ def full_scan():
 
 def prefix_scan():
     print("\n--- Prefix Scan ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         db["user:alice"]   = "30"
         db["user:bob"]     = "25"
         db["user:charlie"] = "35"
@@ -45,7 +45,7 @@ def prefix_scan():
 
 def iterator_context_manager():
     print("\n--- Iterator as Context Manager ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         db["a"] = "1"
         db["b"] = "2"
         db["c"] = "3"
@@ -57,7 +57,7 @@ def iterator_context_manager():
 
 def manual_iterator_control():
     print("\n--- Manual Iterator Control ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         for c in "abcde":
             db[c] = str(ord(c))
 
@@ -76,7 +76,7 @@ def manual_iterator_control():
 
 def cf_iterator():
     print("\n--- Column Family Iterator ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         with db.create_column_family("fruits") as cf:
             cf["apple"]  = "red"
             cf["banana"] = "yellow"
@@ -93,7 +93,7 @@ def cf_iterator():
 
 def collect_all_keys():
     print("\n--- Collect All Keys ---")
-    with KVStore(DB_FILE) as db:
+    with KeyValueStore(DB_FILE) as db:
         for i in range(10):
             db[f"item:{i:02d}"] = str(i * i)
 
@@ -102,8 +102,8 @@ def collect_all_keys():
 
 
 def statistics():
-    print("\n--- KVStore Statistics ---")
-    with KVStore(DB_FILE) as db:
+    print("\n--- KeyValueStore Statistics ---")
+    with KeyValueStore(DB_FILE) as db:
         for i in range(20):
             db[f"stat_key:{i}"] = str(i)
         for i in range(10):

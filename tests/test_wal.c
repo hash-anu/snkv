@@ -1,5 +1,5 @@
 /*
-** Test Suite for KVStore WAL (Write-Ahead Logging) Mode
+** Test Suite for KeyValueStore WAL (Write-Ahead Logging) Mode
 **
 ** This test suite validates:
 ** 1. WAL mode activation and file creation (-wal, -shm)
@@ -20,7 +20,7 @@
 **   ./tests/test_wal
 */
 
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "sqliteInt.h"
 #include "platform_compat.h"
 #include <stdio.h>
@@ -86,26 +86,26 @@ static void cleanup(void){
 ** a -wal file (and possibly a -shm file) instead of -journal.
 ** ================================================================ */
 static void test_wal_file_creation(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc == KVSTORE_OK ){
-    rc = kvstore_begin(pKV, 1);
-    if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc == KEYVALUESTORE_OK ){
+    rc = keyvaluestore_begin(pKV, 1);
+    if( rc == KEYVALUESTORE_OK ){
       const char *k = "wkey";
       const char *v = "wval";
-      kvstore_put(pKV, k, 4, v, 4);
+      keyvaluestore_put(pKV, k, 4, v, 4);
 
       /* WAL file should exist, journal file should NOT */
       int wal_ok  = file_exists(WAL_WAL_FILE);
       int jour_no = !file_exists("test_wal.db-journal");
-      kvstore_commit(pKV);
+      keyvaluestore_commit(pKV);
       passed = wal_ok && jour_no;
     }
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
   }
 
   cleanup();
@@ -116,24 +116,24 @@ static void test_wal_file_creation(void){
 ** TEST 2: Basic CRUD in WAL mode
 ** ================================================================ */
 static void test_wal_basic_crud(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL basic CRUD", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL basic CRUD", 0); return; }
 
   /* Put */
   const char *key = "greeting";
   const char *val = "hello_wal";
-  rc = kvstore_put(pKV, key, (int)strlen(key), val, (int)strlen(val));
-  if( rc != KVSTORE_OK ) goto done;
+  rc = keyvaluestore_put(pKV, key, (int)strlen(key), val, (int)strlen(val));
+  if( rc != KEYVALUESTORE_OK ) goto done;
 
   /* Get */
   void *got = NULL; int glen = 0;
-  rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-  if( rc != KVSTORE_OK || !got ) goto done;
+  rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+  if( rc != KEYVALUESTORE_OK || !got ) goto done;
   if( glen != (int)strlen(val) || memcmp(got, val, glen) != 0 ){
     sqliteFree(got); goto done;
   }
@@ -141,32 +141,32 @@ static void test_wal_basic_crud(void){
 
   /* Exists */
   int exists = 0;
-  rc = kvstore_exists(pKV, key, (int)strlen(key), &exists);
-  if( rc != KVSTORE_OK || !exists ) goto done;
+  rc = keyvaluestore_exists(pKV, key, (int)strlen(key), &exists);
+  if( rc != KEYVALUESTORE_OK || !exists ) goto done;
 
   /* Update */
   const char *val2 = "updated_wal";
-  rc = kvstore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
-  if( rc != KVSTORE_OK ) goto done;
+  rc = keyvaluestore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
+  if( rc != KEYVALUESTORE_OK ) goto done;
 
-  rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-  if( rc != KVSTORE_OK || !got ) goto done;
+  rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+  if( rc != KEYVALUESTORE_OK || !got ) goto done;
   if( glen != (int)strlen(val2) || memcmp(got, val2, glen) != 0 ){
     sqliteFree(got); goto done;
   }
   sqliteFree(got); got = NULL;
 
   /* Delete */
-  rc = kvstore_delete(pKV, key, (int)strlen(key));
-  if( rc != KVSTORE_OK ) goto done;
+  rc = keyvaluestore_delete(pKV, key, (int)strlen(key));
+  if( rc != KEYVALUESTORE_OK ) goto done;
 
-  rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-  if( rc != KVSTORE_NOTFOUND ) goto done;
+  rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+  if( rc != KEYVALUESTORE_NOTFOUND ) goto done;
 
   passed = 1;
 
 done:
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL basic CRUD operations", passed);
 }
@@ -175,39 +175,39 @@ done:
 ** TEST 3: Transaction commit under WAL
 ** ================================================================ */
 static void test_wal_commit(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL transaction commit", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL transaction commit", 0); return; }
 
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     int i;
     for(i = 0; i < 20; i++){
       char k[32], v[32];
       snprintf(k, sizeof(k), "tkey_%d", i);
       snprintf(v, sizeof(v), "tval_%d", i);
-      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+      keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
     }
-    rc = kvstore_commit(pKV);
-    if( rc == KVSTORE_OK ){
+    rc = keyvaluestore_commit(pKV);
+    if( rc == KEYVALUESTORE_OK ){
       /* Verify all keys are readable after commit */
       int ok = 1;
       for(i = 0; i < 20 && ok; i++){
         char k[32]; void *got = NULL; int glen = 0;
         snprintf(k, sizeof(k), "tkey_%d", i);
-        rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
-        if( rc != KVSTORE_OK || !got ){ ok = 0; }
+        rc = keyvaluestore_get(pKV, k, (int)strlen(k), &got, &glen);
+        if( rc != KEYVALUESTORE_OK || !got ){ ok = 0; }
         else{ sqliteFree(got); }
       }
       passed = ok;
     }
   }
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL transaction commit", passed);
 }
@@ -216,37 +216,37 @@ static void test_wal_commit(void){
 ** TEST 4: Transaction rollback under WAL
 ** ================================================================ */
 static void test_wal_rollback(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL transaction rollback", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL transaction rollback", 0); return; }
 
   /* Write a baseline value */
   const char *key = "rb_key";
   const char *val1 = "before_rollback";
-  kvstore_put(pKV, key, (int)strlen(key), val1, (int)strlen(val1));
+  keyvaluestore_put(pKV, key, (int)strlen(key), val1, (int)strlen(val1));
 
   /* Begin txn, overwrite, rollback */
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     const char *val2 = "after_rollback_SHOULD_NOT_PERSIST";
-    kvstore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
-    kvstore_rollback(pKV);
+    keyvaluestore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
+    keyvaluestore_rollback(pKV);
 
     /* Read back -- should see original */
     void *got = NULL; int glen = 0;
-    rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-    if( rc == KVSTORE_OK && got ){
+    rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+    if( rc == KEYVALUESTORE_OK && got ){
       passed = (glen == (int)strlen(val1) &&
                 memcmp(got, val1, glen) == 0);
       sqliteFree(got);
     }
   }
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL transaction rollback", passed);
 }
@@ -255,38 +255,38 @@ static void test_wal_rollback(void){
 ** TEST 5: WAL recovery (close without commit)
 ** ================================================================ */
 static void test_wal_recovery(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
   /* Phase 1: write committed value, then start uncommitted txn */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL recovery simulation", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL recovery simulation", 0); return; }
 
   const char *key = "recov_key";
   const char *val1 = "committed_val";
-  kvstore_put(pKV, key, (int)strlen(key), val1, (int)strlen(val1));
+  keyvaluestore_put(pKV, key, (int)strlen(key), val1, (int)strlen(val1));
 
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     const char *val2 = "uncommitted_val";
-    kvstore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
+    keyvaluestore_put(pKV, key, (int)strlen(key), val2, (int)strlen(val2));
     /* Don't commit -- simulate crash */
   }
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
 
   /* Phase 2: reopen -- should see committed value */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc == KEYVALUESTORE_OK ){
     void *got = NULL; int glen = 0;
-    rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-    if( rc == KVSTORE_OK && got ){
+    rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+    if( rc == KEYVALUESTORE_OK && got ){
       passed = (glen == (int)strlen(val1) &&
                 memcmp(got, val1, glen) == 0);
       sqliteFree(got);
     }
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
   }
 
   cleanup();
@@ -297,35 +297,35 @@ static void test_wal_recovery(void){
 ** TEST 6: Data persistence across close/reopen in WAL mode
 ** ================================================================ */
 static void test_wal_persistence(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
   /* Write data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL data persistence", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL data persistence", 0); return; }
 
   int i;
   for(i = 0; i < 50; i++){
     char k[32], v[64];
     snprintf(k, sizeof(k), "persist_%d", i);
     snprintf(v, sizeof(v), "value_%d_abcdefghij", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
 
   /* Reopen and verify */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc == KEYVALUESTORE_OK ){
     int ok = 1;
     for(i = 0; i < 50 && ok; i++){
       char k[32], expected[64];
       snprintf(k, sizeof(k), "persist_%d", i);
       snprintf(expected, sizeof(expected), "value_%d_abcdefghij", i);
       void *got = NULL; int glen = 0;
-      rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
-      if( rc != KVSTORE_OK || !got ){
+      rc = keyvaluestore_get(pKV, k, (int)strlen(k), &got, &glen);
+      if( rc != KEYVALUESTORE_OK || !got ){
         ok = 0;
       }else{
         if( glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
@@ -335,7 +335,7 @@ static void test_wal_persistence(void){
       }
     }
     passed = ok;
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
   }
 
   cleanup();
@@ -348,7 +348,7 @@ static void test_wal_persistence(void){
 ** ================================================================ */
 
 typedef struct {
-  KVStore *pKV;
+  KeyValueStore *pKV;
   int thread_id;
   int num_ops;
   int success;
@@ -362,8 +362,8 @@ static void *wal_writer_thread(void *arg){
     char k[64], v[64];
     snprintf(k, sizeof(k), "wt_%d_%d", d->thread_id, i);
     snprintf(v, sizeof(v), "wv_%d_%d", d->thread_id, i);
-    int rc = kvstore_put(d->pKV, k, (int)strlen(k), v, (int)strlen(v));
-    if( rc == KVSTORE_OK ) d->success++;
+    int rc = keyvaluestore_put(d->pKV, k, (int)strlen(k), v, (int)strlen(v));
+    if( rc == KEYVALUESTORE_OK ) d->success++;
     else d->errors++;
   }
   return NULL;
@@ -377,9 +377,9 @@ static void *wal_reader_thread(void *arg){
     /* Read a key that the writer might have written */
     snprintf(k, sizeof(k), "wt_0_%d", i % d->num_ops);
     void *got = NULL; int glen = 0;
-    int rc = kvstore_get(d->pKV, k, (int)strlen(k), &got, &glen);
+    int rc = keyvaluestore_get(d->pKV, k, (int)strlen(k), &got, &glen);
     /* NOTFOUND is acceptable (writer hasn't written it yet) */
-    if( rc == KVSTORE_OK || rc == KVSTORE_NOTFOUND ){
+    if( rc == KEYVALUESTORE_OK || rc == KEYVALUESTORE_NOTFOUND ){
       d->success++;
     }else{
       d->errors++;
@@ -391,13 +391,13 @@ static void *wal_reader_thread(void *arg){
 }
 
 static void test_wal_concurrent(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL concurrent readers + writer", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL concurrent readers + writer", 0); return; }
 
   /* 1 writer thread + (NUM_THREADS-1) reader threads */
   pthread_t threads[NUM_THREADS];
@@ -435,7 +435,7 @@ static void test_wal_concurrent(void){
   /* Pass if writer had zero errors and majority of reads succeeded */
   passed = (tdata[0].errors == 0 && total_errors == 0);
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL concurrent readers + writer", passed);
 }
@@ -444,36 +444,36 @@ static void test_wal_concurrent(void){
 ** TEST 8: Column families under WAL mode
 ** ================================================================ */
 static void test_wal_column_families(void){
-  KVStore *pKV = NULL;
-  KVColumnFamily *pCF1 = NULL, *pCF2 = NULL;
+  KeyValueStore *pKV = NULL;
+  KeyValueColumnFamily *pCF1 = NULL, *pCF2 = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL column families", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL column families", 0); return; }
 
-  rc = kvstore_cf_create(pKV, "wal_cf_a", &pCF1);
-  if( rc != KVSTORE_OK ) goto cf_done;
-  rc = kvstore_cf_create(pKV, "wal_cf_b", &pCF2);
-  if( rc != KVSTORE_OK ) goto cf_done;
+  rc = keyvaluestore_cf_create(pKV, "wal_cf_a", &pCF1);
+  if( rc != KEYVALUESTORE_OK ) goto cf_done;
+  rc = keyvaluestore_cf_create(pKV, "wal_cf_b", &pCF2);
+  if( rc != KEYVALUESTORE_OK ) goto cf_done;
 
   /* Write different values to the same key in different CFs */
   const char *key = "shared_key";
   const char *va = "value_cf_a";
   const char *vb = "value_cf_b";
-  rc = kvstore_cf_put(pCF1, key, (int)strlen(key), va, (int)strlen(va));
-  if( rc != KVSTORE_OK ) goto cf_done;
-  rc = kvstore_cf_put(pCF2, key, (int)strlen(key), vb, (int)strlen(vb));
-  if( rc != KVSTORE_OK ) goto cf_done;
+  rc = keyvaluestore_cf_put(pCF1, key, (int)strlen(key), va, (int)strlen(va));
+  if( rc != KEYVALUESTORE_OK ) goto cf_done;
+  rc = keyvaluestore_cf_put(pCF2, key, (int)strlen(key), vb, (int)strlen(vb));
+  if( rc != KEYVALUESTORE_OK ) goto cf_done;
 
   /* Read back and verify isolation */
   void *g1 = NULL, *g2 = NULL;
   int l1 = 0, l2 = 0;
-  rc = kvstore_cf_get(pCF1, key, (int)strlen(key), &g1, &l1);
-  if( rc != KVSTORE_OK || !g1 ) goto cf_done;
-  rc = kvstore_cf_get(pCF2, key, (int)strlen(key), &g2, &l2);
-  if( rc != KVSTORE_OK || !g2 ){ sqliteFree(g1); goto cf_done; }
+  rc = keyvaluestore_cf_get(pCF1, key, (int)strlen(key), &g1, &l1);
+  if( rc != KEYVALUESTORE_OK || !g1 ) goto cf_done;
+  rc = keyvaluestore_cf_get(pCF2, key, (int)strlen(key), &g2, &l2);
+  if( rc != KEYVALUESTORE_OK || !g2 ){ sqliteFree(g1); goto cf_done; }
 
   passed = (l1 == (int)strlen(va) && memcmp(g1, va, l1) == 0 &&
             l2 == (int)strlen(vb) && memcmp(g2, vb, l2) == 0);
@@ -482,9 +482,9 @@ static void test_wal_column_families(void){
   sqliteFree(g2);
 
 cf_done:
-  if( pCF1 ) kvstore_cf_close(pCF1);
-  if( pCF2 ) kvstore_cf_close(pCF2);
-  kvstore_close(pKV);
+  if( pCF1 ) keyvaluestore_cf_close(pCF1);
+  if( pCF2 ) keyvaluestore_cf_close(pCF2);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL column families isolation", passed);
 }
@@ -493,36 +493,36 @@ cf_done:
 ** TEST 9: Large payload under WAL mode
 ** ================================================================ */
 static void test_wal_large_payload(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL large payload", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL large payload", 0); return; }
 
   /* Create a 1 MB value */
   int sz = 1024 * 1024;
   char *big = (char*)malloc(sz);
-  if( !big ){ kvstore_close(pKV); print_result("WAL large payload", 0); return; }
+  if( !big ){ keyvaluestore_close(pKV); print_result("WAL large payload", 0); return; }
 
   int i;
   for(i = 0; i < sz; i++) big[i] = (char)('A' + (i % 26));
 
   const char *key = "big_wal_key";
-  rc = kvstore_put(pKV, key, (int)strlen(key), big, sz);
-  if( rc != KVSTORE_OK ){ free(big); kvstore_close(pKV); print_result("WAL large payload", 0); return; }
+  rc = keyvaluestore_put(pKV, key, (int)strlen(key), big, sz);
+  if( rc != KEYVALUESTORE_OK ){ free(big); keyvaluestore_close(pKV); print_result("WAL large payload", 0); return; }
 
   /* Read back */
   void *got = NULL; int glen = 0;
-  rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-  if( rc == KVSTORE_OK && got && glen == sz ){
+  rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+  if( rc == KEYVALUESTORE_OK && got && glen == sz ){
     passed = (memcmp(got, big, sz) == 0);
     sqliteFree(got);
   }
 
   free(big);
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL large payload (1 MB)", passed);
 }
@@ -531,13 +531,13 @@ static void test_wal_large_payload(void){
 ** TEST 10: Integrity check under WAL mode
 ** ================================================================ */
 static void test_wal_integrity(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL integrity check", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL integrity check", 0); return; }
 
   /* Write some data first */
   int i;
@@ -545,19 +545,19 @@ static void test_wal_integrity(void){
     char k[32], v[32];
     snprintf(k, sizeof(k), "ic_%d", i);
     snprintf(v, sizeof(v), "iv_%d", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
 
   char *errMsg = NULL;
-  rc = kvstore_integrity_check(pKV, &errMsg);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_integrity_check(pKV, &errMsg);
+  if( rc == KEYVALUESTORE_OK ){
     passed = 1;
   }else{
     printf("  Integrity error: %s\n", errMsg ? errMsg : "(null)");
     if( errMsg ) sqliteFree(errMsg);
   }
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL integrity check", passed);
 }
@@ -568,28 +568,28 @@ static void test_wal_integrity(void){
 ** in WAL mode, and vice versa.
 ** ================================================================ */
 static void test_wal_cross_mode(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
   /* Phase 1: write data in DELETE (rollback journal) mode */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
 
   const char *key1 = "cross_key1";
   const char *val1 = "written_in_delete_mode";
-  kvstore_put(pKV, key1, (int)strlen(key1), val1, (int)strlen(val1));
-  kvstore_close(pKV);
+  keyvaluestore_put(pKV, key1, (int)strlen(key1), val1, (int)strlen(val1));
+  keyvaluestore_close(pKV);
 
   /* Phase 2: reopen in WAL mode, verify old data, write new data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
 
   void *got = NULL; int glen = 0;
-  rc = kvstore_get(pKV, key1, (int)strlen(key1), &got, &glen);
-  if( rc != KVSTORE_OK || !got ){
-    kvstore_close(pKV);
+  rc = keyvaluestore_get(pKV, key1, (int)strlen(key1), &got, &glen);
+  if( rc != KEYVALUESTORE_OK || !got ){
+    keyvaluestore_close(pKV);
     print_result("Cross-mode DELETE -> WAL", 0);
     return;
   }
@@ -598,26 +598,26 @@ static void test_wal_cross_mode(void){
 
   const char *key2 = "cross_key2";
   const char *val2 = "written_in_wal_mode";
-  kvstore_put(pKV, key2, (int)strlen(key2), val2, (int)strlen(val2));
-  kvstore_close(pKV);
+  keyvaluestore_put(pKV, key2, (int)strlen(key2), val2, (int)strlen(val2));
+  keyvaluestore_close(pKV);
 
   /* Phase 3: reopen in DELETE mode, verify both keys */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ){ print_result("Cross-mode DELETE -> WAL", 0); return; }
 
-  rc = kvstore_get(pKV, key1, (int)strlen(key1), &got, &glen);
-  int k1_ok = (rc == KVSTORE_OK && got &&
+  rc = keyvaluestore_get(pKV, key1, (int)strlen(key1), &got, &glen);
+  int k1_ok = (rc == KEYVALUESTORE_OK && got &&
                glen == (int)strlen(val1) && memcmp(got, val1, glen) == 0);
   if( got ){ sqliteFree(got); } got = NULL;
 
-  rc = kvstore_get(pKV, key2, (int)strlen(key2), &got, &glen);
-  int k2_ok = (rc == KVSTORE_OK && got &&
+  rc = keyvaluestore_get(pKV, key2, (int)strlen(key2), &got, &glen);
+  int k2_ok = (rc == KEYVALUESTORE_OK && got &&
                glen == (int)strlen(val2) && memcmp(got, val2, glen) == 0);
   if( got ) sqliteFree(got);
 
   passed = phase1_ok && k1_ok && k2_ok;
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("Cross-mode persistence (DELETE <-> WAL)", passed);
 }
@@ -626,29 +626,29 @@ static void test_wal_cross_mode(void){
 ** TEST 12: Batch insert performance in WAL mode
 ** ================================================================ */
 static void test_wal_batch_performance(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL batch insert performance", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL batch insert performance", 0); return; }
 
   int count = 10000;
   struct timespec t0, t1;
   clock_gettime(CLOCK_MONOTONIC, &t0);
 
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     int i;
     for(i = 0; i < count; i++){
       char k[32], v[64];
       snprintf(k, sizeof(k), "bp_%d", i);
       snprintf(v, sizeof(v), "batch_value_%d_xxxxxxxx", i);
-      rc = kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
-      if( rc != KVSTORE_OK ) break;
+      rc = keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+      if( rc != KEYVALUESTORE_OK ) break;
     }
-    if( rc == KVSTORE_OK ) rc = kvstore_commit(pKV);
+    if( rc == KEYVALUESTORE_OK ) rc = keyvaluestore_commit(pKV);
   }
 
   clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -658,7 +658,7 @@ static void test_wal_batch_performance(void){
   printf("  WAL batch: %d ops in %.3f sec (%.0f ops/sec)\n", count, elapsed, ops_sec);
 
   /* Verify a few records */
-  if( rc == KVSTORE_OK ){
+  if( rc == KEYVALUESTORE_OK ){
     int spot_ok = 1;
     int spots[] = {0, 100, 5000, 9999};
     int s;
@@ -667,8 +667,8 @@ static void test_wal_batch_performance(void){
       snprintf(k, sizeof(k), "bp_%d", spots[s]);
       snprintf(expected, sizeof(expected), "batch_value_%d_xxxxxxxx", spots[s]);
       void *got = NULL; int glen = 0;
-      rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
-      if( rc != KVSTORE_OK || !got || glen != (int)strlen(expected) ||
+      rc = keyvaluestore_get(pKV, k, (int)strlen(k), &got, &glen);
+      if( rc != KEYVALUESTORE_OK || !got || glen != (int)strlen(expected) ||
           memcmp(got, expected, glen) != 0 ){
         spot_ok = 0;
       }
@@ -677,7 +677,7 @@ static void test_wal_batch_performance(void){
     passed = spot_ok;
   }
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL batch insert (10k records)", passed);
 }
@@ -686,13 +686,13 @@ static void test_wal_batch_performance(void){
 ** TEST 13: Iterator under WAL mode
 ** ================================================================ */
 static void test_wal_iterator(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL iterator", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL iterator", 0); return; }
 
   /* Insert known data */
   int i;
@@ -700,30 +700,30 @@ static void test_wal_iterator(void){
     char k[32], v[32];
     snprintf(k, sizeof(k), "iter_%02d", i);
     snprintf(v, sizeof(v), "ival_%02d", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
 
   /* Iterate and count */
-  KVIterator *pIter = NULL;
-  rc = kvstore_iterator_create(pKV, &pIter);
-  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("WAL iterator", 0); return; }
+  KeyValueIterator *pIter = NULL;
+  rc = keyvaluestore_iterator_create(pKV, &pIter);
+  if( rc != KEYVALUESTORE_OK ){ keyvaluestore_close(pKV); print_result("WAL iterator", 0); return; }
 
-  rc = kvstore_iterator_first(pIter);
+  rc = keyvaluestore_iterator_first(pIter);
   int count = 0;
-  while( rc == KVSTORE_OK && !kvstore_iterator_eof(pIter) ){
+  while( rc == KEYVALUESTORE_OK && !keyvaluestore_iterator_eof(pIter) ){
     void *ik = NULL, *iv = NULL;
     int ikl = 0, ivl = 0;
-    kvstore_iterator_key(pIter, &ik, &ikl);
-    kvstore_iterator_value(pIter, &iv, &ivl);
+    keyvaluestore_iterator_key(pIter, &ik, &ikl);
+    keyvaluestore_iterator_value(pIter, &iv, &ivl);
     if( ik && iv ) count++;
-    rc = kvstore_iterator_next(pIter);
+    rc = keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   passed = (count == 10);
   if( !passed ) printf("  Expected 10 items, got %d\n", count);
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL iterator traversal", passed);
 }
@@ -735,13 +735,13 @@ static void test_wal_iterator(void){
 ** because SQLite auto-checkpoints on close.
 ** ================================================================ */
 static void test_wal_shm_file(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL -shm file lifecycle", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL -shm file lifecycle", 0); return; }
 
   /* After open + WAL activation, both -wal and -shm should exist */
   int wal_after_open = file_exists(WAL_WAL_FILE);
@@ -750,12 +750,12 @@ static void test_wal_shm_file(void){
   /* Write data -- files should still be present */
   const char *k = "shm_test_key";
   const char *v = "shm_test_val";
-  kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+  keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   int wal_after_write = file_exists(WAL_WAL_FILE);
   int shm_after_write = file_exists(WAL_SHM_FILE);
 
   /* Close -- auto-checkpoint should remove -wal and -shm */
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   int wal_after_close = file_exists(WAL_WAL_FILE);
   int shm_after_close = file_exists(WAL_SHM_FILE);
   int db_after_close  = file_exists(WAL_DB_FILE);
@@ -782,16 +782,16 @@ static void test_wal_shm_file(void){
 ** Verify -shm exists during begin/put/commit cycle.
 ** ================================================================ */
 static void test_wal_shm_during_transaction(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL -shm during transaction", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL -shm during transaction", 0); return; }
 
-  rc = kvstore_begin(pKV, 1);
-  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("WAL -shm during transaction", 0); return; }
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc != KEYVALUESTORE_OK ){ keyvaluestore_close(pKV); print_result("WAL -shm during transaction", 0); return; }
 
   int shm_after_begin = file_exists(WAL_SHM_FILE);
 
@@ -800,12 +800,12 @@ static void test_wal_shm_during_transaction(void){
     char k[32], v[32];
     snprintf(k, sizeof(k), "shmtx_%d", i);
     snprintf(v, sizeof(v), "shmval_%d", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
 
   int shm_after_puts = file_exists(WAL_SHM_FILE);
 
-  rc = kvstore_commit(pKV);
+  rc = keyvaluestore_commit(pKV);
   int shm_after_commit = file_exists(WAL_SHM_FILE);
 
   if( !shm_after_begin ) printf("  FAIL: -shm missing after begin\n");
@@ -814,7 +814,7 @@ static void test_wal_shm_during_transaction(void){
 
   passed = shm_after_begin && shm_after_puts && shm_after_commit;
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL -shm present during transaction", passed);
 }
@@ -824,26 +824,26 @@ static void test_wal_shm_during_transaction(void){
 ** All operations in a transaction either commit entirely or not at all.
 ** ================================================================ */
 static void test_wal_acid_atomicity(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Atomicity (WAL)", 0); return; }
 
   /* Phase 1: Write 50 keys in a transaction, then rollback */
-  rc = kvstore_begin(pKV, 1);
-  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc != KEYVALUESTORE_OK ){ keyvaluestore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
 
   int i;
   for(i = 0; i < 50; i++){
     char k[32], v[32];
     snprintf(k, sizeof(k), "atom_%d", i);
     snprintf(v, sizeof(v), "atomval_%d", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
-  kvstore_rollback(pKV);
+  keyvaluestore_rollback(pKV);
 
   /* Verify NONE of the 50 keys exist */
   int none_exist = 1;
@@ -851,21 +851,21 @@ static void test_wal_acid_atomicity(void){
     char k[32];
     snprintf(k, sizeof(k), "atom_%d", i);
     int exists = 0;
-    kvstore_exists(pKV, k, (int)strlen(k), &exists);
+    keyvaluestore_exists(pKV, k, (int)strlen(k), &exists);
     if( exists ){ none_exist = 0; break; }
   }
 
   /* Phase 2: Write 50 keys and commit */
-  rc = kvstore_begin(pKV, 1);
-  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc != KEYVALUESTORE_OK ){ keyvaluestore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
   for(i = 0; i < 50; i++){
     char k[32], v[32];
     snprintf(k, sizeof(k), "atom_%d", i);
     snprintf(v, sizeof(v), "atomval_%d", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
-  rc = kvstore_commit(pKV);
-  if( rc != KVSTORE_OK ){ kvstore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_commit(pKV);
+  if( rc != KEYVALUESTORE_OK ){ keyvaluestore_close(pKV); print_result("ACID Atomicity (WAL)", 0); return; }
 
   /* Verify ALL 50 keys exist with correct values */
   int all_exist = 1;
@@ -874,8 +874,8 @@ static void test_wal_acid_atomicity(void){
     snprintf(k, sizeof(k), "atom_%d", i);
     snprintf(expected, sizeof(expected), "atomval_%d", i);
     void *got = NULL; int glen = 0;
-    rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
-    if( rc != KVSTORE_OK || !got ||
+    rc = keyvaluestore_get(pKV, k, (int)strlen(k), &got, &glen);
+    if( rc != KEYVALUESTORE_OK || !got ||
         glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
       all_exist = 0;
     }
@@ -887,7 +887,7 @@ static void test_wal_acid_atomicity(void){
   if( !none_exist ) printf("  FAIL: rolled-back keys still exist\n");
   if( !all_exist ) printf("  FAIL: committed keys not found\n");
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("ACID Atomicity (WAL) - all-or-nothing", passed);
 }
@@ -897,35 +897,35 @@ static void test_wal_acid_atomicity(void){
 ** After writes and reopens, the database remains internally consistent.
 ** ================================================================ */
 static void test_wal_acid_consistency(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
   /* Write data in a transaction */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
 
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     int i;
     for(i = 0; i < 200; i++){
       char k[32], v[64];
       snprintf(k, sizeof(k), "cons_%d", i);
       snprintf(v, sizeof(v), "consistency_value_%d_padding", i);
-      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+      keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
     }
-    kvstore_commit(pKV);
+    keyvaluestore_commit(pKV);
   }
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
 
   /* Reopen and run integrity check */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Consistency (WAL)", 0); return; }
 
   char *errMsg = NULL;
-  rc = kvstore_integrity_check(pKV, &errMsg);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_integrity_check(pKV, &errMsg);
+  if( rc == KEYVALUESTORE_OK ){
     /* Also verify data is readable */
     int ok = 1;
     int i;
@@ -934,8 +934,8 @@ static void test_wal_acid_consistency(void){
       snprintf(k, sizeof(k), "cons_%d", i);
       snprintf(expected, sizeof(expected), "consistency_value_%d_padding", i);
       void *got = NULL; int glen = 0;
-      rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
-      if( rc != KVSTORE_OK || !got ||
+      rc = keyvaluestore_get(pKV, k, (int)strlen(k), &got, &glen);
+      if( rc != KEYVALUESTORE_OK || !got ||
           glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
         ok = 0;
         printf("  FAIL: key cons_%d mismatch\n", i);
@@ -948,7 +948,7 @@ static void test_wal_acid_consistency(void){
     if( errMsg ) sqliteFree(errMsg);
   }
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("ACID Consistency (WAL) - integrity after reopen", passed);
 }
@@ -959,49 +959,49 @@ static void test_wal_acid_consistency(void){
 ** Phantom rows added in a rolled-back txn must vanish.
 ** ================================================================ */
 static void test_wal_acid_isolation(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Isolation (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Isolation (WAL)", 0); return; }
 
   /* Write baseline data */
   const char *key = "iso_key";
   const char *val_v1 = "isolation_v1";
-  kvstore_put(pKV, key, (int)strlen(key), val_v1, (int)strlen(val_v1));
+  keyvaluestore_put(pKV, key, (int)strlen(key), val_v1, (int)strlen(val_v1));
 
   /* Start txn, overwrite, add phantom, then rollback */
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     const char *val_v2 = "isolation_v2_SHOULD_NOT_PERSIST";
-    kvstore_put(pKV, key, (int)strlen(key), val_v2, (int)strlen(val_v2));
+    keyvaluestore_put(pKV, key, (int)strlen(key), val_v2, (int)strlen(val_v2));
 
     const char *tmp_key = "iso_phantom";
     const char *tmp_val = "phantom_val";
-    kvstore_put(pKV, tmp_key, (int)strlen(tmp_key), tmp_val, (int)strlen(tmp_val));
+    keyvaluestore_put(pKV, tmp_key, (int)strlen(tmp_key), tmp_val, (int)strlen(tmp_val));
 
-    kvstore_rollback(pKV);
+    keyvaluestore_rollback(pKV);
   }
 
   /* After rollback: original value should be intact */
   void *got = NULL; int glen = 0;
-  rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
-  int v1_ok = (rc == KVSTORE_OK && got &&
+  rc = keyvaluestore_get(pKV, key, (int)strlen(key), &got, &glen);
+  int v1_ok = (rc == KEYVALUESTORE_OK && got &&
                glen == (int)strlen(val_v1) &&
                memcmp(got, val_v1, glen) == 0);
   if( got ){ sqliteFree(got); } got = NULL;
 
   /* Phantom key should not exist */
   int phantom_exists = 0;
-  kvstore_exists(pKV, "iso_phantom", 11, &phantom_exists);
+  keyvaluestore_exists(pKV, "iso_phantom", 11, &phantom_exists);
 
   passed = v1_ok && !phantom_exists;
   if( !v1_ok ) printf("  FAIL: original value corrupted after rollback\n");
   if( phantom_exists ) printf("  FAIL: phantom key persists after rollback\n");
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("ACID Isolation (WAL) - rollback isolation", passed);
 }
@@ -1012,45 +1012,45 @@ static void test_wal_acid_isolation(void){
 ** Uncommitted data must NOT survive close/reopen.
 ** ================================================================ */
 static void test_wal_acid_durability(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
   /* Phase 1: Write committed data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
 
   int i;
   for(i = 0; i < 100; i++){
     char k[32], v[64];
     snprintf(k, sizeof(k), "dur_%d", i);
     snprintf(v, sizeof(v), "durable_value_%d_xyz", i);
-    kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+    keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
   }
 
   /* Phase 2: Start uncommitted txn with overwrites + phantom keys */
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     for(i = 0; i < 100; i++){
       char k[32], v[64];
       snprintf(k, sizeof(k), "dur_%d", i);
       snprintf(v, sizeof(v), "UNCOMMITTED_OVERWRITE_%d", i);
-      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+      keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
     }
     for(i = 100; i < 150; i++){
       char k[32], v[32];
       snprintf(k, sizeof(k), "dur_%d", i);
       snprintf(v, sizeof(v), "phantom_%d", i);
-      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+      keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
     }
     /* Close WITHOUT committing */
   }
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
 
   /* Phase 3: Reopen and verify committed values survived */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Durability (WAL)", 0); return; }
 
   int committed_ok = 1;
   for(i = 0; i < 100; i++){
@@ -1058,8 +1058,8 @@ static void test_wal_acid_durability(void){
     snprintf(k, sizeof(k), "dur_%d", i);
     snprintf(expected, sizeof(expected), "durable_value_%d_xyz", i);
     void *got = NULL; int glen = 0;
-    rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
-    if( rc != KVSTORE_OK || !got ||
+    rc = keyvaluestore_get(pKV, k, (int)strlen(k), &got, &glen);
+    if( rc != KEYVALUESTORE_OK || !got ||
         glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
       committed_ok = 0;
       printf("  FAIL: dur_%d mismatch after reopen\n", i);
@@ -1074,7 +1074,7 @@ static void test_wal_acid_durability(void){
     char k[32];
     snprintf(k, sizeof(k), "dur_%d", i);
     int exists = 0;
-    kvstore_exists(pKV, k, (int)strlen(k), &exists);
+    keyvaluestore_exists(pKV, k, (int)strlen(k), &exists);
     if( exists ){
       phantoms_gone = 0;
       printf("  FAIL: phantom dur_%d survived close\n", i);
@@ -1084,7 +1084,7 @@ static void test_wal_acid_durability(void){
 
   passed = committed_ok && phantoms_gone;
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("ACID Durability (WAL) - survive close/reopen", passed);
 }
@@ -1095,47 +1095,47 @@ static void test_wal_acid_durability(void){
 ** Reopen: baseline intact, uncommitted writes gone.
 ** ================================================================ */
 static void test_wal_acid_crash_atomicity(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
   /* Write baseline data */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
 
   const char *base_key = "crash_base";
   const char *base_val = "base_value";
-  kvstore_put(pKV, base_key, (int)strlen(base_key), base_val, (int)strlen(base_val));
-  kvstore_close(pKV);
+  keyvaluestore_put(pKV, base_key, (int)strlen(base_key), base_val, (int)strlen(base_val));
+  keyvaluestore_close(pKV);
 
   /* Reopen, start txn, write, close without commit */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
 
-  rc = kvstore_begin(pKV, 1);
-  if( rc == KVSTORE_OK ){
+  rc = keyvaluestore_begin(pKV, 1);
+  if( rc == KEYVALUESTORE_OK ){
     const char *new_val = "CRASHED_OVERWRITE";
-    kvstore_put(pKV, base_key, (int)strlen(base_key), new_val, (int)strlen(new_val));
+    keyvaluestore_put(pKV, base_key, (int)strlen(base_key), new_val, (int)strlen(new_val));
 
     int i;
     for(i = 0; i < 50; i++){
       char k[32], v[32];
       snprintf(k, sizeof(k), "crash_%d", i);
       snprintf(v, sizeof(v), "crashval_%d", i);
-      kvstore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
+      keyvaluestore_put(pKV, k, (int)strlen(k), v, (int)strlen(v));
     }
     /* DO NOT commit */
   }
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
 
   /* Reopen: baseline should be original, crash_ keys should not exist */
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("ACID Crash Atomicity (WAL)", 0); return; }
 
   void *got = NULL; int glen = 0;
-  rc = kvstore_get(pKV, base_key, (int)strlen(base_key), &got, &glen);
-  int base_ok = (rc == KVSTORE_OK && got &&
+  rc = keyvaluestore_get(pKV, base_key, (int)strlen(base_key), &got, &glen);
+  int base_ok = (rc == KEYVALUESTORE_OK && got &&
                  glen == (int)strlen(base_val) &&
                  memcmp(got, base_val, glen) == 0);
   if( got ) sqliteFree(got);
@@ -1146,7 +1146,7 @@ static void test_wal_acid_crash_atomicity(void){
     char k[32];
     snprintf(k, sizeof(k), "crash_%d", i);
     int exists = 0;
-    kvstore_exists(pKV, k, (int)strlen(k), &exists);
+    keyvaluestore_exists(pKV, k, (int)strlen(k), &exists);
     if( exists ){
       crash_keys_gone = 0;
       printf("  FAIL: crash_%d survived uncommitted txn\n", i);
@@ -1157,7 +1157,7 @@ static void test_wal_acid_crash_atomicity(void){
   passed = base_ok && crash_keys_gone;
   if( !base_ok ) printf("  FAIL: base value corrupted after crash recovery\n");
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("ACID Crash Atomicity (WAL) - uncommitted data gone", passed);
 }
@@ -1166,35 +1166,35 @@ static void test_wal_acid_crash_atomicity(void){
 ** TEST 21: Statistics tracking under WAL
 ** ================================================================ */
 static void test_wal_statistics(void){
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc, passed = 0;
 
   cleanup();
 
-  rc = kvstore_open(WAL_DB_FILE, &pKV, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ){ print_result("WAL statistics", 0); return; }
+  rc = keyvaluestore_open(WAL_DB_FILE, &pKV, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ){ print_result("WAL statistics", 0); return; }
 
-  kvstore_put(pKV, "s1", 2, "v1", 2);
-  kvstore_put(pKV, "s2", 2, "v2", 2);
-  kvstore_put(pKV, "s3", 2, "v3", 2);
+  keyvaluestore_put(pKV, "s1", 2, "v1", 2);
+  keyvaluestore_put(pKV, "s2", 2, "v2", 2);
+  keyvaluestore_put(pKV, "s3", 2, "v3", 2);
 
   void *got = NULL; int glen = 0;
-  kvstore_get(pKV, "s1", 2, &got, &glen);
+  keyvaluestore_get(pKV, "s1", 2, &got, &glen);
   if( got ) sqliteFree(got);
-  kvstore_get(pKV, "s2", 2, &got, &glen);
+  keyvaluestore_get(pKV, "s2", 2, &got, &glen);
   if( got ) sqliteFree(got);
 
-  kvstore_delete(pKV, "s3", 2);
+  keyvaluestore_delete(pKV, "s3", 2);
 
-  KVStoreStats stats;
-  rc = kvstore_stats(pKV, &stats);
-  if( rc == KVSTORE_OK ){
+  KeyValueStoreStats stats;
+  rc = keyvaluestore_stats(pKV, &stats);
+  if( rc == KEYVALUESTORE_OK ){
     printf("  Stats: puts=%" PRIu64 ", gets=%" PRIu64 ", deletes=%" PRIu64 "\n",
            stats.nPuts, stats.nGets, stats.nDeletes);
     passed = (stats.nPuts == 3 && stats.nGets == 2 && stats.nDeletes == 1);
   }
 
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   cleanup();
   print_result("WAL statistics tracking", passed);
 }
@@ -1205,7 +1205,7 @@ static void test_wal_statistics(void){
 int main(void){
   printf("\n");
   printf("========================================\n");
-  printf("KVStore WAL Mode Test Suite\n");
+  printf("KeyValueStore WAL Mode Test Suite\n");
   printf("========================================\n");
 
   srand((unsigned)time(NULL));

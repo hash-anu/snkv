@@ -1,5 +1,5 @@
 /*
-** KVStore Performance Benchmark
+** KeyValueStore Performance Benchmark
 ** 
 ** Tests: Sequential writes, random reads, sequential scan, 
 **        random updates, random deletes, bulk operations
@@ -10,7 +10,7 @@
 #include <string.h>
 #include <time.h>
 #include <inttypes.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "platform_compat.h"
 
 #define DB_FILE      "benchmark_kv.db"
@@ -64,7 +64,7 @@ static void print_header(const char *title) {
 }
 
 /* ==================== BENCHMARK 1: Sequential Writes ==================== */
-static void bench_sequential_writes(KVStore *kv) {
+static void bench_sequential_writes(KeyValueStore *kv) {
     print_header("BENCHMARK 1: Sequential Writes");
     printf("  Writing %d records in batches of %d...\n\n", NUM_RECORDS, BATCH_SIZE);
     
@@ -76,17 +76,17 @@ static void bench_sequential_writes(KVStore *kv) {
     
     for (i = 0; i < NUM_RECORDS; i++) {
         if (i % BATCH_SIZE == 0) {
-            if (i > 0) kvstore_commit(kv);
-            kvstore_begin(kv, 1);
+            if (i > 0) keyvaluestore_commit(kv);
+            keyvaluestore_begin(kv, 1);
         }
         
         snprintf(key, sizeof(key), "key_%08d", i);
         snprintf(value, sizeof(value), 
                  "value_%08d_with_some_additional_data_to_make_it_realistic", i);
         
-        kvstore_put(kv, key, strlen(key), value, strlen(value));
+        keyvaluestore_put(kv, key, strlen(key), value, strlen(value));
     }
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
     
     end = get_time();
     
@@ -94,7 +94,7 @@ static void bench_sequential_writes(KVStore *kv) {
 }
 
 /* ==================== BENCHMARK 2: Random Reads ==================== */
-static void bench_random_reads(KVStore *kv) {
+static void bench_random_reads(KeyValueStore *kv) {
     print_header("BENCHMARK 2: Random Reads");
     printf("  Reading %d random records...\n\n", NUM_READS);
     
@@ -109,7 +109,7 @@ static void bench_random_reads(KVStore *kv) {
         int idx = rand() % NUM_RECORDS;
         snprintf(key, sizeof(key), "key_%08d", idx);
         
-        if (kvstore_get(kv, key, strlen(key), &value, &vlen) == KVSTORE_OK) {
+        if (keyvaluestore_get(kv, key, strlen(key), &value, &vlen) == KEYVALUESTORE_OK) {
             sqliteFree(value);
         }
     }
@@ -120,36 +120,36 @@ static void bench_random_reads(KVStore *kv) {
 }
 
 /* ==================== BENCHMARK 3: Sequential Scan ==================== */
-static void bench_sequential_scan(KVStore *kv) {
+static void bench_sequential_scan(KeyValueStore *kv) {
     print_header("BENCHMARK 3: Sequential Scan");
     printf("  Scanning all records...\n\n");
     
-    KVIterator *it = NULL;
+    KeyValueIterator *it = NULL;
     void *key, *value;
     int klen, vlen, count = 0;
     double start, end;
     
-    kvstore_iterator_create(kv, &it);
+    keyvaluestore_iterator_create(kv, &it);
     
     start = get_time();
     
-    kvstore_iterator_first(it);
-    while (!kvstore_iterator_eof(it)) {
-        kvstore_iterator_key(it, &key, &klen);
-        kvstore_iterator_value(it, &value, &vlen);
+    keyvaluestore_iterator_first(it);
+    while (!keyvaluestore_iterator_eof(it)) {
+        keyvaluestore_iterator_key(it, &key, &klen);
+        keyvaluestore_iterator_value(it, &value, &vlen);
         count++;
-        kvstore_iterator_next(it);
+        keyvaluestore_iterator_next(it);
     }
     
     end = get_time();
     
-    kvstore_iterator_close(it);
+    keyvaluestore_iterator_close(it);
     
     print_result("Sequential scan", end - start, count);
 }
 
 /* ==================== BENCHMARK 4: Random Updates ==================== */
-static void bench_random_updates(KVStore *kv) {
+static void bench_random_updates(KeyValueStore *kv) {
     print_header("BENCHMARK 4: Random Updates");
     printf("  Updating %d random records...\n\n", NUM_UPDATES);
     
@@ -157,7 +157,7 @@ static void bench_random_updates(KVStore *kv) {
     int i;
     double start, end;
     
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     
     start = get_time();
     
@@ -166,10 +166,10 @@ static void bench_random_updates(KVStore *kv) {
         snprintf(key, sizeof(key), "key_%08d", idx);
         snprintf(value, sizeof(value), "updated_value_%08d", idx);
         
-        kvstore_put(kv, key, strlen(key), value, strlen(value));
+        keyvaluestore_put(kv, key, strlen(key), value, strlen(value));
     }
     
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
     
     end = get_time();
     
@@ -177,7 +177,7 @@ static void bench_random_updates(KVStore *kv) {
 }
 
 /* ==================== BENCHMARK 5: Random Deletes ==================== */
-static void bench_random_deletes(KVStore *kv) {
+static void bench_random_deletes(KeyValueStore *kv) {
     print_header("BENCHMARK 5: Random Deletes");
     printf("  Deleting %d random records...\n\n", NUM_DELETES);
     
@@ -185,17 +185,17 @@ static void bench_random_deletes(KVStore *kv) {
     int i;
     double start, end;
     
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     
     start = get_time();
     
     for (i = 0; i < NUM_DELETES; i++) {
         int idx = rand() % NUM_RECORDS;
         snprintf(key, sizeof(key), "key_%08d", idx);
-        kvstore_delete(kv, key, strlen(key));
+        keyvaluestore_delete(kv, key, strlen(key));
     }
     
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
     
     end = get_time();
     
@@ -203,7 +203,7 @@ static void bench_random_deletes(KVStore *kv) {
 }
 
 /* ==================== BENCHMARK 6: Exists Checks ==================== */
-static void bench_exists_checks(KVStore *kv) {
+static void bench_exists_checks(KeyValueStore *kv) {
     print_header("BENCHMARK 6: Exists Checks");
     printf("  Checking existence of %d keys...\n\n", NUM_READS);
     
@@ -216,7 +216,7 @@ static void bench_exists_checks(KVStore *kv) {
     for (i = 0; i < NUM_READS; i++) {
         int idx = rand() % NUM_RECORDS;
         snprintf(key, sizeof(key), "key_%08d", idx);
-        kvstore_exists(kv, key, strlen(key), &exists);
+        keyvaluestore_exists(kv, key, strlen(key), &exists);
     }
     
     end = get_time();
@@ -225,7 +225,7 @@ static void bench_exists_checks(KVStore *kv) {
 }
 
 /* ==================== BENCHMARK 7: Mixed Workload ==================== */
-static void bench_mixed_workload(KVStore *kv) {
+static void bench_mixed_workload(KeyValueStore *kv) {
     print_header("BENCHMARK 7: Mixed Workload");
     printf("  70%% reads, 20%% writes, 10%% deletes...\n\n");
     
@@ -235,7 +235,7 @@ static void bench_mixed_workload(KVStore *kv) {
     int vlen, i;
     double start, end;
     
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     
     start = get_time();
     
@@ -247,20 +247,20 @@ static void bench_mixed_workload(KVStore *kv) {
         
         if (op < 70) {
             /* Read */
-            if (kvstore_get(kv, key, strlen(key), &val, &vlen) == KVSTORE_OK) {
+            if (keyvaluestore_get(kv, key, strlen(key), &val, &vlen) == KEYVALUESTORE_OK) {
                 sqliteFree(val);
             }
         } else if (op < 90) {
             /* Write */
             snprintf(value, sizeof(value), "mixed_value_%08d", idx);
-            kvstore_put(kv, key, strlen(key), value, strlen(value));
+            keyvaluestore_put(kv, key, strlen(key), value, strlen(value));
         } else {
             /* Delete */
-            kvstore_delete(kv, key, strlen(key));
+            keyvaluestore_delete(kv, key, strlen(key));
         }
     }
     
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
     
     end = get_time();
     
@@ -272,29 +272,29 @@ static void bench_bulk_insert(void) {
     print_header("BENCHMARK 8: Bulk Insert (Single Transaction)");
     printf("  Inserting %d records in one transaction...\n\n", NUM_RECORDS);
     
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     char key[32], value[128];
     int i;
     double start, end;
     
     remove("benchmark_bulk.db");
-    kvstore_open("benchmark_bulk.db", &kv, KVSTORE_JOURNAL_WAL);
+    keyvaluestore_open("benchmark_bulk.db", &kv, KEYVALUESTORE_JOURNAL_WAL);
     
-    kvstore_begin(kv, 1);
+    keyvaluestore_begin(kv, 1);
     
     start = get_time();
     
     for (i = 0; i < NUM_RECORDS; i++) {
         snprintf(key, sizeof(key), "bulk_key_%08d", i);
         snprintf(value, sizeof(value), "bulk_value_%08d", i);
-        kvstore_put(kv, key, strlen(key), value, strlen(value));
+        keyvaluestore_put(kv, key, strlen(key), value, strlen(value));
     }
     
-    kvstore_commit(kv);
+    keyvaluestore_commit(kv);
     
     end = get_time();
     
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     remove("benchmark_bulk.db");
     
     print_result("Bulk insert", end - start, NUM_RECORDS);
@@ -302,12 +302,12 @@ static void bench_bulk_insert(void) {
 
 /* ==================== Main ==================== */
 int main(void) {
-    KVStore *kv = NULL;
+    KeyValueStore *kv = NULL;
     double total_start, total_end;
     
     printf("\n");
     printf(COLOR_BLUE "+==============================================================+\n");
-    printf("|                  KVStore Performance Benchmark               |\n");
+    printf("|                  KeyValueStore Performance Benchmark               |\n");
     printf("|                                                              |\n");
     printf("|  Database: %-50s|\n", DB_FILE);
     printf("|  Records:  %-50d|\n", NUM_RECORDS);
@@ -320,8 +320,8 @@ int main(void) {
     printf("\n" COLOR_YELLOW "Initializing database..." COLOR_RESET "\n");
     remove(DB_FILE);
     
-    if (kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL) != KVSTORE_OK) {
-        fprintf(stderr, "Failed to open KVStore\n");
+    if (keyvaluestore_open(DB_FILE, &kv, KEYVALUESTORE_JOURNAL_WAL) != KEYVALUESTORE_OK) {
+        fprintf(stderr, "Failed to open KeyValueStore\n");
         return 1;
     }
     
@@ -336,15 +336,15 @@ int main(void) {
     bench_exists_checks(kv);
     bench_mixed_workload(kv);
     
-    KVStoreStats stats;
-    kvstore_stats(kv, &stats);
+    KeyValueStoreStats stats;
+    keyvaluestore_stats(kv, &stats);
     printf("  Total operations:\n");
     printf("    - Puts:    %" PRIu64 "\n", stats.nPuts);
     printf("    - Gets:    %" PRIu64 "\n", stats.nGets);
     printf("    - Deletes: %" PRIu64 "\n", stats.nDeletes);
 
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     
     bench_bulk_insert();
     

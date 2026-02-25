@@ -39,10 +39,10 @@ from typing import List
 
 # ── importpath: works with PYTHONPATH=. or from repo root ──────────────────
 try:
-    from snkv import KVStore, JOURNAL_WAL, SYNC_NORMAL, NotFoundError
+    from snkv import KeyValueStore, JOURNAL_WAL, SYNC_NORMAL, NotFoundError
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from snkv import KVStore, JOURNAL_WAL, SYNC_NORMAL, NotFoundError  # type: ignore
+    from snkv import KeyValueStore, JOURNAL_WAL, SYNC_NORMAL, NotFoundError  # type: ignore
 
 # ── key / value generators ─────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ def write_phase(
     total_bytes = 0
     t0 = time.monotonic()
 
-    with KVStore(
+    with KeyValueStore(
         db_path,
         journal_mode=JOURNAL_WAL,
         sync_level=SYNC_NORMAL,
@@ -190,7 +190,7 @@ def verify_phase(db_path: str, n_records: int, value_size: int) -> dict:
     total_bytes = 0
     t0 = time.monotonic()
 
-    with KVStore(
+    with KeyValueStore(
         db_path,
         journal_mode=JOURNAL_WAL,
         sync_level=SYNC_NORMAL,

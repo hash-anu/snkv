@@ -10,7 +10,7 @@ CF stress, and growing value sizes.
 import random
 import threading
 import pytest
-from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE, NotFoundError
+from snkv import KeyValueStore, JOURNAL_WAL, JOURNAL_DELETE, NotFoundError
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE, NotFoundError
 def test_edge_empty_value(tmp_path):
     """A key with an empty (zero-byte) value must round-trip correctly."""
     path = str(tmp_path / "edge.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"empty"] = b""
         assert db[b"empty"] == b""
 
@@ -29,7 +29,7 @@ def test_edge_binary_key_with_nulls(tmp_path):
     """A key containing embedded null bytes must be stored and retrieved."""
     path = str(tmp_path / "null_key.db")
     key = bytes([0x01, 0x00, 0x02, 0x00, 0x03])
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[key] = b"binary_val"
         assert db[key] == b"binary_val"
 
@@ -37,7 +37,7 @@ def test_edge_binary_key_with_nulls(tmp_path):
 def test_edge_single_byte_key(tmp_path):
     """A single-byte key (0xFF) must work."""
     path = str(tmp_path / "single.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[bytes([0xFF])] = b"ff_value"
         assert db[bytes([0xFF])] == b"ff_value"
 
@@ -47,7 +47,7 @@ def test_edge_large_key_and_value(tmp_path):
     path = str(tmp_path / "bigkv.db")
     key   = bytes(range(256)) * 4                    # 1 KB
     value = bytes(range(256)) * (1024 * 1024 // 256) # 1 MB
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[key] = value
         assert db[key] == value
 
@@ -55,7 +55,7 @@ def test_edge_large_key_and_value(tmp_path):
 def test_edge_overwrite_100_times(tmp_path):
     """100 successive overwrites of the same key — only the last survives."""
     path = str(tmp_path / "ow100.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         for i in range(100):
             db[b"k"] = f"version-{i}".encode()
         assert db[b"k"] == b"version-99"
@@ -63,13 +63,13 @@ def test_edge_overwrite_100_times(tmp_path):
 
 def test_edge_get_nonexistent(tmp_path):
     path = str(tmp_path / "nokey.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         assert db.get(b"ghost") is None
 
 
 def test_edge_delete_nonexistent(tmp_path):
     path = str(tmp_path / "nodel.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         with pytest.raises(KeyError):
             db.delete(b"ghost")
 
@@ -77,7 +77,7 @@ def test_edge_delete_nonexistent(tmp_path):
 def test_edge_put_after_delete(tmp_path):
     """A key can be reinserted after deletion and must return the new value."""
     path = str(tmp_path / "readd.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"k"] = b"first"
         db.delete(b"k")
         db[b"k"] = b"second"
@@ -96,7 +96,7 @@ def test_write_storm_100k(tmp_path, journal_mode):
     N = 100_000
     rng = random.Random(1)
 
-    with KVStore(path, journal_mode=journal_mode) as db:
+    with KeyValueStore(path, journal_mode=journal_mode) as db:
         for batch_start in range(0, N, 1_000):
             db.begin(write=True)
             for i in range(batch_start, batch_start + 1_000):
@@ -119,7 +119,7 @@ def test_large_dataset_50k(tmp_path):
     path = str(tmp_path / "large50k.db")
     N = 50_000
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.begin(write=True)
         for i in range(N):
             db[f"ld{i:07d}".encode()] = f"lv{i}".encode()
@@ -157,15 +157,15 @@ def test_crash_uncommitted_rolled_back(tmp_path):
     """Uncommitted data must be absent after close + reopen."""
     path = str(tmp_path / "crash.db")
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db[b"committed"] = b"safe"
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.begin(write=True)
         db[b"lost"] = b"never_committed"
         # close without commit
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         assert db[b"committed"] == b"safe"
         assert db.get(b"lost") is None
 
@@ -178,16 +178,16 @@ def test_rapid_open_close_50_cycles(tmp_path):
     """50 open/close cycles must preserve a 'persist' key throughout."""
     path = str(tmp_path / "rapid.db")
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"persist"] = b"anchor"
 
     for cycle in range(50):
-        with KVStore(path) as db:
+        with KeyValueStore(path) as db:
             assert db[b"persist"] == b"anchor"
             if cycle % 10 == 0:
                 db[f"c{cycle}".encode()] = b"v"
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.integrity_check()
 
 
@@ -199,14 +199,14 @@ def test_mode_switch_delete_wal_delete(tmp_path):
     """Data written in DELETE mode, WAL mode, then back to DELETE — all survive."""
     path = str(tmp_path / "mswitch.db")
 
-    with KVStore(path, journal_mode=JOURNAL_DELETE) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_DELETE) as db:
         db[b"from_delete"] = b"d"
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         assert db[b"from_delete"] == b"d"
         db[b"from_wal"] = b"w"
 
-    with KVStore(path, journal_mode=JOURNAL_DELETE) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_DELETE) as db:
         assert db[b"from_delete"] == b"d"
         assert db[b"from_wal"]    == b"w"
 
@@ -219,7 +219,7 @@ def test_transaction_cycling_1000(tmp_path):
     """1 000 individual begin/put/commit cycles — last key must be readable."""
     path = str(tmp_path / "txcycle.db")
     N = 1_000
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         for i in range(N):
             db.begin(write=True)
             db[f"cyc{i:06d}".encode()] = f"cv{i}".encode()
@@ -232,7 +232,7 @@ def test_transaction_cycling_1000(tmp_path):
 def test_rollback_cycling_never_persists(tmp_path):
     """1 000 begin/put/rollback cycles — the ephemeral key must never persist."""
     path = str(tmp_path / "rbcycle.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"anchor"] = b"stable"
 
         for i in range(1_000):
@@ -254,7 +254,7 @@ def test_mixed_workload_10k_ops(tmp_path):
     rng = random.Random(7)
     key_space = [f"mk{i:05d}".encode() for i in range(500)]
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         # seed with some initial data
         db.begin(write=True)
         for k in key_space[:100]:
@@ -304,7 +304,7 @@ def test_cf_stress_10cfs(tmp_path):
     N_CFS = 10
     N_KEYS = 200
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         for cf_idx in range(N_CFS):
             with db.create_column_family(f"cf{cf_idx}") as cf:
                 db.begin(write=True)
@@ -337,6 +337,6 @@ def test_growing_value_sizes(tmp_path, size):
     """Values at each size must round-trip exactly."""
     path = str(tmp_path / f"grow_{size}.db")
     value = bytes((i % 256) for i in range(size))
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"big"] = value
         assert db[b"big"] == value

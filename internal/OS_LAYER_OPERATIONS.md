@@ -9,7 +9,7 @@ into platform-specific system calls via the VFS (Virtual File System).
 ## Architecture Context
 
 ```
-  kvstore.c  (API)
+  keyvaluestore.c  (API)
       │
   btree.c    (B-tree)
       │
@@ -1150,10 +1150,10 @@ Gets the current time as milliseconds since Julian epoch.
 
 ---
 
-## Complete I/O Flow: kvstore_put → Disk
+## Complete I/O Flow: keyvaluestore_put → Disk
 
 ```
-  kvstore_put("key", "value")
+  keyvaluestore_put("key", "value")
       │
       ▼
   btree.c: sqlite3BtreeInsert()
@@ -1168,7 +1168,7 @@ Gets the current time as milliseconds since Julian epoch.
       │
       ├── Modify cell data in page3 buffer (in-memory)
       │
-      └── kvstore_commit()
+      └── keyvaluestore_commit()
             │
             ├── [WAL mode]
             │     sqlite3OsWrite(walFd, frame_hdr+page3, 4120, walOff)

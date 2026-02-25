@@ -1,9 +1,9 @@
 /*
-** Prefix Search Test Suite for KVStore
+** Prefix Search Test Suite for KeyValueStore
 **
 ** Tests cover:
-** - Basic prefix search with kvstore_prefix_iterator_create
-** - Column family prefix search with kvstore_cf_prefix_iterator_create
+** - Basic prefix search with keyvaluestore_prefix_iterator_create
+** - Column family prefix search with keyvaluestore_cf_prefix_iterator_create
 ** - Sorted key order verification
 ** - Empty prefix results
 ** - Single-character prefixes
@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 
 #define TEST_DB "test_prefix.db"
 
@@ -64,15 +64,15 @@ static void cleanup_db(const char *db){
 ** TEST 1: Basic prefix search
 ** ====================================================================== */
 static void test_basic_prefix_search(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Basic prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
   /* Insert keys in non-sorted order */
   const char *keys[] = {
@@ -83,29 +83,29 @@ static void test_basic_prefix_search(void){
   };
   int nKeys = sizeof(keys) / sizeof(keys[0]);
 
-  kvstore_begin(kv, 1);
+  keyvaluestore_begin(kv, 1);
   for(int i = 0; i < nKeys; i++){
-    rc = kvstore_put(kv, keys[i], (int)strlen(keys[i]), "v", 1);
-    if( rc != KVSTORE_OK ) TEST_FAIL("put failed");
+    rc = keyvaluestore_put(kv, keys[i], (int)strlen(keys[i]), "v", 1);
+    if( rc != KEYVALUESTORE_OK ) TEST_FAIL("put failed");
   }
-  kvstore_commit(kv);
+  keyvaluestore_commit(kv);
 
   /* Prefix search for "user:" -- should find 4 keys */
-  rc = kvstore_prefix_iterator_create(kv, "user:", 5, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "user:", 5, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    rc = kvstore_iterator_key(pIter, &k, &nk);
-    if( rc != KVSTORE_OK ) TEST_FAIL("iterator key failed");
+    rc = keyvaluestore_iterator_key(pIter, &k, &nk);
+    if( rc != KEYVALUESTORE_OK ) TEST_FAIL("iterator key failed");
     if( nk < 5 || memcmp(k, "user:", 5) != 0 ){
       TEST_FAIL("key does not start with 'user:'");
     }
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 4 ){
     printf("  Expected 4 user: keys, got %d\n", count);
@@ -113,7 +113,7 @@ static void test_basic_prefix_search(void){
   }
   printf("  [OK] Found %d keys with prefix 'user:'\n", count);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -122,33 +122,33 @@ static void test_basic_prefix_search(void){
 ** TEST 2: Sorted order verification
 ** ====================================================================== */
 static void test_sorted_order(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc;
 
   TEST_START("Sorted key order in prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
   /* Insert keys in reverse order */
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "item:zzz", 8, "v", 1);
-  kvstore_put(kv, "item:aaa", 8, "v", 1);
-  kvstore_put(kv, "item:mmm", 8, "v", 1);
-  kvstore_put(kv, "item:bbb", 8, "v", 1);
-  kvstore_put(kv, "other:xxx", 9, "v", 1);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "item:zzz", 8, "v", 1);
+  keyvaluestore_put(kv, "item:aaa", 8, "v", 1);
+  keyvaluestore_put(kv, "item:mmm", 8, "v", 1);
+  keyvaluestore_put(kv, "item:bbb", 8, "v", 1);
+  keyvaluestore_put(kv, "other:xxx", 9, "v", 1);
+  keyvaluestore_commit(kv);
 
-  rc = kvstore_prefix_iterator_create(kv, "item:", 5, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "item:", 5, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   const char *expected[] = {"item:aaa", "item:bbb", "item:mmm", "item:zzz"};
   int idx = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     if( idx >= 4 ){
       TEST_FAIL("too many keys returned");
     }
@@ -159,16 +159,16 @@ static void test_sorted_order(void){
     }
     printf("  [OK] Key %d: %.*s\n", idx, nk, (char*)k);
     idx++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( idx != 4 ){
     printf("  Expected 4 keys, got %d\n", idx);
     TEST_FAIL("wrong count");
   }
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -177,31 +177,31 @@ static void test_sorted_order(void){
 ** TEST 3: Empty prefix results
 ** ====================================================================== */
 static void test_empty_prefix_results(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Empty prefix results (no matching keys)");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "aaa", 3, "v", 1);
-  kvstore_put(kv, "bbb", 3, "v", 1);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "aaa", 3, "v", 1);
+  keyvaluestore_put(kv, "bbb", 3, "v", 1);
+  keyvaluestore_commit(kv);
 
   /* Search for a prefix that doesn't exist */
-  rc = kvstore_prefix_iterator_create(kv, "zzz", 3, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "zzz", 3, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 0 ){
     printf("  Expected 0 keys, got %d\n", count);
@@ -210,15 +210,15 @@ static void test_empty_prefix_results(void){
   printf("  [OK] Correctly returned 0 keys for non-existent prefix\n");
 
   /* Search for prefix between existing keys */
-  rc = kvstore_prefix_iterator_create(kv, "abc", 3, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "abc", 3, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 0 ){
     printf("  Expected 0 keys for 'abc' prefix, got %d\n", count);
@@ -227,21 +227,21 @@ static void test_empty_prefix_results(void){
   printf("  [OK] Correctly returned 0 keys for 'abc' prefix\n");
 
   /* Empty database */
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open empty db failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open empty db failed");
 
-  rc = kvstore_prefix_iterator_create(kv, "any", 3, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator on empty db failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "any", 3, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator on empty db failed");
 
-  if( !kvstore_iterator_eof(pIter) ){
+  if( !keyvaluestore_iterator_eof(pIter) ){
     TEST_FAIL("should be eof on empty database");
   }
   printf("  [OK] Correctly returned eof on empty database\n");
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -250,40 +250,40 @@ static void test_empty_prefix_results(void){
 ** TEST 4: Single-character prefix
 ** ====================================================================== */
 static void test_single_char_prefix(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Single-character prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "apple", 5, "v", 1);
-  kvstore_put(kv, "avocado", 7, "v", 1);
-  kvstore_put(kv, "banana", 6, "v", 1);
-  kvstore_put(kv, "blueberry", 9, "v", 1);
-  kvstore_put(kv, "cherry", 6, "v", 1);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "apple", 5, "v", 1);
+  keyvaluestore_put(kv, "avocado", 7, "v", 1);
+  keyvaluestore_put(kv, "banana", 6, "v", 1);
+  keyvaluestore_put(kv, "blueberry", 9, "v", 1);
+  keyvaluestore_put(kv, "cherry", 6, "v", 1);
+  keyvaluestore_commit(kv);
 
   /* Prefix "a" should match apple, avocado */
-  rc = kvstore_prefix_iterator_create(kv, "a", 1, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "a", 1, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     if( nk < 1 || ((char*)k)[0] != 'a' ){
       TEST_FAIL("key doesn't start with 'a'");
     }
     printf("  [OK] Found: %.*s\n", nk, (char*)k);
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 2 ){
     printf("  Expected 2 keys for prefix 'a', got %d\n", count);
@@ -291,15 +291,15 @@ static void test_single_char_prefix(void){
   }
 
   /* Prefix "b" should match banana, blueberry */
-  rc = kvstore_prefix_iterator_create(kv, "b", 1, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "b", 1, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 2 ){
     printf("  Expected 2 keys for prefix 'b', got %d\n", count);
@@ -307,7 +307,7 @@ static void test_single_char_prefix(void){
   }
   printf("  [OK] Prefix 'b' matched %d keys\n", count);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -316,37 +316,37 @@ static void test_single_char_prefix(void){
 ** TEST 5: Prefix with exact key match
 ** ====================================================================== */
 static void test_exact_key_as_prefix(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Prefix that exactly matches an existing key");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "app", 3, "v1", 2);
-  kvstore_put(kv, "apple", 5, "v2", 2);
-  kvstore_put(kv, "application", 11, "v3", 2);
-  kvstore_put(kv, "apply", 5, "v4", 2);
-  kvstore_put(kv, "banana", 6, "v5", 2);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "app", 3, "v1", 2);
+  keyvaluestore_put(kv, "apple", 5, "v2", 2);
+  keyvaluestore_put(kv, "application", 11, "v3", 2);
+  keyvaluestore_put(kv, "apply", 5, "v4", 2);
+  keyvaluestore_put(kv, "banana", 6, "v5", 2);
+  keyvaluestore_commit(kv);
 
   /* Prefix "app" should match: app, apple, application, apply */
-  rc = kvstore_prefix_iterator_create(kv, "app", 3, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "app", 3, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     printf("  [OK] Found: %.*s\n", nk, (char*)k);
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 4 ){
     printf("  Expected 4 keys for prefix 'app', got %d\n", count);
@@ -354,21 +354,21 @@ static void test_exact_key_as_prefix(void){
   }
 
   /* Prefix "apple" should match only: apple */
-  rc = kvstore_prefix_iterator_create(kv, "apple", 5, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "apple", 5, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     if( nk != 5 || memcmp(k, "apple", 5) != 0 ){
       printf("  Unexpected key: %.*s\n", nk, (char*)k);
       TEST_FAIL("unexpected key for prefix 'apple'");
     }
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 1 ){
     printf("  Expected 1 key for prefix 'apple', got %d\n", count);
@@ -376,7 +376,7 @@ static void test_exact_key_as_prefix(void){
   }
   printf("  [OK] Prefix 'apple' matched exactly 1 key\n");
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -385,40 +385,40 @@ static void test_exact_key_as_prefix(void){
 ** TEST 6: Column family prefix search
 ** ====================================================================== */
 static void test_cf_prefix_search(void){
-  KVStore *kv = NULL;
-  KVColumnFamily *pCF = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueColumnFamily *pCF = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Column family prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  rc = kvstore_cf_create(kv, "logs", &pCF);
-  if( rc != KVSTORE_OK ) TEST_FAIL("cf create failed");
+  rc = keyvaluestore_cf_create(kv, "logs", &pCF);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("cf create failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_cf_put(pCF, "2024-01-01:info:msg1", 20, "v", 1);
-  kvstore_cf_put(pCF, "2024-01-01:error:msg2", 21, "v", 1);
-  kvstore_cf_put(pCF, "2024-01-02:info:msg3", 20, "v", 1);
-  kvstore_cf_put(pCF, "2024-02-01:warn:msg4", 20, "v", 1);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_cf_put(pCF, "2024-01-01:info:msg1", 20, "v", 1);
+  keyvaluestore_cf_put(pCF, "2024-01-01:error:msg2", 21, "v", 1);
+  keyvaluestore_cf_put(pCF, "2024-01-02:info:msg3", 20, "v", 1);
+  keyvaluestore_cf_put(pCF, "2024-02-01:warn:msg4", 20, "v", 1);
+  keyvaluestore_commit(kv);
 
   /* Search for all January logs */
-  rc = kvstore_cf_prefix_iterator_create(pCF, "2024-01", 7, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("cf prefix iterator create failed");
+  rc = keyvaluestore_cf_prefix_iterator_create(pCF, "2024-01", 7, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("cf prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     printf("  [OK] Found: %.*s\n", nk, (char*)k);
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 3 ){
     printf("  Expected 3 January logs, got %d\n", count);
@@ -426,16 +426,16 @@ static void test_cf_prefix_search(void){
   }
 
   /* Also verify default CF is not affected */
-  kvstore_put(kv, "2024-01-xx", 10, "default_cf_val", 14);
-  rc = kvstore_prefix_iterator_create(kv, "2024-01", 7, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("default cf prefix iterator failed");
+  keyvaluestore_put(kv, "2024-01-xx", 10, "default_cf_val", 14);
+  rc = keyvaluestore_prefix_iterator_create(kv, "2024-01", 7, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("default cf prefix iterator failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 1 ){
     printf("  Expected 1 key in default CF, got %d\n", count);
@@ -443,8 +443,8 @@ static void test_cf_prefix_search(void){
   }
   printf("  [OK] Column family isolation verified\n");
 
-  kvstore_cf_close(pCF);
-  kvstore_close(kv);
+  keyvaluestore_cf_close(pCF);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -453,33 +453,33 @@ static void test_cf_prefix_search(void){
 ** TEST 7: Prefix search with values verification
 ** ====================================================================== */
 static void test_prefix_with_values(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc;
 
   TEST_START("Prefix search with value verification");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "color:red", 9, "FF0000", 6);
-  kvstore_put(kv, "color:green", 11, "00FF00", 6);
-  kvstore_put(kv, "color:blue", 10, "0000FF", 6);
-  kvstore_put(kv, "size:small", 10, "S", 1);
-  kvstore_put(kv, "size:large", 10, "L", 1);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "color:red", 9, "FF0000", 6);
+  keyvaluestore_put(kv, "color:green", 11, "00FF00", 6);
+  keyvaluestore_put(kv, "color:blue", 10, "0000FF", 6);
+  keyvaluestore_put(kv, "size:small", 10, "S", 1);
+  keyvaluestore_put(kv, "size:large", 10, "L", 1);
+  keyvaluestore_commit(kv);
 
-  rc = kvstore_prefix_iterator_create(kv, "color:", 6, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "color:", 6, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   int count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k, *v;
     int nk, nv;
-    kvstore_iterator_key(pIter, &k, &nk);
-    kvstore_iterator_value(pIter, &v, &nv);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_value(pIter, &v, &nv);
     printf("  [OK] %.*s = %.*s\n", nk, (char*)k, nv, (char*)v);
 
     /* Verify value is a 6-char hex color */
@@ -487,16 +487,16 @@ static void test_prefix_with_values(void){
       TEST_FAIL("unexpected value length");
     }
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 3 ){
     printf("  Expected 3 color keys, got %d\n", count);
     TEST_FAIL("wrong count");
   }
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -505,15 +505,15 @@ static void test_prefix_with_values(void){
 ** TEST 8: Binary key prefix search
 ** ====================================================================== */
 static void test_binary_key_prefix(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Binary key prefix search");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
   /* Use binary prefixes: 0x01 0x02 ... */
   unsigned char prefix[] = {0x01, 0x02};
@@ -523,28 +523,28 @@ static void test_binary_key_prefix(void){
   unsigned char key4[] = {0x01, 0x02, 0x00};  /* 0x00 embedded */
   unsigned char key5[] = {0x02, 0x01, 0x01};
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, key1, 3, "v1", 2);
-  kvstore_put(kv, key2, 3, "v2", 2);
-  kvstore_put(kv, key3, 3, "v3", 2);
-  kvstore_put(kv, key4, 3, "v4", 2);
-  kvstore_put(kv, key5, 3, "v5", 2);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, key1, 3, "v1", 2);
+  keyvaluestore_put(kv, key2, 3, "v2", 2);
+  keyvaluestore_put(kv, key3, 3, "v3", 2);
+  keyvaluestore_put(kv, key4, 3, "v4", 2);
+  keyvaluestore_put(kv, key5, 3, "v5", 2);
+  keyvaluestore_commit(kv);
 
-  rc = kvstore_prefix_iterator_create(kv, prefix, 2, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, prefix, 2, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     if( nk < 2 || memcmp(k, prefix, 2) != 0 ){
       TEST_FAIL("key doesn't start with binary prefix");
     }
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   /* Should match key1, key2, key4 (all start with 0x01 0x02) */
   if( count != 3 ){
@@ -553,7 +553,7 @@ static void test_binary_key_prefix(void){
   }
   printf("  [OK] Found %d keys with binary prefix [0x01, 0x02]\n", count);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -562,39 +562,39 @@ static void test_binary_key_prefix(void){
 ** TEST 9: Prefix search with WAL mode
 ** ====================================================================== */
 static void test_prefix_wal_mode(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Prefix search in WAL mode");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open WAL failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open WAL failed");
 
-  kvstore_begin(kv, 1);
+  keyvaluestore_begin(kv, 1);
   for(int i = 0; i < 100; i++){
     char key[32];
     snprintf(key, sizeof(key), "ns%d:key%03d", i % 3, i);
-    kvstore_put(kv, key, (int)strlen(key), "v", 1);
+    keyvaluestore_put(kv, key, (int)strlen(key), "v", 1);
   }
-  kvstore_commit(kv);
+  keyvaluestore_commit(kv);
 
   /* Search for "ns1:" keys */
-  rc = kvstore_prefix_iterator_create(kv, "ns1:", 4, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create in WAL failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "ns1:", 4, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create in WAL failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k; int nk;
-    kvstore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
     if( nk < 4 || memcmp(k, "ns1:", 4) != 0 ){
       TEST_FAIL("key doesn't start with 'ns1:'");
     }
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   /* 100 keys, modulo 3 -> ns1 gets keys 1,4,7,...,97 = 33 keys */
   if( count != 33 ){
@@ -603,7 +603,7 @@ static void test_prefix_wal_mode(void){
   }
   printf("  [OK] Found %d keys with prefix 'ns1:' in WAL mode\n", count);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -612,37 +612,37 @@ static void test_prefix_wal_mode(void){
 ** TEST 10: Large-scale prefix search performance
 ** ====================================================================== */
 static void test_large_scale_prefix(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Large-scale prefix search (10K keys)");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_WAL);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_WAL);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
   /* Insert 10K keys across 10 namespaces */
-  kvstore_begin(kv, 1);
+  keyvaluestore_begin(kv, 1);
   for(int i = 0; i < 10000; i++){
     char key[64], val[32];
     snprintf(key, sizeof(key), "namespace%d:record:%05d", i % 10, i);
     snprintf(val, sizeof(val), "value_%d", i);
-    rc = kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
-    if( rc != KVSTORE_OK ) TEST_FAIL("put failed during bulk insert");
+    rc = keyvaluestore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
+    if( rc != KEYVALUESTORE_OK ) TEST_FAIL("put failed during bulk insert");
   }
-  kvstore_commit(kv);
+  keyvaluestore_commit(kv);
 
   /* Each namespace gets 1000 keys */
-  rc = kvstore_prefix_iterator_create(kv, "namespace5:", 11, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "namespace5:", 11, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 1000 ){
     printf("  Expected 1000 keys in namespace5, got %d\n", count);
@@ -651,15 +651,15 @@ static void test_large_scale_prefix(void){
   printf("  [OK] Found %d keys in namespace5 out of 10K total\n", count);
 
   /* Narrower prefix: "namespace5:record:050" -> 10 keys (05000-05009) */
-  rc = kvstore_prefix_iterator_create(kv, "namespace5:record:050", 21, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("narrow prefix iterator failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "namespace5:record:050", 21, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("narrow prefix iterator failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 10 ){
     printf("  Expected 10 keys for narrow prefix, got %d\n", count);
@@ -667,7 +667,7 @@ static void test_large_scale_prefix(void){
   }
   printf("  [OK] Narrow prefix matched %d keys\n", count);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -676,42 +676,42 @@ static void test_large_scale_prefix(void){
 ** TEST 11: Prefix search after updates and deletes
 ** ====================================================================== */
 static void test_prefix_after_mutations(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Prefix search after updates and deletes");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "tag:alpha", 9, "v1", 2);
-  kvstore_put(kv, "tag:beta", 8, "v2", 2);
-  kvstore_put(kv, "tag:gamma", 9, "v3", 2);
-  kvstore_put(kv, "tag:delta", 9, "v4", 2);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "tag:alpha", 9, "v1", 2);
+  keyvaluestore_put(kv, "tag:beta", 8, "v2", 2);
+  keyvaluestore_put(kv, "tag:gamma", 9, "v3", 2);
+  keyvaluestore_put(kv, "tag:delta", 9, "v4", 2);
+  keyvaluestore_commit(kv);
 
   /* Delete tag:beta */
-  kvstore_begin(kv, 1);
-  kvstore_delete(kv, "tag:beta", 8);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_delete(kv, "tag:beta", 8);
+  keyvaluestore_commit(kv);
 
   /* Update tag:gamma value */
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "tag:gamma", 9, "updated_v3", 10);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "tag:gamma", 9, "updated_v3", 10);
+  keyvaluestore_commit(kv);
 
-  rc = kvstore_prefix_iterator_create(kv, "tag:", 4, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "tag:", 4, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     void *k, *v;
     int nk, nv;
-    kvstore_iterator_key(pIter, &k, &nk);
-    kvstore_iterator_value(pIter, &v, &nv);
+    keyvaluestore_iterator_key(pIter, &k, &nk);
+    keyvaluestore_iterator_value(pIter, &v, &nv);
 
     printf (" [OK] Found: %.*s = %.*s\n", nk, (char*)k, nv, (char*)v);
     /* Verify tag:beta is gone */
@@ -728,9 +728,9 @@ static void test_prefix_after_mutations(void){
     }
 
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
-  kvstore_iterator_close(pIter);
+  keyvaluestore_iterator_close(pIter);
 
   if( count != 3 ){
     printf("  Expected 3 keys after delete, got %d\n", count);
@@ -738,7 +738,7 @@ static void test_prefix_after_mutations(void){
   }
   printf("  [OK] Found %d keys after delete+update\n", count);
 
-  kvstore_close(kv);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }
@@ -747,42 +747,42 @@ static void test_prefix_after_mutations(void){
 ** TEST 12: iterator_first re-seek on prefix iterator
 ** ====================================================================== */
 static void test_prefix_iterator_first_reseek(void){
-  KVStore *kv = NULL;
-  KVIterator *pIter = NULL;
+  KeyValueStore *kv = NULL;
+  KeyValueIterator *pIter = NULL;
   int rc, count;
 
   TEST_START("Prefix iterator first() re-seek");
   cleanup_db(TEST_DB);
 
-  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
-  if( rc != KVSTORE_OK ) TEST_FAIL("open failed");
+  rc = keyvaluestore_open(TEST_DB, &kv, KEYVALUESTORE_JOURNAL_DELETE);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("open failed");
 
-  kvstore_begin(kv, 1);
-  kvstore_put(kv, "x:1", 3, "v", 1);
-  kvstore_put(kv, "x:2", 3, "v", 1);
-  kvstore_put(kv, "x:3", 3, "v", 1);
-  kvstore_put(kv, "y:1", 3, "v", 1);
-  kvstore_commit(kv);
+  keyvaluestore_begin(kv, 1);
+  keyvaluestore_put(kv, "x:1", 3, "v", 1);
+  keyvaluestore_put(kv, "x:2", 3, "v", 1);
+  keyvaluestore_put(kv, "x:3", 3, "v", 1);
+  keyvaluestore_put(kv, "y:1", 3, "v", 1);
+  keyvaluestore_commit(kv);
 
-  rc = kvstore_prefix_iterator_create(kv, "x:", 2, &pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("prefix iterator create failed");
+  rc = keyvaluestore_prefix_iterator_create(kv, "x:", 2, &pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("prefix iterator create failed");
 
   /* Consume all entries */
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
   if( count != 3 ) TEST_FAIL("first pass: expected 3 keys");
 
   /* Re-seek with first() */
-  rc = kvstore_iterator_first(pIter);
-  if( rc != KVSTORE_OK ) TEST_FAIL("iterator first re-seek failed");
+  rc = keyvaluestore_iterator_first(pIter);
+  if( rc != KEYVALUESTORE_OK ) TEST_FAIL("iterator first re-seek failed");
 
   count = 0;
-  while( !kvstore_iterator_eof(pIter) ){
+  while( !keyvaluestore_iterator_eof(pIter) ){
     count++;
-    kvstore_iterator_next(pIter);
+    keyvaluestore_iterator_next(pIter);
   }
   if( count != 3 ){
     printf("  Expected 3 keys on re-seek, got %d\n", count);
@@ -790,8 +790,8 @@ static void test_prefix_iterator_first_reseek(void){
   }
   printf("  [OK] Re-seek with first() returned %d keys again\n", count);
 
-  kvstore_iterator_close(pIter);
-  kvstore_close(kv);
+  keyvaluestore_iterator_close(pIter);
+  keyvaluestore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
 }

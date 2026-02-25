@@ -11,7 +11,7 @@ import os
 import pytest
 import snkv
 from snkv import (
-    KVStore,
+    KeyValueStore,
     ColumnFamily,
     Iterator,
     NotFoundError,
@@ -32,15 +32,15 @@ from snkv import (
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / "test.db")
-    with KVStore(path) as store:
+    with KeyValueStore(path) as store:
         yield store
 
 
 @pytest.fixture
 def db_delete(tmp_path):
-    """KVStore opened in DELETE (rollback) journal mode."""
+    """KeyValueStore opened in DELETE (rollback) journal mode."""
     path = str(tmp_path / "delete.db")
-    with KVStore(path, journal_mode=JOURNAL_DELETE) as store:
+    with KeyValueStore(path, journal_mode=JOURNAL_DELETE) as store:
         yield store
 
 
@@ -339,7 +339,7 @@ def test_integrity_check_healthy(db):
 
 def test_checkpoint_wal(tmp_path):
     path = str(tmp_path / "wal.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         for i in range(50):
             db.put(f"k{i}".encode(), f"v{i}".encode())
         nlog, nckpt = db.checkpoint(CHECKPOINT_PASSIVE)
@@ -349,7 +349,7 @@ def test_checkpoint_wal(tmp_path):
 
 def test_checkpoint_truncate(tmp_path):
     path = str(tmp_path / "trunc.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         for i in range(50):
             db.put(f"k{i}".encode(), f"v{i}".encode())
         nlog, nckpt = db.checkpoint(CHECKPOINT_TRUNCATE)
@@ -369,20 +369,20 @@ def test_checkpoint_on_delete_journal(db_delete):
 
 def test_open_v2_via_kwargs(tmp_path):
     path = str(tmp_path / "v2.db")
-    with KVStore(path, cache_size=500, busy_timeout=100) as db:
+    with KeyValueStore(path, cache_size=500, busy_timeout=100) as db:
         db.put(b"k", b"v")
         assert db.get(b"k") == b"v"
 
 
 def test_open_in_memory():
-    with KVStore(None) as db:
+    with KeyValueStore(None) as db:
         db.put(b"ephemeral", b"data")
         assert db.get(b"ephemeral") == b"data"
 
 
 def test_open_delete_mode(tmp_path):
     path = str(tmp_path / "del.db")
-    with KVStore(path, journal_mode=JOURNAL_DELETE) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_DELETE) as db:
         db.put(b"key", b"value")
         assert db.get(b"key") == b"value"
 
@@ -393,14 +393,14 @@ def test_open_delete_mode(tmp_path):
 
 def test_context_manager_closes(tmp_path):
     path = str(tmp_path / "ctx.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.put(b"key", b"val")
     # Reaching here without exception means close() was called cleanly.
 
 
 def test_double_close_safe(tmp_path):
     path = str(tmp_path / "dbl.db")
-    db = KVStore(path)
+    db = KeyValueStore(path)
     db.close()
     db.close()  # must not crash
 

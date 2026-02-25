@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "platform_compat.h"
 
 #ifndef _WIN32
@@ -143,18 +143,18 @@ static double nowSec(void) {
 ** (the extra cost is negligible -- there are at most ~26 K mark keys
 ** even for a 10 GB database).
 */
-static long long findLastTxid(KVStore *kv) {
-    KVIterator *iter = NULL;
+static long long findLastTxid(KeyValueStore *kv) {
+    KeyValueIterator *iter = NULL;
     long long maxTxid = -1LL;
     int rc;
 
-    rc = kvstore_prefix_iterator_create(kv, "mark:", 5, &iter);
-    if (rc != KVSTORE_OK || iter == NULL) return -1LL;
+    rc = keyvaluestore_prefix_iterator_create(kv, "mark:", 5, &iter);
+    if (rc != KEYVALUESTORE_OK || iter == NULL) return -1LL;
 
-    while (!kvstore_iterator_eof(iter)) {
+    while (!keyvaluestore_iterator_eof(iter)) {
         void *pKey = NULL;
         int   nKey = 0;
-        kvstore_iterator_key(iter, &pKey, &nKey);
+        keyvaluestore_iterator_key(iter, &pKey, &nKey);
 
         /* Key format: "mark:NNNNNNNNNN" -- 5 + 10 = 15 chars minimum */
         if (pKey && nKey >= 15) {
@@ -164,9 +164,9 @@ static long long findLastTxid(KVStore *kv) {
             long long txid = atoll(digits);
             if (txid > maxTxid) maxTxid = txid;
         }
-        kvstore_iterator_next(iter);
+        keyvaluestore_iterator_next(iter);
     }
-    kvstore_iterator_close(iter);
+    keyvaluestore_iterator_close(iter);
     return maxTxid;
 }
 
@@ -182,17 +182,17 @@ static long long findLastTxid(KVStore *kv) {
 ** Returns 0 on normal completion, 1 on fatal error.
 */
 static int doWrite(const char *zDb) {
-    KVStoreConfig cfg;
-    KVStore *kv = NULL;
+    KeyValueStoreConfig cfg;
+    KeyValueStore *kv = NULL;
     int rc;
 
     memset(&cfg, 0, sizeof(cfg));
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
 
-    rc = kvstore_open_v2(zDb, &kv, &cfg);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open_v2(zDb, &kv, &cfg);
+    if (rc != KEYVALUESTORE_OK) {
         fprintf(stderr, "[write] ERROR: cannot open '%s' (rc=%d): %s\n",
-                zDb, rc, kvstore_errmsg(kv));
+                zDb, rc, keyvaluestore_errmsg(kv));
         return 1;
     }
 
@@ -222,10 +222,10 @@ static int doWrite(const char *zDb) {
             break;
         }
 
-        rc = kvstore_begin(kv, 1);
-        if (rc != KVSTORE_OK) {
+        rc = keyvaluestore_begin(kv, 1);
+        if (rc != KEYVALUESTORE_OK) {
             fprintf(stderr, "[write] ERROR: begin failed (rc=%d)\n", rc);
-            kvstore_close(kv);
+            keyvaluestore_close(kv);
             return 1;
         }
 
@@ -235,13 +235,13 @@ static int doWrite(const char *zDb) {
             int klen = snprintf(key, KEY_MAX,
                                 "data:%010lld:%05d", txid, kidx);
             generateValue(val, txid, kidx);
-            rc = kvstore_put(kv, key, klen, val, VALUE_SIZE);
-            if (rc != KVSTORE_OK) {
+            rc = keyvaluestore_put(kv, key, klen, val, VALUE_SIZE);
+            if (rc != KEYVALUESTORE_OK) {
                 fprintf(stderr,
                         "[write] ERROR: put data:%010lld:%05d failed (rc=%d)\n",
                         txid, kidx, rc);
-                kvstore_rollback(kv);
-                kvstore_close(kv);
+                keyvaluestore_rollback(kv);
+                keyvaluestore_close(kv);
                 return 1;
             }
         }
@@ -251,23 +251,23 @@ static int doWrite(const char *zDb) {
         {
             int klen = snprintf(key, KEY_MAX, "mark:%010lld", txid);
             generateValue(val, txid, BATCH_SIZE);   /* unique per txid */
-            rc = kvstore_put(kv, key, klen, val, VALUE_SIZE);
-            if (rc != KVSTORE_OK) {
+            rc = keyvaluestore_put(kv, key, klen, val, VALUE_SIZE);
+            if (rc != KEYVALUESTORE_OK) {
                 fprintf(stderr,
                         "[write] ERROR: put mark:%010lld failed (rc=%d)\n",
                         txid, rc);
-                kvstore_rollback(kv);
-                kvstore_close(kv);
+                keyvaluestore_rollback(kv);
+                keyvaluestore_close(kv);
                 return 1;
             }
         }
 
-        rc = kvstore_commit(kv);
-        if (rc != KVSTORE_OK) {
+        rc = keyvaluestore_commit(kv);
+        if (rc != KEYVALUESTORE_OK) {
             fprintf(stderr,
                     "[write] ERROR: commit txid %lld failed (rc=%d)\n",
                     txid, rc);
-            kvstore_close(kv);
+            keyvaluestore_close(kv);
             return 1;
         }
 
@@ -296,7 +296,7 @@ static int doWrite(const char *zDb) {
            (totalElapsed > 0.0) ? (double)nWritten / totalElapsed : 0.0);
     fflush(stdout);
 
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     return 0;
 }
 
@@ -315,16 +315,16 @@ static int doWrite(const char *zDb) {
 ** Returns 0 on full pass, 1 if any check fails.
 */
 static int doVerify(const char *zDb) {
-    KVStoreConfig cfg;
-    KVStore *kv = NULL;
+    KeyValueStoreConfig cfg;
+    KeyValueStore *kv = NULL;
     int rc;
 
     memset(&cfg, 0, sizeof(cfg));
-    cfg.journalMode = KVSTORE_JOURNAL_WAL;
+    cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;
 
     printf("\n[verify] Opening '%s'...\n", zDb);
-    rc = kvstore_open_v2(zDb, &kv, &cfg);
-    if (rc != KVSTORE_OK) {
+    rc = keyvaluestore_open_v2(zDb, &kv, &cfg);
+    if (rc != KEYVALUESTORE_OK) {
         printf(CLR_RED "[verify] FAIL: cannot open database (rc=%d)\n"
                CLR_RESET, rc);
         return 1;
@@ -338,7 +338,7 @@ static int doVerify(const char *zDb) {
         fprintf(stderr, "[verify] ERROR: out of memory\n");
         free(committed);
         free(perTxCount);
-        kvstore_close(kv);
+        keyvaluestore_close(kv);
         return 1;
     }
     memset(perTxCount, 0, MAX_TXNS * sizeof(int));
@@ -363,26 +363,26 @@ static int doVerify(const char *zDb) {
     ** ---------------------------------------------------------------- */
     printf("[verify] Phase 1: scanning commit markers...\n");
     {
-        KVIterator *iter = NULL;
-        rc = kvstore_prefix_iterator_create(kv, "mark:", 5, &iter);
-        if (rc != KVSTORE_OK) {
+        KeyValueIterator *iter = NULL;
+        rc = keyvaluestore_prefix_iterator_create(kv, "mark:", 5, &iter);
+        if (rc != KEYVALUESTORE_OK) {
             printf(CLR_RED
                    "[verify] FAIL: cannot create mark iterator (rc=%d)\n"
                    CLR_RESET, rc);
-            free(committed); free(perTxCount); kvstore_close(kv);
+            free(committed); free(perTxCount); keyvaluestore_close(kv);
             return 1;
         }
 
-        while (!kvstore_iterator_eof(iter)) {
+        while (!keyvaluestore_iterator_eof(iter)) {
             void *pKey = NULL; int nKey = 0;
             void *pVal = NULL; int nVal = 0;
 
-            kvstore_iterator_key  (iter, &pKey, &nKey);
-            kvstore_iterator_value(iter, &pVal, &nVal);
+            keyvaluestore_iterator_key  (iter, &pKey, &nKey);
+            keyvaluestore_iterator_value(iter, &pVal, &nVal);
 
             /* Key format: "mark:NNNNNNNNNN" = 15 chars minimum. */
             if (!pKey || nKey < 15) {
-                kvstore_iterator_next(iter);
+                keyvaluestore_iterator_next(iter);
                 continue;
             }
 
@@ -410,9 +410,9 @@ static int doVerify(const char *zDb) {
                 }
             }
 
-            kvstore_iterator_next(iter);
+            keyvaluestore_iterator_next(iter);
         }
-        kvstore_iterator_close(iter);
+        keyvaluestore_iterator_close(iter);
     }
 
     /* Sort so bsearch works in Phase 2 and Phase 3. */
@@ -433,22 +433,22 @@ static int doVerify(const char *zDb) {
     printf("[verify] Phase 2: validating %lld expected data keys...\n",
            (long long)nCommitted * BATCH_SIZE);
     {
-        KVIterator *iter = NULL;
-        rc = kvstore_prefix_iterator_create(kv, "data:", 5, &iter);
-        if (rc != KVSTORE_OK) {
+        KeyValueIterator *iter = NULL;
+        rc = keyvaluestore_prefix_iterator_create(kv, "data:", 5, &iter);
+        if (rc != KEYVALUESTORE_OK) {
             printf(CLR_RED
                    "[verify] FAIL: cannot create data iterator (rc=%d)\n"
                    CLR_RESET, rc);
-            free(committed); free(perTxCount); kvstore_close(kv);
+            free(committed); free(perTxCount); keyvaluestore_close(kv);
             return 1;
         }
 
-        while (!kvstore_iterator_eof(iter)) {
+        while (!keyvaluestore_iterator_eof(iter)) {
             void *pKey = NULL; int nKey = 0;
             void *pVal = NULL; int nVal = 0;
 
-            kvstore_iterator_key  (iter, &pKey, &nKey);
-            kvstore_iterator_value(iter, &pVal, &nVal);
+            keyvaluestore_iterator_key  (iter, &pKey, &nKey);
+            keyvaluestore_iterator_value(iter, &pVal, &nVal);
 
             /*
             ** Key format: "data:NNNNNNNNNN:MMMMM"
@@ -456,7 +456,7 @@ static int doVerify(const char *zDb) {
             ** Total length always 21 for valid keys.
             */
             if (!pKey || nKey < 21) {
-                kvstore_iterator_next(iter);
+                keyvaluestore_iterator_next(iter);
                 continue;
             }
 
@@ -500,9 +500,9 @@ static int doVerify(const char *zDb) {
                 fflush(stdout);
             }
 
-            kvstore_iterator_next(iter);
+            keyvaluestore_iterator_next(iter);
         }
-        kvstore_iterator_close(iter);
+        keyvaluestore_iterator_close(iter);
     }
     /* Clear the \r progress line. */
     printf("[verify] Phase 2 done: %lld data keys checked.          \n\n",
@@ -535,8 +535,8 @@ static int doVerify(const char *zDb) {
     printf("[verify] Phase 4: running integrity check...\n");
     char *errMsg = NULL;
     int   intOk  = 0;
-    rc = kvstore_integrity_check(kv, &errMsg);
-    if (rc == KVSTORE_OK) {
+    rc = keyvaluestore_integrity_check(kv, &errMsg);
+    if (rc == KEYVALUESTORE_OK) {
         intOk = 1;
         printf("[verify] Phase 4: " CLR_GREEN "PASS\n" CLR_RESET);
     } else {
@@ -572,7 +572,7 @@ static int doVerify(const char *zDb) {
 
     free(committed);
     free(perTxCount);
-    kvstore_close(kv);
+    keyvaluestore_close(kv);
     return failed ? 1 : 0;
 }
 

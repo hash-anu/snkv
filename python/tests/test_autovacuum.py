@@ -7,7 +7,7 @@ and preserves data integrity.
 
 import os
 import pytest
-from snkv import KVStore, JOURNAL_WAL, JOURNAL_DELETE
+from snkv import KeyValueStore, JOURNAL_WAL, JOURNAL_DELETE
 
 
 # ---------------------------------------------------------------------------
@@ -40,14 +40,14 @@ def test_incremental_vacuum_shrinks_file(tmp_path):
     """After bulk insert + delete + vacuum, file must be smaller."""
     path = str(tmp_path / "vac.db")
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         _fill(db, 2000)
         _delete_range(db, 0, 1800)
         db.sync()
 
     size_before = _db_file_size(path)
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.vacuum(0)        # free all unused pages
         db.sync()
 
@@ -61,20 +61,20 @@ def test_partial_vacuum_two_stage(tmp_path):
     """Partial vacuum (n_pages > 0) reclaims space incrementally."""
     path = str(tmp_path / "partial.db")
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         _fill(db, 2000)
         _delete_range(db, 0, 1800)
         db.sync()
 
     size_before = _db_file_size(path)
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.vacuum(10)       # first stage: free up to 10 pages
         db.sync()
 
     size_stage1 = _db_file_size(path)
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.vacuum(0)        # second stage: free the rest
         db.sync()
 
@@ -87,14 +87,14 @@ def test_vacuum_wal_mode(tmp_path):
     """Vacuum must work correctly in WAL journal mode."""
     path = str(tmp_path / "vac_wal.db")
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         _fill(db, 1000)
         _delete_range(db, 0, 800)
         db.sync()
 
     size_before = _db_file_size(path)
 
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db.vacuum(0)
         db.sync()
 
@@ -106,7 +106,7 @@ def test_vacuum_data_integrity(tmp_path):
     """Surviving records must be intact and pass integrity_check after vacuum."""
     path = str(tmp_path / "vac_int.db")
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.begin(write=True)
         for i in range(1000):
             db[f"item{i:06d}".encode()] = f"value{i}".encode()
@@ -115,7 +115,7 @@ def test_vacuum_data_integrity(tmp_path):
         db.vacuum(0)
         db.sync()
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.integrity_check()
 
         # records 800-999 must survive with correct values
@@ -136,7 +136,7 @@ def test_multiple_vacuum_cycles(tmp_path):
     for cycle in range(3):
         prefix = f"c{cycle}_"
 
-        with KVStore(path) as db:
+        with KeyValueStore(path) as db:
             db.begin(write=True)
             for i in range(1000):
                 db[f"{prefix}{i:06d}".encode()] = f"cycle{cycle}_{i}".encode()
@@ -147,7 +147,7 @@ def test_multiple_vacuum_cycles(tmp_path):
 
         surviving.append((prefix, list(range(800, 1000))))
 
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db.integrity_check()
         for prefix, indices in surviving:
             for i in indices:
@@ -158,7 +158,7 @@ def test_multiple_vacuum_cycles(tmp_path):
 def test_vacuum_zero_pages_is_full_vacuum(tmp_path):
     """vacuum(0) is equivalent to a full vacuum (no pages argument)."""
     path = str(tmp_path / "zero.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         _fill(db, 500)
         _delete_range(db, 0, 400)
         db.vacuum(0)      # must not raise

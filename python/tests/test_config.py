@@ -1,7 +1,7 @@
 """
 Configuration tests — mirrors tests/test_config.c.
 
-Exercises every field of KVStoreConfig (via KVStore keyword args),
+Exercises every field of KeyValueStoreConfig (via KeyValueStore keyword args),
 backward-compat open, read-only mode, and various journal/sync combos.
 """
 
@@ -9,7 +9,7 @@ import os
 import pytest
 import snkv
 from snkv import (
-    KVStore,
+    KeyValueStore,
     NotFoundError,
     ReadOnlyError,
     JOURNAL_WAL,
@@ -24,7 +24,7 @@ from snkv import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _roundtrip(db: KVStore) -> None:
+def _roundtrip(db: KeyValueStore) -> None:
     """Basic put/get round-trip to verify the store is functional."""
     db[b"cfg_key"] = b"cfg_val"
     assert db[b"cfg_key"] == b"cfg_val"
@@ -35,23 +35,23 @@ def _roundtrip(db: KVStore) -> None:
 # ---------------------------------------------------------------------------
 
 def test_default_open_wal(tmp_path):
-    """KVStore() defaults to WAL mode and is functional."""
+    """KeyValueStore() defaults to WAL mode and is functional."""
     path = str(tmp_path / "default.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         _roundtrip(db)
 
 
 def test_explicit_wal_mode(tmp_path):
     """Explicitly opening in WAL mode works."""
     path = str(tmp_path / "wal.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         _roundtrip(db)
 
 
 def test_delete_journal_mode(tmp_path):
     """DELETE journal mode opens and is functional."""
     path = str(tmp_path / "del.db")
-    with KVStore(path, journal_mode=JOURNAL_DELETE) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_DELETE) as db:
         _roundtrip(db)
 
 
@@ -61,19 +61,19 @@ def test_delete_journal_mode(tmp_path):
 
 def test_sync_off(tmp_path):
     path = str(tmp_path / "sync_off.db")
-    with KVStore(path, sync_level=SYNC_OFF) as db:
+    with KeyValueStore(path, sync_level=SYNC_OFF) as db:
         _roundtrip(db)
 
 
 def test_sync_normal(tmp_path):
     path = str(tmp_path / "sync_normal.db")
-    with KVStore(path, sync_level=SYNC_NORMAL) as db:
+    with KeyValueStore(path, sync_level=SYNC_NORMAL) as db:
         _roundtrip(db)
 
 
 def test_sync_full(tmp_path):
     path = str(tmp_path / "sync_full.db")
-    with KVStore(path, sync_level=SYNC_FULL) as db:
+    with KeyValueStore(path, sync_level=SYNC_FULL) as db:
         _roundtrip(db)
 
 
@@ -84,7 +84,7 @@ def test_sync_full(tmp_path):
 def test_custom_cache_size(tmp_path):
     """cache_size=500 (~2 MB) must still work for 200 keys."""
     path = str(tmp_path / "cache.db")
-    with KVStore(path, cache_size=500) as db:
+    with KeyValueStore(path, cache_size=500) as db:
         db.begin(write=True)
         for i in range(200):
             db[f"k{i:04d}".encode()] = f"v{i}".encode()
@@ -95,7 +95,7 @@ def test_custom_cache_size(tmp_path):
 def test_large_cache_size(tmp_path):
     """cache_size=8000 (~32 MB) must open and work normally."""
     path = str(tmp_path / "bigcache.db")
-    with KVStore(path, cache_size=8000) as db:
+    with KeyValueStore(path, cache_size=8000) as db:
         _roundtrip(db)
 
 
@@ -106,13 +106,13 @@ def test_large_cache_size(tmp_path):
 def test_custom_page_size_8192(tmp_path):
     """page_size=8192 on a new DB must open and accept writes."""
     path = str(tmp_path / "page8k.db")
-    with KVStore(path, page_size=8192) as db:
+    with KeyValueStore(path, page_size=8192) as db:
         _roundtrip(db)
 
 
 def test_custom_page_size_16384(tmp_path):
     path = str(tmp_path / "page16k.db")
-    with KVStore(path, page_size=16384) as db:
+    with KeyValueStore(path, page_size=16384) as db:
         _roundtrip(db)
 
 
@@ -123,7 +123,7 @@ def test_custom_page_size_16384(tmp_path):
 def test_busy_timeout(tmp_path):
     """busy_timeout=500 must open successfully and function normally."""
     path = str(tmp_path / "busy.db")
-    with KVStore(path, busy_timeout=500) as db:
+    with KeyValueStore(path, busy_timeout=500) as db:
         _roundtrip(db)
 
 
@@ -134,20 +134,20 @@ def test_busy_timeout(tmp_path):
 def test_read_only_reads_succeed(tmp_path):
     """A DB opened read-only must allow gets."""
     path = str(tmp_path / "ro.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"ro_key"] = b"ro_val"
 
-    with KVStore(path, read_only=1) as db:
+    with KeyValueStore(path, read_only=1) as db:
         assert db[b"ro_key"] == b"ro_val"
 
 
 def test_read_only_write_raises(tmp_path):
     """A write attempt on a read-only store must raise an error."""
     path = str(tmp_path / "ro_write.db")
-    with KVStore(path) as db:
+    with KeyValueStore(path) as db:
         db[b"seed"] = b"1"
 
-    with KVStore(path, read_only=1) as db:
+    with KeyValueStore(path, read_only=1) as db:
         with pytest.raises(snkv.Error):
             db[b"new_key"] = b"blocked"
 
@@ -156,7 +156,7 @@ def test_read_only_nonexistent_file_raises(tmp_path):
     """Opening a non-existent file read-only must raise an error."""
     path = str(tmp_path / "nonexistent.db")
     with pytest.raises(snkv.Error):
-        KVStore(path, read_only=1)
+        KeyValueStore(path, read_only=1)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ def test_read_only_nonexistent_file_raises(tmp_path):
 def test_wal_size_limit_enabled(tmp_path):
     """wal_size_limit>0 must open successfully and auto-checkpoint."""
     path = str(tmp_path / "walsize.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL, wal_size_limit=50) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL, wal_size_limit=50) as db:
         db.begin(write=True)
         for i in range(200):
             db[f"k{i}".encode()] = b"v" * 100
@@ -178,7 +178,7 @@ def test_wal_size_limit_enabled(tmp_path):
 def test_wal_size_limit_zero_disabled(tmp_path):
     """wal_size_limit=0 (default) must open and work normally."""
     path = str(tmp_path / "walsize0.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL, wal_size_limit=0) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL, wal_size_limit=0) as db:
         _roundtrip(db)
 
 
@@ -189,7 +189,7 @@ def test_wal_size_limit_zero_disabled(tmp_path):
 def test_wal_normal_cache_busy(tmp_path):
     """WAL + SYNC_NORMAL + custom cache + busy_timeout all together."""
     path = str(tmp_path / "combined.db")
-    with KVStore(
+    with KeyValueStore(
         path,
         journal_mode=JOURNAL_WAL,
         sync_level=SYNC_NORMAL,
@@ -210,7 +210,7 @@ def test_wal_normal_cache_busy(tmp_path):
 
 def test_in_memory_store():
     """None path opens an in-memory store (no file created)."""
-    with KVStore(None) as db:
+    with KeyValueStore(None) as db:
         db[b"mem"] = b"only"
         assert db[b"mem"] == b"only"
     # data is gone — nothing to assert about files
@@ -223,6 +223,6 @@ def test_in_memory_store():
 def test_positional_journal_mode_wal(tmp_path):
     """journal_mode passed as keyword must work the same as config."""
     path = str(tmp_path / "compat.db")
-    with KVStore(path, journal_mode=JOURNAL_WAL) as db:
+    with KeyValueStore(path, journal_mode=JOURNAL_WAL) as db:
         db[b"compat"] = b"ok"
         assert db[b"compat"] == b"ok"

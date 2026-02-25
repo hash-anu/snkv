@@ -1,5 +1,5 @@
 /*
-** ACID Compliance Test Suite for KVStore
+** ACID Compliance Test Suite for KeyValueStore
 ** 
 ** This is a comprehensive, self-contained test suite for verifying
 ** ACID properties of the kvstore implementation.
@@ -11,7 +11,7 @@
 ** - Durability: Committed data survives crashes
 **
 ** Compilation:
-**   gcc -g -Wall -Iinclude -o tests/test_acid tests/test_acid.c src/kvstore.c src/os.c \
+**   gcc -g -Wall -Iinclude -o tests/test_acid tests/test_acid.c src/keyvaluestore.c src/os.c \
 **       src/os_unix.c src/os_win.c src/util.c src/printf.c src/random.c src/hash.c \
 **       src/pager.c src/btree.c
 **
@@ -26,7 +26,7 @@
 #include <string.h>
 #include <assert.h>
 #include <time.h>
-#include "kvstore.h"
+#include "keyvaluestore.h"
 #include "platform_compat.h"
 
 /*
@@ -53,11 +53,11 @@ static int buffers_equal(const void *a, const void *b, int size) {
 ** Verifies that transaction rollback properly undoes all changes
 */
 static const char *journal_mode_name(int mode) {
-  return mode == KVSTORE_JOURNAL_WAL ? "WAL" : "DELETE";
+  return mode == KEYVALUESTORE_JOURNAL_WAL ? "WAL" : "DELETE";
 }
 
 static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc;
   char key1[] = "atomicity_test_key1";
   char key2[] = "atomicity_test_key2";
@@ -72,51 +72,51 @@ static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
   printf("  Testing Atomicity (%s)...\n", journal_mode_name(journal_mode));
 
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, journal_mode);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_open(dbfile, &pKV, journal_mode);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
   }
   
   /* Test 1: Rollback should undo all puts */
   printf("    Test 1.1: Rollback undoes all puts\n");
-  rc = kvstore_begin(pKV, 1);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_begin(pKV, 1);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to begin transaction: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
-  kvstore_put(pKV, key1, strlen(key1), value1, strlen(value1));
-  kvstore_put(pKV, key2, strlen(key2), value2, strlen(value2));
-  kvstore_put(pKV, key3, strlen(key3), value3, strlen(value3));
+  keyvaluestore_put(pKV, key1, strlen(key1), value1, strlen(value1));
+  keyvaluestore_put(pKV, key2, strlen(key2), value2, strlen(value2));
+  keyvaluestore_put(pKV, key3, strlen(key3), value3, strlen(value3));
   
-  rc = kvstore_rollback(pKV);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_rollback(pKV);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to rollback: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Verify keys don't exist after rollback */
-  kvstore_exists(pKV, key1, strlen(key1), &exists);
+  keyvaluestore_exists(pKV, key1, strlen(key1), &exists);
   if(exists) {
     snprintf(err_msg, 1024, "Key1 exists after rollback - atomicity violated");
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
-  kvstore_exists(pKV, key2, strlen(key2), &exists);
+  keyvaluestore_exists(pKV, key2, strlen(key2), &exists);
   if(exists) {
     snprintf(err_msg, 1024, "Key2 exists after rollback - atomicity violated");
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
-  kvstore_exists(pKV, key3, strlen(key3), &exists);
+  keyvaluestore_exists(pKV, key3, strlen(key3), &exists);
   if(exists) {
     snprintf(err_msg, 1024, "Key3 exists after rollback - atomicity violated");
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
@@ -124,50 +124,50 @@ static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
   printf("    Test 1.2: Partial operations are atomic\n");
   
   /* First, insert some data and commit */
-  rc = kvstore_begin(pKV, 1);
-  kvstore_put(pKV, key1, strlen(key1), value1, strlen(value1));
-  rc = kvstore_commit(pKV);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_begin(pKV, 1);
+  keyvaluestore_put(pKV, key1, strlen(key1), value1, strlen(value1));
+  rc = keyvaluestore_commit(pKV);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to commit initial data: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Now modify it in a transaction that we'll rollback */
-  rc = kvstore_begin(pKV, 1);
-  kvstore_put(pKV, key1, strlen(key1), value2, strlen(value2)); /* Update */
-  kvstore_put(pKV, key2, strlen(key2), value2, strlen(value2)); /* Insert */
-  kvstore_delete(pKV, key1, strlen(key1));                       /* Delete */
-  rc = kvstore_rollback(pKV);
+  rc = keyvaluestore_begin(pKV, 1);
+  keyvaluestore_put(pKV, key1, strlen(key1), value2, strlen(value2)); /* Update */
+  keyvaluestore_put(pKV, key2, strlen(key2), value2, strlen(value2)); /* Insert */
+  keyvaluestore_delete(pKV, key1, strlen(key1));                       /* Delete */
+  rc = keyvaluestore_rollback(pKV);
   
   /* Verify key1 still has original value */
-  rc = kvstore_get(pKV, key1, strlen(key1), &pVal, &nVal);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_get(pKV, key1, strlen(key1), &pVal, &nVal);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Key1 doesn't exist after rollback - atomicity violated");
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   if(!buffers_equal(pVal, value1, strlen(value1))) {
     snprintf(err_msg, 1024, "Key1 has wrong value after rollback - atomicity violated");
     sqliteFree(pVal);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   sqliteFree(pVal);
   
   /* Verify key2 doesn't exist */
-  kvstore_exists(pKV, key2, strlen(key2), &exists);
+  keyvaluestore_exists(pKV, key2, strlen(key2), &exists);
   if(exists) {
     snprintf(err_msg, 1024, "Key2 exists after rollback - atomicity violated");
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Cleanup */
-  kvstore_delete(pKV, key1, strlen(key1));
+  keyvaluestore_delete(pKV, key1, strlen(key1));
   
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   printf("    Atomicity tests PASSED\n");
   return 1;
 }
@@ -177,8 +177,8 @@ static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
 ** Verifies that database maintains valid state and constraints
 */
 static int test_consistency(const char *dbfile, char *err_msg, int journal_mode) {
-  KVStore *pKV = NULL;
-  KVColumnFamily *pCF1 = NULL, *pCF2 = NULL;
+  KeyValueStore *pKV = NULL;
+  KeyValueColumnFamily *pCF1 = NULL, *pCF2 = NULL;
   int rc;
   char *integrity_err = NULL;
   void *pVal = NULL;
@@ -187,20 +187,20 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   printf("  Testing Consistency (%s)...\n", journal_mode_name(journal_mode));
 
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, journal_mode);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_open(dbfile, &pKV, journal_mode);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
   }
   
   /* Test 1: Integrity check on empty database */
   printf("    Test 2.1: Database integrity on empty DB\n");
-  rc = kvstore_integrity_check(pKV, &integrity_err);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_integrity_check(pKV, &integrity_err);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Integrity check failed on empty DB: %s", 
              integrity_err ? integrity_err : "unknown");
     if(integrity_err) sqliteFree(integrity_err);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
@@ -211,10 +211,10 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   for(int i = 0; i < 100; i++) {
     snprintf(key, sizeof(key), "consistency_key_%d", i);
     snprintf(value, sizeof(value), "consistency_value_%d", i);
-    rc = kvstore_put(pKV, key, strlen(key), value, strlen(value));
-    if(rc != KVSTORE_OK) {
+    rc = keyvaluestore_put(pKV, key, strlen(key), value, strlen(value));
+    if(rc != KEYVALUESTORE_OK) {
       snprintf(err_msg, 1024, "Failed to put key %d: %d", i, rc);
-      kvstore_close(pKV);
+      keyvaluestore_close(pKV);
       return 0;
     }
   }
@@ -222,7 +222,7 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   /* Delete every other key */
   for(int i = 0; i < 100; i += 2) {
     snprintf(key, sizeof(key), "consistency_key_%d", i);
-    kvstore_delete(pKV, key, strlen(key));
+    keyvaluestore_delete(pKV, key, strlen(key));
   }
   
   /* Verify remaining keys */
@@ -230,17 +230,17 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
     snprintf(key, sizeof(key), "consistency_key_%d", i);
     snprintf(value, sizeof(value), "consistency_value_%d", i);
     
-    rc = kvstore_get(pKV, key, strlen(key), &pVal, &nVal);
-    if(rc != KVSTORE_OK) {
+    rc = keyvaluestore_get(pKV, key, strlen(key), &pVal, &nVal);
+    if(rc != KEYVALUESTORE_OK) {
       snprintf(err_msg, 1024, "Failed to get key %d after deletions: %d", i, rc);
-      kvstore_close(pKV);
+      keyvaluestore_close(pKV);
       return 0;
     }
     
     if(!buffers_equal(pVal, value, strlen(value))) {
       snprintf(err_msg, 1024, "Key %d has wrong value after deletions", i);
       sqliteFree(pVal);
-      kvstore_close(pKV);
+      keyvaluestore_close(pKV);
       return 0;
     }
     sqliteFree(pVal);
@@ -248,30 +248,30 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   }
   
   /* Check integrity after operations */
-  rc = kvstore_integrity_check(pKV, &integrity_err);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_integrity_check(pKV, &integrity_err);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Integrity check failed after operations: %s",
              integrity_err ? integrity_err : "unknown");
     if(integrity_err) sqliteFree(integrity_err);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Test 3: Column family consistency */
   printf("    Test 2.3: Column family isolation\n");
   
-  rc = kvstore_cf_create(pKV, "cf_test1", &pCF1);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_cf_create(pKV, "cf_test1", &pCF1);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to create CF1: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
-  rc = kvstore_cf_create(pKV, "cf_test2", &pCF2);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_cf_create(pKV, "cf_test2", &pCF2);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to create CF2: %d", rc);
-    kvstore_cf_close(pCF1);
-    kvstore_close(pKV);
+    keyvaluestore_cf_close(pCF1);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
@@ -280,57 +280,57 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   char cf1_value[] = "CF1_value";
   char cf2_value[] = "CF2_value";
   
-  kvstore_cf_put(pCF1, test_key, strlen(test_key), cf1_value, strlen(cf1_value));
-  kvstore_cf_put(pCF2, test_key, strlen(test_key), cf2_value, strlen(cf2_value));
+  keyvaluestore_cf_put(pCF1, test_key, strlen(test_key), cf1_value, strlen(cf1_value));
+  keyvaluestore_cf_put(pCF2, test_key, strlen(test_key), cf2_value, strlen(cf2_value));
   
   /* Verify isolation */
-  rc = kvstore_cf_get(pCF1, test_key, strlen(test_key), &pVal, &nVal);
-  if(rc != KVSTORE_OK || !buffers_equal(pVal, cf1_value, strlen(cf1_value))) {
+  rc = keyvaluestore_cf_get(pCF1, test_key, strlen(test_key), &pVal, &nVal);
+  if(rc != KEYVALUESTORE_OK || !buffers_equal(pVal, cf1_value, strlen(cf1_value))) {
     snprintf(err_msg, 1024, "CF1 value incorrect - CF isolation violated");
     sqliteFree(pVal);
-    kvstore_cf_close(pCF1);
-    kvstore_cf_close(pCF2);
-    kvstore_close(pKV);
+    keyvaluestore_cf_close(pCF1);
+    keyvaluestore_cf_close(pCF2);
+    keyvaluestore_close(pKV);
     return 0;
   }
   sqliteFree(pVal);
   
-  rc = kvstore_cf_get(pCF2, test_key, strlen(test_key), &pVal, &nVal);
-  if(rc != KVSTORE_OK || !buffers_equal(pVal, cf2_value, strlen(cf2_value))) {
+  rc = keyvaluestore_cf_get(pCF2, test_key, strlen(test_key), &pVal, &nVal);
+  if(rc != KEYVALUESTORE_OK || !buffers_equal(pVal, cf2_value, strlen(cf2_value))) {
     snprintf(err_msg, 1024, "CF2 value incorrect - CF isolation violated");
     sqliteFree(pVal);
-    kvstore_cf_close(pCF1);
-    kvstore_cf_close(pCF2);
-    kvstore_close(pKV);
+    keyvaluestore_cf_close(pCF1);
+    keyvaluestore_cf_close(pCF2);
+    keyvaluestore_close(pKV);
     return 0;
   }
   sqliteFree(pVal);
   
   /* Final integrity check */
-  rc = kvstore_integrity_check(pKV, &integrity_err);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_integrity_check(pKV, &integrity_err);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Final integrity check failed: %s",
              integrity_err ? integrity_err : "unknown");
     if(integrity_err) sqliteFree(integrity_err);
-    kvstore_cf_close(pCF1);
-    kvstore_cf_close(pCF2);
-    kvstore_close(pKV);
+    keyvaluestore_cf_close(pCF1);
+    keyvaluestore_cf_close(pCF2);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Cleanup */
-  kvstore_cf_close(pCF1);
-  kvstore_cf_close(pCF2);
-  kvstore_cf_drop(pKV, "cf_test1");
-  kvstore_cf_drop(pKV, "cf_test2");
+  keyvaluestore_cf_close(pCF1);
+  keyvaluestore_cf_close(pCF2);
+  keyvaluestore_cf_drop(pKV, "cf_test1");
+  keyvaluestore_cf_drop(pKV, "cf_test2");
   
   /* Clear test data */
   for(int i = 0; i < 100; i++) {
     snprintf(key, sizeof(key), "consistency_key_%d", i);
-    kvstore_delete(pKV, key, strlen(key));
+    keyvaluestore_delete(pKV, key, strlen(key));
   }
   
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   printf("    Consistency tests PASSED\n");
   return 1;
 }
@@ -342,7 +342,7 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
 ** multi-process or multi-thread testing
 */
 static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc;
   char key1[] = "isolation_key1";
   char key2[] = "isolation_key2";
@@ -354,8 +354,8 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   printf("  Testing Isolation (%s)...\n", journal_mode_name(journal_mode));
 
   /* Open database */
-  rc = kvstore_open(dbfile, &pKV, journal_mode);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_open(dbfile, &pKV, journal_mode);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
   }
@@ -364,7 +364,7 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   printf("    Test 3.1: Read transaction isolation\n");
   
   /* Setup: Insert initial data */
-  kvstore_put(pKV, key1, strlen(key1), value_orig, strlen(value_orig));
+  keyvaluestore_put(pKV, key1, strlen(key1), value_orig, strlen(value_orig));
   
   /* This test would ideally require multiple connections, but we can
    * verify that within a single process, transactions maintain isolation */
@@ -373,38 +373,38 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   printf("    Test 3.2: Transaction conflict handling\n");
   
   /* Begin transaction, modify data */
-  rc = kvstore_begin(pKV, 1);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_begin(pKV, 1);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to begin write transaction: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Update key within transaction */
-  rc = kvstore_put(pKV, key1, strlen(key1), value_new, strlen(value_new));
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_put(pKV, key1, strlen(key1), value_new, strlen(value_new));
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to update in transaction: %d", rc);
-    kvstore_rollback(pKV);
-    kvstore_close(pKV);
+    keyvaluestore_rollback(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Verify update is visible within transaction */
-  rc = kvstore_get(pKV, key1, strlen(key1), &pVal, &nVal);
-  if(rc != KVSTORE_OK || !buffers_equal(pVal, value_new, strlen(value_new))) {
+  rc = keyvaluestore_get(pKV, key1, strlen(key1), &pVal, &nVal);
+  if(rc != KEYVALUESTORE_OK || !buffers_equal(pVal, value_new, strlen(value_new))) {
     snprintf(err_msg, 1024, "Updated value not visible within transaction");
     sqliteFree(pVal);
-    kvstore_rollback(pKV);
-    kvstore_close(pKV);
+    keyvaluestore_rollback(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   sqliteFree(pVal);
   
   /* Commit transaction */
-  rc = kvstore_commit(pKV);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_commit(pKV);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to commit transaction: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
@@ -412,27 +412,27 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   printf("    Test 3.3: Transaction boundary enforcement\n");
   
   /* Attempting operations without transaction should auto-commit */
-  rc = kvstore_put(pKV, key2, strlen(key2), value_orig, strlen(value_orig));
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_put(pKV, key2, strlen(key2), value_orig, strlen(value_orig));
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Auto-transaction failed: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Verify the data is persisted */
-  rc = kvstore_get(pKV, key2, strlen(key2), &pVal, &nVal);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_get(pKV, key2, strlen(key2), &pVal, &nVal);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Auto-committed data not found: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   sqliteFree(pVal);
   
   /* Cleanup */
-  kvstore_delete(pKV, key1, strlen(key1));
-  kvstore_delete(pKV, key2, strlen(key2));
+  keyvaluestore_delete(pKV, key1, strlen(key1));
+  keyvaluestore_delete(pKV, key2, strlen(key2));
   
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   printf("    Isolation tests PASSED\n");
   return 1;
 }
@@ -443,7 +443,7 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
 ** and simulated crashes
 */
 static int test_durability(const char *dbfile, char *err_msg, int journal_mode) {
-  KVStore *pKV = NULL;
+  KeyValueStore *pKV = NULL;
   int rc;
   char key[] = "durability_key";
   char value[] = "durability_value_that_must_survive";
@@ -455,52 +455,52 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
   /* Test 1: Data survives normal close/reopen */
   printf("    Test 4.1: Data survives close/reopen\n");
 
-  rc = kvstore_open(dbfile, &pKV, journal_mode);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_open(dbfile, &pKV, journal_mode);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to open database: %d", rc);
     return 0;
   }
   
   /* Write and commit data */
-  rc = kvstore_begin(pKV, 1);
-  rc = kvstore_put(pKV, key, strlen(key), value, strlen(value));
-  rc = kvstore_commit(pKV);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_begin(pKV, 1);
+  rc = keyvaluestore_put(pKV, key, strlen(key), value, strlen(value));
+  rc = keyvaluestore_commit(pKV);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to commit data: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Explicitly sync to disk */
-  rc = kvstore_sync(pKV);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_sync(pKV);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to sync: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   /* Close database */
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   pKV = NULL;
   
   /* Reopen and verify data exists */
-  rc = kvstore_open(dbfile, &pKV, journal_mode);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_open(dbfile, &pKV, journal_mode);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Failed to reopen database: %d", rc);
     return 0;
   }
   
-  rc = kvstore_get(pKV, key, strlen(key), &pVal, &nVal);
-  if(rc != KVSTORE_OK) {
+  rc = keyvaluestore_get(pKV, key, strlen(key), &pVal, &nVal);
+  if(rc != KEYVALUESTORE_OK) {
     snprintf(err_msg, 1024, "Data not found after reopen: %d", rc);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   
   if(!buffers_equal(pVal, value, strlen(value))) {
     snprintf(err_msg, 1024, "Data corrupted after reopen");
     sqliteFree(pVal);
-    kvstore_close(pKV);
+    keyvaluestore_close(pKV);
     return 0;
   }
   sqliteFree(pVal);
@@ -514,20 +514,20 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
     snprintf(cycle_key, sizeof(cycle_key), "cycle_key_%d", cycle);
     snprintf(cycle_value, sizeof(cycle_value), "cycle_value_%d", cycle);
     
-    rc = kvstore_put(pKV, cycle_key, strlen(cycle_key), 
+    rc = keyvaluestore_put(pKV, cycle_key, strlen(cycle_key), 
                      cycle_value, strlen(cycle_value));
-    if(rc != KVSTORE_OK) {
+    if(rc != KEYVALUESTORE_OK) {
       snprintf(err_msg, 1024, "Failed to write in cycle %d: %d", cycle, rc);
-      kvstore_close(pKV);
+      keyvaluestore_close(pKV);
       return 0;
     }
     
-    kvstore_sync(pKV);
-    kvstore_close(pKV);
+    keyvaluestore_sync(pKV);
+    keyvaluestore_close(pKV);
     
     /* Reopen */
-    rc = kvstore_open(dbfile, &pKV, journal_mode);
-    if(rc != KVSTORE_OK) {
+    rc = keyvaluestore_open(dbfile, &pKV, journal_mode);
+    if(rc != KEYVALUESTORE_OK) {
       snprintf(err_msg, 1024, "Failed to reopen in cycle %d: %d", cycle, rc);
       return 0;
     }
@@ -538,24 +538,24 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
       snprintf(check_key, sizeof(check_key), "cycle_key_%d", i);
       
       int exists = 0;
-      rc = kvstore_exists(pKV, check_key, strlen(check_key), &exists);
-      if(rc != KVSTORE_OK || !exists) {
+      rc = keyvaluestore_exists(pKV, check_key, strlen(check_key), &exists);
+      if(rc != KEYVALUESTORE_OK || !exists) {
         snprintf(err_msg, 1024, "Data from cycle %d lost in cycle %d", i, cycle);
-        kvstore_close(pKV);
+        keyvaluestore_close(pKV);
         return 0;
       }
     }
   }
   
   /* Cleanup */
-  kvstore_delete(pKV, key, strlen(key));
+  keyvaluestore_delete(pKV, key, strlen(key));
   for(int i = 0; i < 5; i++) {
     char cycle_key[32];
     snprintf(cycle_key, sizeof(cycle_key), "cycle_key_%d", i);
-    kvstore_delete(pKV, cycle_key, strlen(cycle_key));
+    keyvaluestore_delete(pKV, cycle_key, strlen(cycle_key));
   }
   
-  kvstore_close(pKV);
+  keyvaluestore_close(pKV);
   printf("    Durability tests PASSED\n");
   return 1;
 }
@@ -563,7 +563,7 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
 /*
 ** Main ACID compliance check function
 */
-int kvstore_acid_compliance_check(const char *dbfile, ACIDTestResult *result,
+int keyvaluestore_acid_compliance_check(const char *dbfile, ACIDTestResult *result,
                                   int journal_mode) {
   int all_passed = 1;
   const char *mode_name = journal_mode_name(journal_mode);
@@ -651,7 +651,7 @@ int main(int argc, char **argv) {
   /* Parse command line arguments */
   for(int i = 1; i < argc; i++) {
     if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      printf("KVStore ACID Compliance Test Suite\n\n");
+      printf("KeyValueStore ACID Compliance Test Suite\n\n");
       printf("Usage: %s [options] [database_file]\n\n", argv[0]);
       printf("Options:\n");
       printf("  -h, --help     Show this help message\n");
@@ -688,13 +688,13 @@ int main(int argc, char **argv) {
 
   /* Run ACID suite with DELETE journal mode */
   ACIDTestResult result_delete;
-  int passed_delete = kvstore_acid_compliance_check(dbfile, &result_delete,
-                                                     KVSTORE_JOURNAL_DELETE);
+  int passed_delete = keyvaluestore_acid_compliance_check(dbfile, &result_delete,
+                                                     KEYVALUESTORE_JOURNAL_DELETE);
 
   /* Run ACID suite with WAL journal mode */
   ACIDTestResult result_wal;
-  int passed_wal = kvstore_acid_compliance_check(dbfile, &result_wal,
-                                                  KVSTORE_JOURNAL_WAL);
+  int passed_wal = keyvaluestore_acid_compliance_check(dbfile, &result_wal,
+                                                  KEYVALUESTORE_JOURNAL_WAL);
 
   int all_passed = passed_delete && passed_wal;
 

@@ -29,17 +29,17 @@ Single-header integration — drop it in and go:
 #include "snkv.h"
 
 int main(void) {
-    KVStore *db;
-    kvstore_open("mydb.db", &db, KVSTORE_JOURNAL_WAL);
+    KeyValueStore *db;
+    keyvaluestore_open("mydb.db", &db, KEYVALUESTORE_JOURNAL_WAL);
 
-    kvstore_put(db, "key", 3, "value", 5);
+    keyvaluestore_put(db, "key", 3, "value", 5);
 
     void *val; int len;
-    kvstore_get(db, "key", 3, &val, &len);
+    keyvaluestore_get(db, "key", 3, &val, &len);
     printf("%.*s\n", len, (char*)val);
     snkv_free(val);
 
-    kvstore_close(db);
+    keyvaluestore_close(db);
 }
 ```
 
@@ -47,32 +47,32 @@ int main(void) {
 
 ## Configuration
 
-Use `kvstore_open_v2` to control how the store is opened. Zero-initialise the
+Use `keyvaluestore_open_v2` to control how the store is opened. Zero-initialise the
 config and set only what you need — unset fields resolve to safe defaults.
 
 ```c
-KVStoreConfig cfg = {0};
-cfg.journalMode = KVSTORE_JOURNAL_WAL;   /* WAL mode (default) */
-cfg.syncLevel   = KVSTORE_SYNC_NORMAL;   /* survives process crash (default) */
+KeyValueStoreConfig cfg = {0};
+cfg.journalMode = KEYVALUESTORE_JOURNAL_WAL;   /* WAL mode (default) */
+cfg.syncLevel   = KEYVALUESTORE_SYNC_NORMAL;   /* survives process crash (default) */
 cfg.cacheSize   = 4000;                  /* ~16 MB page cache (default 2000 ≈ 8 MB) */
 cfg.pageSize    = 4096;                  /* DB page size, new DBs only (default 4096) */
 cfg.busyTimeout = 5000;                  /* retry 5 s on SQLITE_BUSY (default 0) */
 cfg.readOnly    = 0;                     /* read-write (default) */
 
-KVStore *db;
-kvstore_open_v2("mydb.db", &db, &cfg);
+KeyValueStore *db;
+keyvaluestore_open_v2("mydb.db", &db, &cfg);
 ```
 
 | Field | Default | Options |
 |-------|---------|---------|
-| `journalMode` | `KVSTORE_JOURNAL_WAL` | `KVSTORE_JOURNAL_DELETE` |
-| `syncLevel` | `KVSTORE_SYNC_NORMAL` | `KVSTORE_SYNC_OFF`, `KVSTORE_SYNC_FULL` |
+| `journalMode` | `KEYVALUESTORE_JOURNAL_WAL` | `KEYVALUESTORE_JOURNAL_DELETE` |
+| `syncLevel` | `KEYVALUESTORE_SYNC_NORMAL` | `KEYVALUESTORE_SYNC_OFF`, `KEYVALUESTORE_SYNC_FULL` |
 | `cacheSize` | 2000 pages (~8 MB) | Any positive integer |
 | `pageSize` | 4096 bytes | Power of 2, 512–65536; new DBs only |
 | `readOnly` | 0 | 1 to open read-only |
 | `busyTimeout` | 0 (fail immediately) | Milliseconds; useful for multi-process use |
 
-`kvstore_open` remains fully supported and uses all defaults except `journalMode`.
+`keyvaluestore_open` remains fully supported and uses all defaults except `journalMode`.
 
 ---
 
@@ -128,9 +128,9 @@ pip install snkv
 ```
 
 ```python
-from snkv import KVStore
+from snkv import KeyValueStore
 
-with KVStore("mydb.db") as db:
+with KeyValueStore("mydb.db") as db:
     db["hello"] = "world"
     print(db["hello"].decode())   # world
 ```
@@ -277,7 +277,7 @@ I documented the SQLite internals explored while building this:
 - [B-Tree operations](https://github.com/hash-anu/snkv/blob/master/internal/BTREE_OPERATIONS.md)
 - [Pager operations](https://github.com/hash-anu/snkv/blob/master/internal/PAGER_OPERATIONS.md)
 - [OS layer operations](https://github.com/hash-anu/snkv/blob/master/internal/OS_LAYER_OPERATIONS.md)
-- [KV layer design](https://github.com/hash-anu/snkv/blob/master/internal/KVSTORE_OPERATIONS.md)
+- [KV layer design](https://github.com/hash-anu/snkv/blob/master/internal/KEYVALUESTORE_OPERATIONS.md)
 
 ---
 

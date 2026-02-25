@@ -9,7 +9,7 @@ transactions, journaling, and WAL.
 ## Architecture Context
 
 ```
-  kvstore.c  (API)
+  keyvaluestore.c  (API)
       │
   btree.c    (B-tree)
       │
@@ -1138,14 +1138,14 @@ to rearrange pages without disk I/O.
 
 | kvstore function       | btree function          | Pager operations                              |
 |------------------------|-------------------------|-----------------------------------------------|
-| `kvstore_open`         | `BtreeOpen`             | `PagerOpen`, `ReadFileheader`, `SetPagesize`  |
-| `kvstore_close`        | `BtreeClose`            | `PagerClose`, `PagerRollback` (if needed)     |
-| `kvstore_begin`        | `BtreeBeginTrans`       | `SharedLock`, `Begin`, `OpenSavepoint`        |
-| `kvstore_put`          | `BtreeInsert`           | `Get`, `Write` (multiple pages)               |
-| `kvstore_get`          | `BtreePayload`          | `Get`, `GetData`                              |
-| `kvstore_delete`       | `BtreeDelete`           | `Get`, `Write` (rebalance pages)              |
-| `kvstore_commit`       | `BtreeCommit`           | `CommitPhaseOne`, `CommitPhaseTwo`            |
-| `kvstore_rollback`     | `BtreeRollback`         | `PagerRollback`                               |
-| `kvstore_iterator_*`   | `BtreeFirst/Next`       | `Get`, `GetData` (sequential page access)     |
-| `kvstore_sync`         | `BtreeCheckpoint`       | `PagerCheckpoint`                             |
-| `kvstore_integrity_*`  | `BtreeIntegrityCheck`   | `Get` (reads every page)                      |
+| `keyvaluestore_open`         | `BtreeOpen`             | `PagerOpen`, `ReadFileheader`, `SetPagesize`  |
+| `keyvaluestore_close`        | `BtreeClose`            | `PagerClose`, `PagerRollback` (if needed)     |
+| `keyvaluestore_begin`        | `BtreeBeginTrans`       | `SharedLock`, `Begin`, `OpenSavepoint`        |
+| `keyvaluestore_put`          | `BtreeInsert`           | `Get`, `Write` (multiple pages)               |
+| `keyvaluestore_get`          | `BtreePayload`          | `Get`, `GetData`                              |
+| `keyvaluestore_delete`       | `BtreeDelete`           | `Get`, `Write` (rebalance pages)              |
+| `keyvaluestore_commit`       | `BtreeCommit`           | `CommitPhaseOne`, `CommitPhaseTwo`            |
+| `keyvaluestore_rollback`     | `BtreeRollback`         | `PagerRollback`                               |
+| `keyvaluestore_iterator_*`   | `BtreeFirst/Next`       | `Get`, `GetData` (sequential page access)     |
+| `keyvaluestore_sync`         | `BtreeCheckpoint`       | `PagerCheckpoint`                             |
+| `keyvaluestore_integrity_*`  | `BtreeIntegrityCheck`   | `Get` (reads every page)                      |

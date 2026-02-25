@@ -1,6 +1,6 @@
 # SNKV B-tree Operations Diagram Reference
 
-Every B-tree operation that `kvstore.c` invokes, with diagrams showing what happens inside the tree.
+Every B-tree operation that `keyvaluestore.c` invokes, with diagrams showing what happens inside the tree.
 
 ---
 
@@ -32,7 +32,7 @@ Every B-tree operation that `kvstore.c` invokes, with diagrams showing what happ
 
 ## 1. BtreeOpen
 
-**Used by:** `kvstore_open()`
+**Used by:** `keyvaluestore_open()`
 
 Opens or creates a database file and initializes the B-tree subsystem.
 
@@ -76,7 +76,7 @@ Opens or creates a database file and initializes the B-tree subsystem.
 
 ## 2. BtreeClose
 
-**Used by:** `kvstore_close()`
+**Used by:** `keyvaluestore_close()`
 
 Closes the B-tree, flushes dirty pages, releases file locks.
 
@@ -108,7 +108,7 @@ Closes the B-tree, flushes dirty pages, releases file locks.
 
 ## 3. BtreeBeginTrans
 
-**Used by:** `kvstore_begin()`, auto-transactions in put/get/delete
+**Used by:** `keyvaluestore_begin()`, auto-transactions in put/get/delete
 
 Acquires a read or write lock on the database.
 
@@ -157,7 +157,7 @@ Acquires a read or write lock on the database.
 
 ## 4. BtreeCommit
 
-**Used by:** `kvstore_commit()`
+**Used by:** `keyvaluestore_commit()`
 
 Makes all changes in the current write transaction durable.
 
@@ -206,7 +206,7 @@ Makes all changes in the current write transaction durable.
 
 ## 5. BtreeRollback
 
-**Used by:** `kvstore_rollback()`, error recovery paths
+**Used by:** `keyvaluestore_rollback()`, error recovery paths
 
 Discards all changes from the current write transaction.
 
@@ -245,7 +245,7 @@ Discards all changes from the current write transaction.
 
 ## 6. BtreeCreateTable
 
-**Used by:** `kvstore_open()` (create default CF), `kvstore_cf_create()`
+**Used by:** `keyvaluestore_open()` (create default CF), `keyvaluestore_cf_create()`
 
 Allocates a new B-tree root page for a new table (column family).
 
@@ -282,7 +282,7 @@ Allocates a new B-tree root page for a new table (column family).
 
 ## 7. BtreeDropTable
 
-**Used by:** `kvstore_cf_drop()`
+**Used by:** `keyvaluestore_cf_drop()`
 
 Deletes a B-tree and all its pages, returning them to the freelist.
 
@@ -353,7 +353,7 @@ Opens a cursor positioned on a specific B-tree. The cursor navigates through pag
 
 ## 9. BtreeIndexMoveto
 
-**Used by:** `kvstore_cf_put()`, `kvstore_cf_get()`, `kvstore_cf_delete()`, `kvstore_cf_exists()`, prefix iterators
+**Used by:** `keyvaluestore_cf_put()`, `keyvaluestore_cf_get()`, `keyvaluestore_cf_delete()`, `keyvaluestore_cf_exists()`, prefix iterators
 
 Positions cursor on or near a key in a BLOBKEY tree using the custom comparator.
 
@@ -433,7 +433,7 @@ Positions cursor on a row in an INTKEY table by integer rowid. Used internally f
 
 ## 11. BtreeInsert
 
-**Used by:** `kvstore_cf_put()`, `kvstore_cf_create()` (metadata insert)
+**Used by:** `keyvaluestore_cf_put()`, `keyvaluestore_cf_create()` (metadata insert)
 
 Inserts or replaces a cell at the cursor position. May trigger page splits.
 
@@ -511,7 +511,7 @@ Inserts or replaces a cell at the cursor position. May trigger page splits.
 
 ## 12. BtreeDelete
 
-**Used by:** `kvstore_cf_delete()`, `kvstore_cf_drop()` (metadata delete)
+**Used by:** `keyvaluestore_cf_delete()`, `keyvaluestore_cf_drop()` (metadata delete)
 
 Deletes the cell at the current cursor position.
 
@@ -573,7 +573,7 @@ Deletes the cell at the current cursor position.
 
 ## 13. BtreeFirst
 
-**Used by:** `kvstore_iterator_first()`, CF list scanning, integrity check
+**Used by:** `keyvaluestore_iterator_first()`, CF list scanning, integrity check
 
 Positions cursor at the very first (smallest) cell in the B-tree.
 
@@ -614,7 +614,7 @@ Positions cursor at the very first (smallest) cell in the B-tree.
 
 ## 14. BtreeNext
 
-**Used by:** `kvstore_iterator_next()`, scanning loops
+**Used by:** `keyvaluestore_iterator_next()`, scanning loops
 
 Advances cursor to the next cell in sorted order.
 
@@ -714,7 +714,7 @@ Reads cell content from the current cursor position.
 
 ## 16. BtreeGetMeta / BtreeUpdateMeta
 
-**Used by:** `kvstore_open()` (read CF roots), `kvstore_cf_create/drop()` (update CF count)
+**Used by:** `keyvaluestore_open()` (read CF roots), `keyvaluestore_cf_create/drop()` (update CF count)
 
 Reads or writes metadata integers stored in the database header (page 1, bytes 36-95).
 
@@ -747,7 +747,7 @@ Reads or writes metadata integers stored in the database header (page 1, bytes 3
 
 ## 17. BtreeSetCacheSize
 
-**Used by:** `kvstore_open()`
+**Used by:** `keyvaluestore_open()`
 
 Configures how many pages the pager keeps in memory.
 
@@ -780,7 +780,7 @@ Configures how many pages the pager keeps in memory.
 
 ## 18. BtreeSetVersion
 
-**Used by:** `kvstore_open()`
+**Used by:** `keyvaluestore_open()`
 
 Sets the database file format version, which controls journal mode.
 
@@ -813,7 +813,7 @@ Sets the database file format version, which controls journal mode.
 
 ## 19. BtreeIntegrityCheck
 
-**Used by:** `kvstore_integrity_check()`
+**Used by:** `keyvaluestore_integrity_check()`
 
 Walks every page of every B-tree in the database to verify structural consistency.
 
@@ -864,7 +864,7 @@ Walks every page of every B-tree in the database to verify structural consistenc
 
 ## 20. BtreeSetAutoVacuum
 
-**Used by:** `kvstore_open()` (always sets incremental auto-vacuum on new databases)
+**Used by:** `keyvaluestore_open()` (always sets incremental auto-vacuum on new databases)
 
 Configures the auto-vacuum mode for the database. Must be called before any transaction writes data (before `BTS_PAGESIZE_FIXED` is set). For existing databases, the mode is stored in the DB header and cannot be changed.
 
@@ -923,7 +923,7 @@ Configures the auto-vacuum mode for the database. Must be called before any tran
 
 ## 21. BtreeIncrVacuum
 
-**Used by:** `kvstore_incremental_vacuum()`
+**Used by:** `keyvaluestore_incremental_vacuum()`
 
 Performs a single step of incremental vacuum: moves one live page from the end of the file into a freelist gap, then truncates the file. Called repeatedly to reclaim all free space.
 
@@ -994,30 +994,30 @@ Performs a single step of incremental vacuum: moves one live page from the end o
   │hdr │pmap│data│data│data│data│data│      (3 pages freed)
   └────┴────┴────┴────┴────┴────┴────┘
 
-  kvstore_incremental_vacuum() calls BtreeIncrVacuum in a loop:
+  keyvaluestore_incremental_vacuum() calls BtreeIncrVacuum in a loop:
     nPage > 0: call N times (partial vacuum)
     nPage = 0: call until SQLITE_DONE (full vacuum)
 ```
 
 ---
 
-## Quick Reference: kvstore.c → B-tree Mapping
+## Quick Reference: keyvaluestore.c → B-tree Mapping
 
 | kvstore function | B-tree operations used |
 |---|---|
-| `kvstore_open` | Open, SetAutoVacuum, SetCacheSize, SetVersion, BeginTrans, CreateTable, GetMeta, UpdateMeta, Commit, Cursor, First, Next, Payload |
-| `kvstore_close` | Close (checkpoints WAL, frees everything) |
-| `kvstore_begin` | BeginTrans |
-| `kvstore_commit` | Commit |
-| `kvstore_rollback` | Rollback |
-| `kvstore_put` | BeginTrans, Cursor, IndexMoveto, Insert, Commit |
-| `kvstore_get` | BeginTrans, Cursor, IndexMoveto, PayloadSize, Payload, Commit |
-| `kvstore_delete` | BeginTrans, Cursor, IndexMoveto, Delete, Commit |
-| `kvstore_exists` | BeginTrans, Cursor, IndexMoveto, PayloadSize, Payload, Commit |
-| `kvstore_cf_create` | BeginTrans, CreateTable, Cursor, Insert, GetMeta, UpdateMeta, Commit |
-| `kvstore_cf_drop` | BeginTrans, Cursor, TableMoveto, Delete, DropTable, GetMeta, UpdateMeta, Commit |
-| `kvstore_cf_list` | BeginTrans, Cursor, First, Next, PayloadSize, Payload, Commit |
-| `kvstore_iterator_*` | Cursor, First, IndexMoveto, Next, PayloadSize, Payload |
-| `kvstore_integrity_check` | BeginTrans, IntegrityCheck, Commit |
-| `kvstore_sync` | Commit + BeginTrans (flush cycle) |
-| `kvstore_incremental_vacuum` | BeginTrans, IncrVacuum (loop), Commit |
+| `keyvaluestore_open` | Open, SetAutoVacuum, SetCacheSize, SetVersion, BeginTrans, CreateTable, GetMeta, UpdateMeta, Commit, Cursor, First, Next, Payload |
+| `keyvaluestore_close` | Close (checkpoints WAL, frees everything) |
+| `keyvaluestore_begin` | BeginTrans |
+| `keyvaluestore_commit` | Commit |
+| `keyvaluestore_rollback` | Rollback |
+| `keyvaluestore_put` | BeginTrans, Cursor, IndexMoveto, Insert, Commit |
+| `keyvaluestore_get` | BeginTrans, Cursor, IndexMoveto, PayloadSize, Payload, Commit |
+| `keyvaluestore_delete` | BeginTrans, Cursor, IndexMoveto, Delete, Commit |
+| `keyvaluestore_exists` | BeginTrans, Cursor, IndexMoveto, PayloadSize, Payload, Commit |
+| `keyvaluestore_cf_create` | BeginTrans, CreateTable, Cursor, Insert, GetMeta, UpdateMeta, Commit |
+| `keyvaluestore_cf_drop` | BeginTrans, Cursor, TableMoveto, Delete, DropTable, GetMeta, UpdateMeta, Commit |
+| `keyvaluestore_cf_list` | BeginTrans, Cursor, First, Next, PayloadSize, Payload, Commit |
+| `keyvaluestore_iterator_*` | Cursor, First, IndexMoveto, Next, PayloadSize, Payload |
+| `keyvaluestore_integrity_check` | BeginTrans, IntegrityCheck, Commit |
+| `keyvaluestore_sync` | Commit + BeginTrans (flush cycle) |
+| `keyvaluestore_incremental_vacuum` | BeginTrans, IncrVacuum (loop), Commit |
