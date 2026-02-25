@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snkv"
-version = "0.2.0"
+version = "0.2.1"
 requires-python = ">=3.8"
 description = "Python bindings for SNKV - crash-safe embedded key-value store"
 license = {text = "Apache-2.0"}
