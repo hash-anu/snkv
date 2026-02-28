@@ -962,29 +962,12 @@ int kvstore_close(KVStore *pKV){
     pKV->inTrans = 0;
   }
 
-  /* Close all open column families (free cached cursors before struct) */
-  if( pKV->pDefaultCF ){
-    if( pKV->pDefaultCF->pReadCur ){
-      kvstoreFreeCursor(pKV->pDefaultCF->pReadCur);
-    }
-    if( pKV->pDefaultCF->pMutex ){
-      sqlite3_mutex_free(pKV->pDefaultCF->pMutex);
-    }
-    sqlite3_free(pKV->pDefaultCF->zName);
-    sqlite3_free(pKV->pDefaultCF);
-  }
+  /* Close all open column families (including TTL index CFs) */
+  kvstoreFreeCFStruct(pKV->pDefaultCF);
+  pKV->pDefaultCF = NULL;
 
   for(i = 0; i < pKV->nCF; i++){
-    if( pKV->apCF[i] ){
-      if( pKV->apCF[i]->pReadCur ){
-        kvstoreFreeCursor(pKV->apCF[i]->pReadCur);
-      }
-      if( pKV->apCF[i]->pMutex ){
-        sqlite3_mutex_free(pKV->apCF[i]->pMutex);
-      }
-      sqlite3_free(pKV->apCF[i]->zName);
-      sqlite3_free(pKV->apCF[i]);
-    }
+    kvstoreFreeCFStruct(pKV->apCF[i]);
   }
   sqlite3_free(pKV->apCF);
 
