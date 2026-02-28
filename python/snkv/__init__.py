@@ -20,6 +20,8 @@ The store always returns raw bytes from get/iteration.
 
 from __future__ import annotations
 
+import time
+
 from typing import (
     Iterator as TypingIterator,
     Optional,
@@ -45,6 +47,7 @@ from ._snkv import (
     CHECKPOINT_FULL,
     CHECKPOINT_RESTART,
     CHECKPOINT_TRUNCATE,
+    NO_TTL,
 )
 
 _KVStore       = _snkv.KVStore
@@ -166,18 +169,33 @@ class ColumnFamily:
 
     # --- Core operations ---
 
-    def put(self, key: _Encodable, value: _Encodable) -> None:
-        """Insert or update a key-value pair."""
-        self._cf.put(_enc(key), _enc(value))
+    def put(
+        self,
+        key: _Encodable,
+        value: _Encodable,
+        ttl: Optional[float] = None,
+    ) -> None:
+        """
+        Insert or update a key-value pair.
+
+        ttl -- seconds until the key expires (int or float). None means no expiry.
+               Both the data write and the TTL index write are atomic.
+        """
+        if ttl is None:
+            self._cf.put(_enc(key), _enc(value))
+        else:
+            expire_ms = int((time.time() + float(ttl)) * 1000)
+            self._cf.put_ttl(_enc(key), _enc(value), expire_ms)
 
     def get(
         self,
         key: _Encodable,
         default: Optional[bytes] = None,
     ) -> Optional[bytes]:
-        """Return value bytes, or default if key not found."""
+        """Return value bytes, or default if key not found or expired."""
         try:
-            return self._cf.get(_enc(key))
+            value, _remaining = self._cf.get_ttl(_enc(key))
+            return value
         except NotFoundError:
             return default
 
@@ -188,6 +206,23 @@ class ColumnFamily:
     def exists(self, key: _Encodable) -> bool:
         """Return True if key exists."""
         return self._cf.exists(_enc(key))
+
+    def ttl(self, key: _Encodable) -> Optional[float]:
+        """
+        Return remaining TTL in seconds for key.
+
+        Returns None if the key exists but has no expiry.
+        Returns 0.0 if the key has just expired (lazy delete performed).
+        Raises NotFoundError if the key does not exist at all.
+        """
+        remaining_ms = self._cf.ttl_remaining(_enc(key))
+        if remaining_ms == _snkv.NO_TTL:
+            return None
+        return remaining_ms / 1000.0
+
+    def purge_expired(self) -> int:
+        """Scan and delete all expired keys in this CF. Returns count deleted."""
+        return self._cf.purge_expired()
 
     # --- Iterators ---
 
@@ -203,7 +238,9 @@ class ColumnFamily:
 
     def __getitem__(self, key: _Encodable) -> bytes:
         # NotFoundError IS-A KeyError — let it propagate directly.
-        return self._cf.get(_enc(key))
+        # Use get_ttl so expired keys raise KeyError rather than returning stale data.
+        value, _remaining = self._cf.get_ttl(_enc(key))
+        return value
 
     def __setitem__(self, key: _Encodable, value: _Encodable) -> None:
         self._cf.put(_enc(key), _enc(value))
@@ -286,18 +323,33 @@ class KVStore:
 
     # --- Core KV operations ---
 
-    def put(self, key: _Encodable, value: _Encodable) -> None:
-        """Insert or update a key-value pair in the default column family."""
-        self._db.put(_enc(key), _enc(value))
+    def put(
+        self,
+        key: _Encodable,
+        value: _Encodable,
+        ttl: Optional[float] = None,
+    ) -> None:
+        """
+        Insert or update a key-value pair in the default column family.
+
+        ttl -- seconds until the key expires (int or float). None means no expiry.
+               Both the data write and the TTL index write are atomic.
+        """
+        if ttl is None:
+            self._db.put(_enc(key), _enc(value))
+        else:
+            expire_ms = int((time.time() + float(ttl)) * 1000)
+            self._db.put_ttl(_enc(key), _enc(value), expire_ms)
 
     def get(
         self,
         key: _Encodable,
         default: Optional[bytes] = None,
     ) -> Optional[bytes]:
-        """Return value bytes for key, or default if not found."""
+        """Return value bytes for key, or default if not found or expired."""
         try:
-            return self._db.get(_enc(key))
+            value, _remaining = self._db.get_ttl(_enc(key))
+            return value
         except NotFoundError:
             return default
 
@@ -309,11 +361,30 @@ class KVStore:
         """Return True if key exists in the default column family."""
         return self._db.exists(_enc(key))
 
+    def ttl(self, key: _Encodable) -> Optional[float]:
+        """
+        Return remaining TTL in seconds for key.
+
+        Returns None if the key exists but has no expiry.
+        Returns 0.0 if the key has just expired (lazy delete performed).
+        Raises NotFoundError if the key does not exist at all.
+        """
+        remaining_ms = self._db.ttl_remaining(_enc(key))
+        if remaining_ms == _snkv.NO_TTL:
+            return None
+        return remaining_ms / 1000.0
+
+    def purge_expired(self) -> int:
+        """Scan and delete all expired keys. Returns the number of keys deleted."""
+        return self._db.purge_expired()
+
     # --- dict-like interface ---
 
     def __getitem__(self, key: _Encodable) -> bytes:
         # NotFoundError IS-A KeyError — let it propagate directly.
-        return self._db.get(_enc(key))
+        # Use get_ttl so expired keys raise KeyError rather than returning stale data.
+        value, _remaining = self._db.get_ttl(_enc(key))
+        return value
 
     def __setitem__(self, key: _Encodable, value: _Encodable) -> None:
         self._db.put(_enc(key), _enc(value))
@@ -467,4 +538,6 @@ __all__ = [
     "CHECKPOINT_FULL",
     "CHECKPOINT_RESTART",
     "CHECKPOINT_TRUNCATE",
+    # TTL
+    "NO_TTL",
 ]

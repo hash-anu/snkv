@@ -478,6 +478,113 @@ ColumnFamily_exit(ColumnFamilyObject *self, PyObject *args)
     Py_RETURN_FALSE;
 }
 
+/* ColumnFamily.put_ttl(key, value, expire_ms) -> None */
+static PyObject *
+ColumnFamily_put_ttl(ColumnFamilyObject *self, PyObject *args)
+{
+    Py_buffer key_buf, val_buf;
+    long long expire_ms;
+    int       rc;
+
+    CF_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*y*L", &key_buf, &val_buf, &expire_ms))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_put_ttl(self->cf,
+                            key_buf.buf, (int)key_buf.len,
+                            val_buf.buf, (int)val_buf.len,
+                            (int64_t)expire_ms);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+    PyBuffer_Release(&val_buf);
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    Py_RETURN_NONE;
+}
+
+/* ColumnFamily.get_ttl(key) -> (bytes, int)
+**   Returns (value_bytes, remaining_ms).
+**   remaining_ms == KVSTORE_NO_TTL (-1) means no expiry.
+**   Raises NotFoundError if missing or expired.
+*/
+static PyObject *
+ColumnFamily_get_ttl(ColumnFamilyObject *self, PyObject *args)
+{
+    Py_buffer key_buf;
+    void     *value     = NULL;
+    int       nValue    = 0, rc;
+    int64_t   remaining = 0;
+    PyObject *val_obj, *result;
+
+    CF_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &key_buf)) return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_get_ttl(self->cf,
+                            key_buf.buf, (int)key_buf.len,
+                            &value, &nValue, &remaining);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+
+    if (rc == KVSTORE_NOTFOUND) {
+        PyErr_SetNone(SnkvNotFoundError);
+        return NULL;
+    }
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+
+    val_obj = PyBytes_FromStringAndSize((const char *)value, nValue);
+    snkv_free(value);
+    if (!val_obj) return NULL;
+    result = Py_BuildValue("(OL)", val_obj, (long long)remaining);
+    Py_DECREF(val_obj);
+    return result;
+}
+
+/* ColumnFamily.ttl_remaining(key) -> int */
+static PyObject *
+ColumnFamily_ttl_remaining(ColumnFamilyObject *self, PyObject *args)
+{
+    Py_buffer key_buf;
+    int64_t   remaining = 0;
+    int       rc;
+
+    CF_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &key_buf)) return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_ttl_remaining(self->cf,
+                                  key_buf.buf, (int)key_buf.len,
+                                  &remaining);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+
+    if (rc == KVSTORE_NOTFOUND) {
+        PyErr_SetNone(SnkvNotFoundError);
+        return NULL;
+    }
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyLong_FromLongLong((long long)remaining);
+}
+
+/* ColumnFamily.purge_expired() -> int */
+static PyObject *
+ColumnFamily_purge_expired(ColumnFamilyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int n_deleted = 0, rc;
+
+    CF_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_purge_expired(self->cf, &n_deleted);
+    Py_END_ALLOW_THREADS
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyLong_FromLong(n_deleted);
+}
+
 static PyMethodDef ColumnFamily_methods[] = {
     {"put",              (PyCFunction)ColumnFamily_put,              METH_VARARGS, "put(key, value) -> None"},
     {"get",              (PyCFunction)ColumnFamily_get,              METH_VARARGS, "get(key) -> bytes"},
@@ -485,6 +592,12 @@ static PyMethodDef ColumnFamily_methods[] = {
     {"exists",           (PyCFunction)ColumnFamily_exists,           METH_VARARGS, "exists(key) -> bool"},
     {"iterator",         (PyCFunction)ColumnFamily_iterator,         METH_NOARGS,  "iterator() -> Iterator"},
     {"prefix_iterator",  (PyCFunction)ColumnFamily_prefix_iterator,  METH_VARARGS, "prefix_iterator(prefix) -> Iterator"},
+    /* TTL */
+    {"put_ttl",          (PyCFunction)ColumnFamily_put_ttl,          METH_VARARGS, "put_ttl(key, value, expire_ms) -> None"},
+    {"get_ttl",          (PyCFunction)ColumnFamily_get_ttl,          METH_VARARGS, "get_ttl(key) -> (bytes, int)"},
+    {"ttl_remaining",    (PyCFunction)ColumnFamily_ttl_remaining,    METH_VARARGS, "ttl_remaining(key) -> int"},
+    {"purge_expired",    (PyCFunction)ColumnFamily_purge_expired,    METH_NOARGS,  "purge_expired() -> int"},
+    /* Lifecycle */
     {"close",            (PyCFunction)ColumnFamily_close,            METH_NOARGS,  "close() -> None"},
     {"__enter__",        (PyCFunction)ColumnFamily_enter,            METH_NOARGS,  NULL},
     {"__exit__",         (PyCFunction)ColumnFamily_exit,             METH_VARARGS, NULL},
@@ -1075,6 +1188,119 @@ KVStore_exit(KVStoreObject *self, PyObject *args)
     Py_RETURN_FALSE;
 }
 
+/* KVStore.put_ttl(key, value, expire_ms) -> None
+**   expire_ms > 0  — absolute expiry in ms since Unix epoch
+**   expire_ms == 0 — permanent key (removes any existing TTL entry)
+*/
+static PyObject *
+KVStore_put_ttl(KVStoreObject *self, PyObject *args)
+{
+    Py_buffer key_buf, val_buf;
+    long long expire_ms;
+    int       rc;
+
+    KV_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*y*L", &key_buf, &val_buf, &expire_ms))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_put_ttl(self->db,
+                         key_buf.buf, (int)key_buf.len,
+                         val_buf.buf, (int)val_buf.len,
+                         (int64_t)expire_ms);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+    PyBuffer_Release(&val_buf);
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    Py_RETURN_NONE;
+}
+
+/* KVStore.get_ttl(key) -> (bytes, int)
+**   Returns (value_bytes, remaining_ms).
+**   remaining_ms == KVSTORE_NO_TTL (-1) means the key has no expiry.
+**   Raises NotFoundError if missing or just expired.
+*/
+static PyObject *
+KVStore_get_ttl(KVStoreObject *self, PyObject *args)
+{
+    Py_buffer key_buf;
+    void     *value     = NULL;
+    int       nValue    = 0, rc;
+    int64_t   remaining = 0;
+    PyObject *val_obj, *result;
+
+    KV_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &key_buf)) return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_get_ttl(self->db, key_buf.buf, (int)key_buf.len,
+                         &value, &nValue, &remaining);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+
+    if (rc == KVSTORE_NOTFOUND) {
+        PyErr_SetNone(SnkvNotFoundError);
+        return NULL;
+    }
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+
+    val_obj = PyBytes_FromStringAndSize((const char *)value, nValue);
+    snkv_free(value);
+    if (!val_obj) return NULL;
+    result = Py_BuildValue("(OL)", val_obj, (long long)remaining);
+    Py_DECREF(val_obj);
+    return result;
+}
+
+/* KVStore.ttl_remaining(key) -> int
+**   Returns remaining ms. KVSTORE_NO_TTL (-1) if no expiry set.
+**   Raises NotFoundError if the key does not exist.
+*/
+static PyObject *
+KVStore_ttl_remaining(KVStoreObject *self, PyObject *args)
+{
+    Py_buffer key_buf;
+    int64_t   remaining = 0;
+    int       rc;
+
+    KV_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &key_buf)) return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_ttl_remaining(self->db, key_buf.buf, (int)key_buf.len,
+                               &remaining);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+
+    if (rc == KVSTORE_NOTFOUND) {
+        PyErr_SetNone(SnkvNotFoundError);
+        return NULL;
+    }
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyLong_FromLongLong((long long)remaining);
+}
+
+/* KVStore.purge_expired() -> int
+**   Deletes all expired keys. Returns count of deleted keys.
+*/
+static PyObject *
+KVStore_purge_expired(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int n_deleted = 0, rc;
+
+    KV_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_purge_expired(self->db, &n_deleted);
+    Py_END_ALLOW_THREADS
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyLong_FromLong(n_deleted);
+}
+
 static PyMethodDef KVStore_methods[] = {
     /* Class method */
     {"open_v2",          (PyCFunction)KVStore_open_v2,          METH_CLASS|METH_VARARGS|METH_KEYWORDS,
@@ -1109,6 +1335,12 @@ static PyMethodDef KVStore_methods[] = {
     {"vacuum",           (PyCFunction)KVStore_vacuum,            METH_VARARGS|METH_KEYWORDS, "vacuum(n_pages=0) -> None"},
     {"integrity_check",  (PyCFunction)KVStore_integrity_check,   METH_NOARGS,   "integrity_check() -> None"},
     {"checkpoint",       (PyCFunction)KVStore_checkpoint,        METH_VARARGS|METH_KEYWORDS, "checkpoint(mode=CHECKPOINT_PASSIVE) -> (nLog, nCkpt)"},
+
+    /* TTL */
+    {"put_ttl",          (PyCFunction)KVStore_put_ttl,           METH_VARARGS,  "put_ttl(key, value, expire_ms) -> None"},
+    {"get_ttl",          (PyCFunction)KVStore_get_ttl,           METH_VARARGS,  "get_ttl(key) -> (bytes, int)"},
+    {"ttl_remaining",    (PyCFunction)KVStore_ttl_remaining,     METH_VARARGS,  "ttl_remaining(key) -> int"},
+    {"purge_expired",    (PyCFunction)KVStore_purge_expired,     METH_NOARGS,   "purge_expired() -> int"},
 
     /* Lifecycle */
     {"close",            (PyCFunction)KVStore_close,             METH_NOARGS,   "close() -> None"},
@@ -1239,6 +1471,9 @@ PyInit__snkv(void)
     if (PyModule_AddIntConstant(m, "CHECKPOINT_FULL",     KVSTORE_CHECKPOINT_FULL)    < 0) goto error;
     if (PyModule_AddIntConstant(m, "CHECKPOINT_RESTART",  KVSTORE_CHECKPOINT_RESTART) < 0) goto error;
     if (PyModule_AddIntConstant(m, "CHECKPOINT_TRUNCATE", KVSTORE_CHECKPOINT_TRUNCATE)< 0) goto error;
+
+    /* TTL sentinel: key exists but has no expiry */
+    if (PyModule_AddIntConstant(m, "NO_TTL", (long)KVSTORE_NO_TTL) < 0) goto error;
 
     /* Error code constants (mirror KVSTORE_* values) */
     if (PyModule_AddIntConstant(m, "OK",       KVSTORE_OK)       < 0) goto error;
