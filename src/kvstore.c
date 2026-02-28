@@ -143,22 +143,18 @@ static void kvstoreFreeCursor(BtCursor *pCur){
 
 /* ======================================================================
 ** Current time in milliseconds since the Unix epoch.
+** Uses sqlite3OsCurrentTimeInt64 via the default VFS so that the same
+** time source is used on all platforms (POSIX, Windows, custom VFS).
+** sqlite3OsCurrentTimeInt64 returns milliseconds since the Julian epoch;
+** subtract the Julian-to-Unix offset (2440587.5 days * 86400000 ms/day).
 ** ====================================================================== */
 int64_t kvstore_now_ms(void){
-#ifdef _WIN32
-  FILETIME ft;
-  ULARGE_INTEGER ul;
-  GetSystemTimeAsFileTime(&ft);
-  ul.LowPart  = ft.dwLowDateTime;
-  ul.HighPart = ft.dwHighDateTime;
-  /* Windows FILETIME epoch is 1601-01-01; subtract 116444736000000000 * 100ns
-  ** intervals to reach Unix epoch, then divide by 10000 to get ms. */
-  return (int64_t)((ul.QuadPart - 116444736000000000ULL) / 10000);
-#else
-  struct timeval tv;
-  gettimeofday(&tv, 0);
-  return (int64_t)tv.tv_sec * 1000 + (int64_t)(tv.tv_usec / 1000);
-#endif
+  sqlite3_int64 iNow = 0;
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  if( pVfs ){
+    sqlite3OsCurrentTimeInt64(pVfs, &iNow);
+  }
+  return (int64_t)(iNow - 210866760000000LL);
 }
 
 /* ======================================================================
