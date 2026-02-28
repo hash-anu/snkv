@@ -106,6 +106,20 @@ static long long getFileSize(const char *zPath) {
     return (long long)st.st_size;
 }
 
+/* Return combined size of the DB file and its WAL sidecar.
+** In WAL mode, committed pages accumulate in the WAL until a checkpoint
+** merges them back into the main file.  Checking only the main file
+** causes doWrite to run indefinitely when no checkpoint fires. */
+static long long getTotalDbSize(const char *zDb) {
+    char walPath[512];
+    snprintf(walPath, sizeof(walPath), "%s-wal", zDb);
+    long long sz    = getFileSize(zDb);
+    long long walSz = getFileSize(walPath);
+    if (sz    < 0) sz    = 0;
+    if (walSz > 0) sz   += walSz;
+    return sz;
+}
+
 /* Remove db file and its WAL/SHM/journal sidecars. */
 static void cleanupDB(const char *db) {
     char buf[512];
@@ -215,7 +229,7 @@ static int doWrite(const char *zDb) {
     char key[KEY_MAX];
 
     while (1) {
-        long long sz = getFileSize(zDb);
+        long long sz = getTotalDbSize(zDb);
         if (sz >= targetBytes) {
             printf("[write] Target size reached (%.2f GB). Done.\n",
                    (double)sz / (1024.0 * 1024.0 * 1024.0));
@@ -278,7 +292,7 @@ static int doWrite(const char *zDb) {
             double now  = nowSec();
             double dt   = now - tLastProg;
             double speed = (dt > 0.0) ? (double)txSinceLast / dt : 0.0;
-            long long sz2 = getFileSize(zDb);
+            long long sz2 = getTotalDbSize(zDb);
             printf("[write] txid=%-10lld  size=%6.2f GB  speed=%5.0f txn/s\n",
                    txid,
                    (sz2 >= 0) ? (double)sz2 / (1024.0 * 1024.0 * 1024.0) : 0.0,
