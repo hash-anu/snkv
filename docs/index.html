@@ -1,0 +1,1702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scaling SNKV: Deep Internals of a B-tree-backed Key-Value Store</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #0f0f0f;
+    --ink-2:     #2a2a2a;
+    --ink-3:     #4a4a4a;
+    --ink-4:     #767676;
+    --paper:     #f9f7f4;
+    --paper-2:   #f1ede8;
+    --paper-3:   #e6e0d8;
+    --accent:    #c8401a;
+    --accent-2:  #e85d35;
+    --code-bg:   #13100e;
+    --code-fg:   #e8ddd0;
+    --code-com:  #7a6a58;
+    --code-key:  #e0845a;
+    --code-str:  #8ab87a;
+    --code-num:  #7aabd4;
+    --divider:   #d4cdc4;
+    --rule:      1px solid var(--divider);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { font-size: 17px; scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Lora', Georgia, serif;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── SITE HEADER ───────────────────────────────────────────────── */
+  .site-header {
+    border-bottom: var(--rule);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+
+  .site-header .logo {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .site-header .logo span { color: var(--accent); }
+
+  .site-header nav {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+
+  .site-header nav a {
+    color: inherit;
+    text-decoration: none;
+    letter-spacing: 0.04em;
+    transition: color 0.15s;
+  }
+
+  .site-header nav a:hover { color: var(--accent); }
+
+  /* ── HERO ─────────────────────────────────────────────────────── */
+  .hero {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 5rem 2rem 2.5rem;
+    border-bottom: var(--rule);
+  }
+
+  .hero .category {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .hero .category::before {
+    content: '';
+    display: block;
+    width: 20px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  .hero h1 {
+    font-family: 'Lora', serif;
+    font-size: clamp(2rem, 4.5vw, 3.2rem);
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 1.5rem;
+    max-width: 720px;
+  }
+
+  .hero .subtitle {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1.1rem;
+    color: var(--ink-3);
+    font-weight: 300;
+    line-height: 1.6;
+    max-width: 620px;
+    margin-bottom: 2.5rem;
+  }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    color: var(--ink-4);
+  }
+
+  .meta-row .sep { color: var(--divider); }
+
+  .meta-row .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 2px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ── LAYOUT ─────────────────────────────────────────────────────── */
+  .content-wrap {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    max-width: 1100px;
+    margin: 0 auto;
+    gap: 0;
+  }
+
+  /* ── SIDEBAR TOC ──────────────────────────────────────────────── */
+  .toc {
+    position: sticky;
+    top: 56px;
+    height: calc(100vh - 56px);
+    overflow-y: auto;
+    padding: 2.5rem 1.5rem 2.5rem 2rem;
+    border-right: var(--rule);
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  .toc-title {
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 1.2rem;
+    padding-bottom: 0.6rem;
+    border-bottom: var(--rule);
+  }
+
+  .toc ul { list-style: none; }
+
+  .toc li { margin-bottom: 0.1rem; }
+
+  .toc a {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--ink-3);
+    text-decoration: none;
+    padding: 0.3rem 0.5rem;
+    border-radius: 3px;
+    line-height: 1.4;
+    transition: all 0.15s;
+    border-left: 2px solid transparent;
+  }
+
+  .toc a:hover, .toc a.active {
+    color: var(--accent);
+    background: var(--paper-2);
+    border-left-color: var(--accent);
+  }
+
+  .toc .toc-sub {
+    padding-left: 1rem;
+    margin-top: 0.1rem;
+  }
+
+  .toc .toc-sub a {
+    font-size: 0.73rem;
+    color: var(--ink-4);
+  }
+
+  /* ── ARTICLE BODY ────────────────────────────────────────────── */
+  .article {
+    padding: 3rem 3rem 6rem 3.5rem;
+    min-width: 0;
+  }
+
+  /* Section */
+  .section { margin-bottom: 4rem; }
+
+  .section-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--paper-3);
+  }
+
+  h2 {
+    font-family: 'Lora', serif;
+    font-size: 1.65rem;
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    margin-bottom: 1rem;
+    scroll-margin-top: 80px;
+  }
+
+  h3 {
+    font-family: 'Lora', serif;
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ink);
+    margin: 2rem 0 0.75rem;
+    scroll-margin-top: 80px;
+  }
+
+  h4 {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 1.75rem 0 0.6rem;
+  }
+
+  p {
+    color: var(--ink-2);
+    margin-bottom: 1.1rem;
+    font-size: 1rem;
+  }
+
+  p + p { text-indent: 0; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Inline code */
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82em;
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 3px;
+    padding: 0.1em 0.35em;
+    color: var(--accent);
+  }
+
+  /* Code blocks */
+  .code-block {
+    background: var(--code-bg);
+    border-radius: 6px;
+    margin: 1.5rem 0;
+    overflow: hidden;
+    border: 1px solid #2a2218;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  }
+
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1rem;
+    background: #1a1410;
+    border-bottom: 1px solid #2a2218;
+  }
+
+  .code-block-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #6a5a48;
+    font-weight: 500;
+  }
+
+  .code-block-dots {
+    display: flex;
+    gap: 5px;
+  }
+
+  .code-block-dots span {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #3a2e24;
+  }
+
+  .code-block pre {
+    padding: 1.4rem 1.5rem;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.65;
+    color: var(--code-fg);
+    tab-size: 2;
+    white-space: pre;
+  }
+
+  /* Diagram blocks — slightly different treatment */
+  .diagram-block {
+    background: #0d0b09;
+    border-radius: 6px;
+    margin: 1.5rem 0;
+    overflow: hidden;
+    border: 1px solid #2a2218;
+  }
+
+  .diagram-block pre {
+    padding: 1.4rem 1.5rem;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem;
+    line-height: 1.7;
+    color: #c8b89a;
+    white-space: pre;
+  }
+
+  /* Callout boxes */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--paper-2);
+    padding: 1.1rem 1.4rem;
+    margin: 1.5rem 0;
+    border-radius: 0 4px 4px 0;
+  }
+
+  .callout-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  .callout p {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    color: var(--ink-2);
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.5rem 0;
+    border: var(--rule);
+    border-radius: 5px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.83rem;
+  }
+
+  th {
+    background: var(--paper-2);
+    padding: 0.65rem 1rem;
+    text-align: left;
+    font-weight: 500;
+    font-size: 0.74rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border-bottom: var(--rule);
+  }
+
+  td {
+    padding: 0.65rem 1rem;
+    border-bottom: var(--rule);
+    color: var(--ink-2);
+    vertical-align: top;
+    line-height: 1.45;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  td code, th code {
+    font-size: 0.77em;
+  }
+
+  td:first-child code {
+    color: var(--code-key);
+    background: rgba(224,132,90,0.08);
+  }
+
+  /* Performance comparison table */
+  .perf-table td:nth-child(2) { color: var(--ink-4); }
+  .perf-table td:nth-child(3) { color: #4a8a5a; font-weight: 500; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
+
+  /* Horizontal rule between major sections */
+  .section-divider {
+    border: none;
+    border-top: var(--rule);
+    margin: 3.5rem 0;
+  }
+
+  /* Pull quote */
+  .pull-quote {
+    margin: 2.5rem 0;
+    padding: 1.5rem 2rem;
+    border-top: 2px solid var(--ink);
+    border-bottom: var(--rule);
+  }
+
+  .pull-quote p {
+    font-size: 1.25rem;
+    font-style: italic;
+    color: var(--ink);
+    line-height: 1.55;
+    margin: 0;
+  }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--divider);
+    border: var(--rule);
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 1.5rem 0;
+  }
+
+  .stat-cell {
+    background: var(--paper);
+    padding: 1.2rem 1.4rem;
+  }
+
+  .stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.6rem;
+    font-weight: 300;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 0.4rem;
+  }
+
+  .stat-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    color: var(--ink-4);
+    letter-spacing: 0.04em;
+  }
+
+  /* Architecture layers visualization */
+  .arch-stack {
+    margin: 1.5rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .arch-layer {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.8rem 1.2rem;
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 3px;
+    position: relative;
+    transition: background 0.15s;
+  }
+
+  .arch-layer:hover { background: var(--paper-3); }
+
+  .arch-layer-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--ink-4);
+    width: 20px;
+    flex-shrink: 0;
+  }
+
+  .arch-layer-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--ink);
+    flex: 1;
+  }
+
+  .arch-layer-desc {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.78rem;
+    color: var(--ink-4);
+  }
+
+  .arch-layer.active .arch-layer-name { color: var(--accent); }
+  .arch-layer.active { border-color: var(--accent); background: rgba(200,64,26,0.04); }
+
+  .arch-arrow {
+    text-align: center;
+    color: var(--ink-4);
+    font-size: 0.8rem;
+    padding: 0.1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Footer */
+  .article-footer {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2.5rem 3rem 4rem 3.5rem;
+    border-top: var(--rule);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+  }
+
+  .footer-block-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 0.75rem;
+  }
+
+  .footer-block p {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-3);
+    line-height: 1.55;
+  }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .content-wrap { grid-template-columns: 1fr; }
+    .toc { display: none; }
+    .article { padding: 2rem 1.5rem 4rem; }
+    .hero { padding: 3rem 1.5rem 2rem; }
+    .stats-grid { grid-template-columns: 1fr 1fr; }
+    .article-footer { grid-template-columns: 1fr; padding: 2rem 1.5rem 3rem; }
+  }
+
+  @media (max-width: 500px) {
+    .stats-grid { grid-template-columns: 1fr; }
+    .site-header nav { display: none; }
+  }
+
+  /* Animation */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .hero h1, .hero .subtitle, .meta-row {
+    animation: fadeUp 0.6s ease both;
+  }
+
+  .hero .subtitle { animation-delay: 0.1s; }
+  .meta-row { animation-delay: 0.2s; }
+
+  /* Active TOC tracking */
+  .toc a { transition: all 0.12s; }
+</style>
+</head>
+<body>
+
+<!-- SITE HEADER -->
+<header class="site-header">
+  <a href="#" class="logo">SNKV <span>/</span> Engineering</a>
+  <nav>
+    <a href="#architecture">Architecture</a>
+    <a href="#storage-model">Storage</a>
+    <a href="#transactions">Transactions</a>
+    <a href="#concurrency">Concurrency</a>
+    <a href="#wal">WAL</a>
+  </nav>
+</header>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="category">Deep Dive · Storage Engine Internals</div>
+  <h1>Inside SNKV: How a B-tree-Backed Key-Value Store Works at Every Layer</h1>
+  <p class="subtitle">
+    A technical walkthrough of SNKV's kvstore layer — from BLOBKEY encoding and persistent read transactions to two-level mutex locking, cached read cursors, and WAL auto-checkpointing.
+  </p>
+  <div class="meta-row">
+    <span>SNKV Engineering</span>
+    <span class="sep">·</span>
+    <span>2025</span>
+    <span class="sep">·</span>
+    <span class="tag">C</span>
+    <span class="tag">B-Tree</span>
+    <span class="tag">WAL</span>
+    <span class="tag">Systems</span>
+  </div>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="content-wrap">
+
+  <!-- TOC SIDEBAR -->
+  <aside class="toc">
+    <div class="toc-title">Contents</div>
+    <ul>
+      <li><a href="#architecture">Architecture Overview</a></li>
+      <li><a href="#storage-model">Storage Model</a>
+        <ul class="toc-sub">
+          <li><a href="#blobkey">BLOBKEY Encoding</a></li>
+          <li><a href="#cf-metadata">CF Metadata Table</a></li>
+        </ul>
+      </li>
+      <li><a href="#open-close">Open &amp; Close</a>
+        <ul class="toc-sub">
+          <li><a href="#open-sequence">Open Sequence</a></li>
+          <li><a href="#close-sequence">Close Sequence</a></li>
+        </ul>
+      </li>
+      <li><a href="#transactions">Transaction Model</a>
+        <ul class="toc-sub">
+          <li><a href="#persistent-read">Persistent Read Txn</a></li>
+          <li><a href="#auto-txn">Auto-Transaction</a></li>
+        </ul>
+      </li>
+      <li><a href="#crud">CRUD Operations</a>
+        <ul class="toc-sub">
+          <li><a href="#put">Put (upsert)</a></li>
+          <li><a href="#get">Get &amp; cached cursor</a></li>
+          <li><a href="#delete">Delete</a></li>
+          <li><a href="#exists">Exists</a></li>
+        </ul>
+      </li>
+      <li><a href="#column-families">Column Families</a></li>
+      <li><a href="#iterators">Iterators</a>
+        <ul class="toc-sub">
+          <li><a href="#prefix-iter">Prefix Iteration</a></li>
+        </ul>
+      </li>
+      <li><a href="#concurrency">Thread Safety</a>
+        <ul class="toc-sub">
+          <li><a href="#mutex-migration">Mutex Migration</a></li>
+        </ul>
+      </li>
+      <li><a href="#wal">WAL &amp; Checkpointing</a></li>
+      <li><a href="#vacuum">Vacuum</a></li>
+      <li><a href="#full-stack">Full Stack Trace</a></li>
+    </ul>
+  </aside>
+
+  <!-- ARTICLE -->
+  <article class="article">
+
+    <!-- 1. ARCHITECTURE -->
+    <div class="section" id="architecture">
+      <div class="section-label">01 — System Architecture</div>
+      <h2>The Four-Layer Stack</h2>
+
+      <p>
+        SNKV is a key-value store built directly on SQLite's B-tree engine, bypassing SQLite's SQL and VM layers entirely. Application code interacts exclusively through the <code>kvstore_*</code> public API defined in <code>kvstore.c</code>. Below that, pages flow through the pager's cache and journal, and ultimately reach disk via the VFS abstraction.
+      </p>
+
+      <div class="arch-stack">
+        <div class="arch-layer">
+          <span class="arch-layer-num">L4</span>
+          <span class="arch-layer-name">Application Code</span>
+          <span class="arch-layer-desc">kvstore_open / put / get / close ···</span>
+        </div>
+        <div class="arch-arrow">↕  public API</div>
+        <div class="arch-layer active">
+          <span class="arch-layer-num">L3</span>
+          <span class="arch-layer-name">kvstore.c  ← this document</span>
+          <span class="arch-layer-desc">persistent read txn · cached cursors · blob encoding · 2-level mutex</span>
+        </div>
+        <div class="arch-arrow">↕  BtreeInsert / IndexMoveto / ···</div>
+        <div class="arch-layer">
+          <span class="arch-layer-num">L2</span>
+          <span class="arch-layer-name">btree.c — B-tree Engine</span>
+          <span class="arch-layer-desc">page traversal · cell splits · cursor management</span>
+        </div>
+        <div class="arch-arrow">↕  PagerGet / PagerWrite / ···</div>
+        <div class="arch-layer">
+          <span class="arch-layer-num">L1</span>
+          <span class="arch-layer-name">pager.c — Page Cache &amp; Journal</span>
+          <span class="arch-layer-desc">LRU cache · WAL frames · rollback journal</span>
+        </div>
+        <div class="arch-arrow">↕  OsRead / OsWrite / OsSync</div>
+        <div class="arch-layer">
+          <span class="arch-layer-num">L0</span>
+          <span class="arch-layer-name">os.c / os_unix.c / os_win.c / os_kv.c — VFS</span>
+          <span class="arch-layer-desc">read() · write() · fsync() · fcntl() locks</span>
+        </div>
+      </div>
+
+      <p>
+        Because SNKV opens the B-tree via <code>sqlite3BtreeOpen</code> rather than <code>sqlite3Open</code>, it bypasses <code>sqlite3OpenTail</code> — the function that normally installs SQLite's default 1000-frame WAL auto-checkpoint hook. This has significant consequences for WAL management, addressed in the <a href="#wal">WAL &amp; Checkpointing</a> section.
+      </p>
+
+      <div class="callout">
+        <div class="callout-title">Key Design Decision</div>
+        <p>Skipping the SQL/VDBE layer removes a substantial amount of per-query overhead (query planning, bytecode dispatch, schema locking) but requires SNKV to own all transaction lifecycle management that SQLite would otherwise handle automatically.</p>
+      </div>
+
+      <h3>Core Data Structures</h3>
+      <p>Three structs form the backbone of the runtime state:</p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore.c — struct layout</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>KVStore
+  ├─ pBt          → Btree*             B-tree handle
+  ├─ db           → sqlite3*           required by btree internals
+  ├─ pKeyInfo     → KeyInfo*           shared BLOBKEY comparator (all CFs)
+  ├─ iMetaTable   → int                INTKEY B-tree root for CF metadata
+  ├─ inTrans      → int                0=none  1=read  2=write
+  ├─ isCorrupted  → int                set by integrity_check on failure
+  ├─ closing      → int                set to 1 in kvstore_close()
+  ├─ zErrMsg      → char*              last error string (owned)
+  ├─ pMutex       → sqlite3_mutex*     SQLITE_MUTEX_RECURSIVE (store-level)
+  ├─ pDefaultCF   → KVColumnFamily*    always-open default column family
+  ├─ apCF[]       → KVColumnFamily**   open named column families
+  ├─ stats        → KVStoreStats       {nPuts nGets nDeletes nIterations nErrors}
+  ├─ walSizeLimit → int                auto-checkpoint every N commits (0=off)
+  └─ walCommits   → int                commits since last auto-checkpoint
+
+KVColumnFamily
+  ├─ pKV          → KVStore*           parent store (back-pointer)
+  ├─ zName        → char*              CF name (heap-allocated)
+  ├─ iTable       → int                B-tree root page for this CF's data
+  ├─ refCount     → int                reference count
+  ├─ pMutex       → sqlite3_mutex*     SQLITE_MUTEX_RECURSIVE (CF-level)
+  └─ pReadCur     → BtCursor*          cached read cursor (NULL = not yet open)
+
+KVIterator
+  ├─ pCF          → KVColumnFamily*    column family being iterated
+  ├─ pCur         → BtCursor*          own cursor (NOT pCF->pReadCur)
+  ├─ eof          → int                1 = past last entry
+  ├─ isValid      → int                1 = cursor can be used
+  ├─ ownsTrans    → int                1 = iterator opened its own read txn
+  ├─ pKeyBuf/nKeyBuf                   reusable key buffer (grows via realloc)
+  ├─ pValBuf/nValBuf                   reusable value buffer
+  └─ pPrefix/nPrefix                   prefix filter (heap copy, or NULL)</pre>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 2. STORAGE MODEL -->
+    <div class="section" id="storage-model">
+      <div class="section-label">02 — Storage Model</div>
+      <h2 id="blobkey">BLOBKEY Encoding: How Every Key-Value Pair Lives on Disk</h2>
+
+      <p>
+        All user data is stored in SQLite's <em>BLOBKEY</em> B-tree tables — a variant where the entire sort key is an opaque byte string rather than a typed integer rowid. SNKV packs each key-value pair into a single blob cell with a 4-byte big-endian length prefix on the key:
+      </p>
+
+      <div class="diagram-block">
+        <pre>BLOBKEY Cell Layout
+┌─────────────┬──────────────────────┬──────────────────────┐
+│  key_len    │     key_bytes        │    value_bytes       │
+│  (4 bytes,  │    (nKey bytes)      │   (nValue bytes)     │
+│  big-endian)│                      │                      │
+└─────────────┴──────────────────────┴──────────────────────┘
+ ◄── 4B ─────►◄──── nKey ───────────►◄──── nValue ─────────►
+
+Total encoded size = 4 + nKey + nValue
+
+B-tree comparison reads only bytes [4 .. 4+nKey]
+→ entries sorted lexicographically by key
+→ same key on BtreeInsert = overwrite (upsert semantics)
+
+Example: put("user:1", 6, "Alice", 5)
+
+┌──────────────┬────────────────────┬─────────────────────┐
+│ 00 00 00 06  │  u  s  e  r  :  1  │  A  l  i  c  e     │
+│  key_len=6   │   (6 bytes)        │   (5 bytes)         │
+└──────────────┴────────────────────┴─────────────────────┘
+ offset:  0      4                   10                   15</pre>
+      </div>
+
+      <p>
+        The encoding function <code>kvstoreEncodeBlob()</code> uses a caller-supplied stack buffer for small payloads (≤ 512 bytes) and falls back to <code>sqlite3Malloc</code> only when the encoded size exceeds that threshold. This eliminates the heap round-trip on virtually all short key-value pairs in typical workloads.
+      </p>
+
+      <h3 id="cf-metadata">CF Metadata Table (Internal)</h3>
+
+      <p>
+        Column family metadata uses an <em>INTKEY</em> B-tree — SQLite's row-id table variant. The rowid for each CF entry is its FNV-1a hash (with linear probing for collisions). The data blob reuses the same <code>[name_len][name_bytes][root_page_4B_BE]</code> layout.
+      </p>
+
+      <div class="diagram-block">
+        <pre>CF Metadata Table (INTKEY, root page stored in file header meta[3])
+
+rowid = FNV-1a("logs")
+data  = [00 00 00 04][l][o][g][s][00 00 00 05]
+         name_len=4   name bytes   root_pgno=5
+
+rowid = FNV-1a("metrics")
+data  = [00 00 00 07][m][e][t][r][i][c][s][00 00 00 07]
+         name_len=7   name bytes             root_pgno=7
+
+Page-1 file header meta slots used by SNKV:
+  meta[1] = Default CF root page number
+  meta[2] = CF count (total named CFs)
+  meta[3] = CF metadata table root page number</pre>
+      </div>
+
+      <p>
+        After opening a fresh database, the page layout is deterministic:
+      </p>
+
+      <div class="diagram-block">
+        <pre>Page layout after first open (new database, auto-vacuum enabled):
+
+  Page 1: SQLite file header + schema root
+  Page 2: Default CF table root (BLOBKEY, initially empty)
+  Page 3: CF metadata table root (INTKEY, initially empty)
+  Page 4: Pointer-map page (required by incremental auto-vacuum)</pre>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 3. OPEN & CLOSE -->
+    <div class="section" id="open-close">
+      <div class="section-label">03 — Lifecycle</div>
+      <h2 id="open-sequence">Opening a Store: kvstore_open_v2</h2>
+
+      <p>
+        <code>kvstore_open_v2</code> is the primary open function. It accepts a <code>KVStoreConfig</code> struct controlling journal mode, sync level, cache size, page size, read-only access, busy-retry timeout, and WAL auto-checkpoint threshold. <code>kvstore_open</code> is a thin backward-compatible shim.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_open_v2 — initialization sequence</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>Step 1  sqlite3_initialize()
+
+Step 2  Resolve config defaults (zero → default)
+        journalMode == 0   →  KVSTORE_JOURNAL_WAL
+        syncLevel   == 0   →  KVSTORE_SYNC_NORMAL
+        cacheSize   == 0   →  2000 pages   (~8 MB at 4 KiB/page)
+        pageSize    == 0   →  4096 bytes   (only applies to new DBs)
+        busyTimeout == 0   →  no busy retry
+        walSizeLimit== 0   →  WAL auto-checkpoint disabled
+
+Step 3  Allocate KVStore { db, pMutex=RECURSIVE, inTrans=0, closing=0 }
+
+Step 4  sqlite3BtreeOpen(vfs, path, db, &pBt, 0, flags)
+        flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        (SQLITE_OPEN_READONLY if cfg.readOnly)
+
+Step 5  sqlite3BtreeSetPageSize(pBt, pageSize, -1, 0)
+        New DB  → sets page size before first write
+        Old DB  → silently ignored; existing page size wins
+
+Step 6  sqlite3BtreeSetCacheSize(pBt, cacheSize)
+
+Step 7  Set pager sync flags
+        syncFlag = (syncLevel + 1) | PAGER_CACHESPILL
+        SYNC_OFF    (0) → 0x01  SYNCHRONOUS_OFF
+        SYNC_NORMAL (1) → 0x02  SYNCHRONOUS_NORMAL     ← default
+        SYNC_FULL   (2) → 0x03  SYNCHRONOUS_FULL
+
+Step 8  Install busy handler (if busyTimeout > 0)
+        KVBusyCtx { timeoutMs, pVfs } → heap-alloc via sqlite3_malloc
+        db->busyHandler.xBusyHandler = kvstoreBusyHandler
+        kvstoreBusyHandler(ctx, nBusy):
+          if nBusy * 1ms >= timeoutMs → return 0 (give up)
+          sqlite3OsSleep(pVfs, 1000 µs)      (sleep 1 ms)
+          return 1                            (retry)
+
+Step 9  sqlite3BtreeSetAutoVacuum(pBt, BTREE_AUTOVACUUM_INCR)
+
+Step 10 sqlite3BtreeSetVersion(pBt, ver)
+        ver=1 → Rollback journal (DELETE mode)
+        ver=2 → WAL mode                         ← default
+        sqlite3BtreeCommit(pBt)
+
+Step 11 Detect new vs. existing database
+        BtreeBeginTrans(0) → GetMeta(META_DEFAULT_CF_ROOT) → BtreeCommit
+        root == 0  → NEW database: createDefaultCF() + initCFMetadataTable()
+        root != 0  → EXISTING: restore KVColumnFamily{iTable=root}
+
+Step 12 Allocate shared KeyInfo { enc=UTF8, nKeyField=1, db=pKV->db }
+        Used by ALL BLOBKEY cursor comparisons across all CFs
+
+Step 13 pKV->walSizeLimit = cfg.walSizeLimit
+        pKV->walCommits   = 0
+
+Step 14 Open persistent read transaction
+        sqlite3BtreeBeginTrans(pBt, 0, 0)
+        pKV->inTrans = 1         ← held for lifetime of store
+        *ppKV = pKV
+        return KVSTORE_OK</pre>
+      </div>
+
+      <h3 id="close-sequence">Closing a Store</h3>
+
+      <p>
+        <code>kvstore_close</code> sets <code>closing=1</code> under the mutex before freeing anything. Every public API function checks this flag immediately after acquiring the mutex and returns an error if set. This prevents any use-after-free scenario when another thread is mid-operation as close begins.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_close — teardown order</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>sqlite3_mutex_enter(pKV->pMutex)
+pKV->closing = 1                   ← racing threads bail here
+
+if inTrans > 0:
+  sqlite3BtreeRollback(pBt, SQLITE_OK, 0)
+  pKV->inTrans = 0
+
+for each open CF (default + named):
+  if pCF->pReadCur: kvstoreFreeCursor(pCF->pReadCur)
+  sqlite3_mutex_free(pCF->pMutex)
+  free(pCF->zName), free(pCF)
+
+sqlite3BtreeClose(pBt)             ← PagerClose → OsClose → close(fd)
+if db->busyHandler.pBusyArg:
+  sqlite3_free(db->busyHandler.pBusyArg)  ← free KVBusyCtx
+free(pKeyInfo), free(zErrMsg)
+sqlite3_mutex_free(db->mutex)
+free(db)
+
+sqlite3_mutex_leave(pKV->pMutex)
+sqlite3_mutex_free(pKV->pMutex)    ← freed LAST, after all resources gone
+free(pKV)</pre>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 4. TRANSACTIONS -->
+    <div class="section" id="transactions">
+      <div class="section-label">04 — Transaction Model</div>
+      <h2>Transactions: Persistent Read and the WAL Slot Problem</h2>
+
+      <p id="persistent-read">
+        SNKV holds a <em>persistent read transaction</em> for the entire lifetime of an open store. This means that <code>kvstore_get</code> and <code>kvstore_exists</code> — without any explicit <code>kvstore_begin</code> — pay zero <code>BtreeBeginTrans</code>/<code>BtreeCommit</code> overhead. The state machine tracks this with three <code>inTrans</code> values: 0 (none), 1 (read), 2 (write).
+      </p>
+
+      <div class="pull-quote">
+        <p>The WAL "read slot 0" problem is subtle: SQLite forbids upgrading a connection holding slot 0 to a write transaction, returning <code>SQLITE_BUSY</code>. The fix is to commit the read first, then begin a fresh write.</p>
+      </div>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_begin — state machine</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>kvstore_begin(kv, wrflag)
+
+  inTrans=2          → error: write transaction already active
+
+  inTrans=1, wrflag=0 → no-op: persistent read already satisfies request
+                         return KVSTORE_OK
+
+  inTrans=1, wrflag=1 → must release read slot before upgrading:
+                         sqlite3BtreeCommit(pBt)   ← free WAL read slot
+                         inTrans = 0
+                         → fall through to BeginTrans(write)
+
+  inTrans=0, wrflag=0 → sqlite3BtreeBeginTrans(pBt, 0, 0) → inTrans=1
+
+  inTrans=0, wrflag=1 → sqlite3BtreeBeginTrans(pBt, 1, 0) → inTrans=2
+
+WHY commit before upgrading to write (WAL mode)?
+  sqlite3BtreeOpen bypasses sqlite3OpenTail → no WAL hook registered.
+  WAL read slot 0 is assigned when the WAL is empty (e.g. right after DB
+  creation). walBeginWriteTransaction() returns SQLITE_BUSY if slot 0 is
+  held. Committing the read releases the slot; the next BeginTrans(write)
+  succeeds unconditionally.</pre>
+      </div>
+
+      <h4>Transaction State Diagram</h4>
+
+      <div class="diagram-block">
+        <pre>  kvstore_open()
+        │
+        ▼
+   inTrans = 1  ─── get / exists ──────────────► inTrans = 1
+ (persistent read)                                (unchanged)
+        │
+        │ begin(write)
+        │   BtreeCommit(read) → inTrans=0
+        │   BtreeBeginTrans(1) → inTrans=2
+        ▼
+   inTrans = 2
+  (write active)
+        │
+        │ commit() or rollback()
+        │   BtreeCommit / BtreeRollback → inTrans=0
+        │   BtreeBeginTrans(0) ─────────► inTrans=1
+        ▼
+   inTrans = 1  (persistent read restored)</pre>
+      </div>
+
+      <h3 id="auto-txn">Auto-Transaction Pattern</h3>
+
+      <p>
+        Write operations that have no enclosing <code>kvstore_begin</code> manage their own single-operation transaction. They commit the persistent read, begin a write, perform the operation, commit, and restore the read — all atomically under the store mutex.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">auto-transaction lifecycle (put / delete / cf_create / cf_drop)</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>[inTrans == 2]  write already active → proceed, autoTrans=0
+
+[inTrans == 1]  persistent read active:
+  sqlite3BtreeCommit(pBt)      ← release read lock / WAL slot
+  inTrans = 0
+  → fall through ↓
+
+[inTrans == 0]  no transaction:
+  sqlite3BtreeBeginTrans(pBt, 1, 0)
+  autoTrans = 1
+  inTrans = 2
+
+··· perform operation ···
+
+[SUCCESS + autoTrans]:
+  sqlite3BtreeCommit(pBt)
+  inTrans = 0                  ← TRANS_NONE window begins
+  kvstoreAutoCheckpoint(pKV)   ← optional PASSIVE checkpoint in window
+  sqlite3BtreeBeginTrans(pBt, 0, 0)
+  inTrans = 1                  ← persistent read restored
+
+[FAILURE + autoTrans]:
+  sqlite3BtreeRollback(pBt, SQLITE_OK, 0)
+  inTrans = 0
+  // put/delete: persistent read NOT restored on error path
+  // rollback(): persistent read IS always restored if !closing
+  //   → kvstore_rollback always calls BtreeBeginTrans(0) after rollback
+
+Benefit:
+  kvstore_put(kv, "k", 1, "v", 1)          ← single call, no begin/commit
+  // internally: commit_read → begin_write → insert → commit → begin_read
+
+  kvstore_begin(kv, 1)                      ← explicit batch
+  kvstore_put(kv, "k1", 2, "v1", 2)        // autoTrans=0, no commit
+  kvstore_put(kv, "k2", 2, "v2", 2)        // autoTrans=0, no commit
+  kvstore_commit(kv)                        // one fsync for both writes</pre>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 5. CRUD -->
+    <div class="section" id="crud">
+      <div class="section-label">05 — CRUD Operations</div>
+      <h2>Put, Get, Delete, Exists</h2>
+
+      <h3 id="put">Put — Stack-First Encoding + Write Cursor</h3>
+
+      <p>
+        Every <code>kvstore_put</code> acquires the CF mutex, then the store mutex (in that order — always), validates key/value sizes (key: 1–64 KiB; value: 0–10 MiB), and encodes the blob on the stack before touching the B-tree.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_put — critical path</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>sqlite3_mutex_enter(pCF->pMutex)        ← CF lock first
+sqlite3_mutex_enter(pKV->pMutex)        ← then store lock
+
+// Encode on stack — no heap alloc for small payloads
+unsigned char stackBuf[512];
+kvstoreEncodeBlob("user:1", 6, "Alice", 5, stackBuf, 512, &pEncoded)
+// 4 + 6 + 5 = 15 bytes → fits stackBuf
+// [00 00 00 06][user:1][Alice]
+
+// Separate write cursor (not pCF->pReadCur)
+kvstoreAllocCursor()
+sqlite3BtreeCursor(pBt, iTable, wrflag=1, pKeyInfo, pCur)
+
+BtreePayload payload = { .pKey = pEncoded, .nKey = 15 };
+sqlite3BtreeInsert(pCur, &payload, 0, 0)
+  │
+  ├── IndexMoveto → traverse root → internal pages → leaf
+  │     Compare search key using pKeyInfo comparator at each level
+  ├── Key exists?  YES → overwrite cell in-place (upsert)
+  │               NO  → insertCell(), rebalance if leaf overflows
+  └── PagerWrite() on each modified page → marks page dirty
+
+kvstoreFreeCursor(pCur)                 ← write cursor freed immediately
+                                           pCF->pReadCur is UNTOUCHED
+pKV->stats.nPuts++
+
+// autoTrans commit + persistent read restore (see §auto-txn)
+
+sqlite3_mutex_leave(pKV->pMutex)
+sqlite3_mutex_leave(pCF->pMutex)</pre>
+      </div>
+
+      <h3 id="get">Get — Zero-Malloc Fast Path</h3>
+
+      <p>
+        The get path is the most performance-critical operation. SNKV eliminates two major sources of per-call overhead: (1) the cached read cursor means no <code>BtreeCursor</code> open/close, and (2) the stack-allocated <code>UnpackedRecord</code> avoids the heap-allocated version that SQLite's VDBE layer normally uses.
+      </p>
+
+      <div class="table-wrap">
+        <table class="perf-table">
+          <thead>
+            <tr><th>Operation</th><th>Before (naive)</th><th>After (SNKV)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>BtreeCursor open</code></td><td>sqlite3MallocZero(cursorSz) + open</td><td>cached — zero cost</td></tr>
+            <tr><td><code>UnpackedRecord</code></td><td>VdbeAllocUnpackedRecord() → heap</td><td>stack alloc — zero cost</td></tr>
+            <tr><td><code>BtreeBeginTrans</code></td><td>called every get</td><td>inTrans=1 → no-op</td></tr>
+            <tr><td><code>BtreeCommit</code></td><td>called every get</td><td>autoTrans=0 → no-op</td></tr>
+            <tr><td><code>BtreeIndexMoveto</code></td><td>O(log n) — unavoidable</td><td>O(log n)</td></tr>
+            <tr><td><code>BtreePayload ×2</code></td><td>read key_len, read value</td><td>read key_len, read value</td></tr>
+            <tr><td><code>BtreeCloseCursor</code></td><td>called every get</td><td>cursor stays open</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_get — annotated hot path</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>// Get (or open) cached read cursor — zero alloc after first call
+kvstoreGetReadCursor(pCF):
+  if pCF->pReadCur != NULL → return it           // ← hot path: always true
+  // cold path (first call only):
+  kvstoreAllocCursor()
+  BtreeCursor(pBt, iTable, 0, pKeyInfo, pCur)
+  pCF->pReadCur = pCur
+
+// Seek — entirely stack-allocated
+UnpackedRecord idxKey;                           // ← stack
+Mem            memField;                         // ← stack
+idxKey.u.z = "user:1";
+idxKey.n   = 6;
+sqlite3BtreeIndexMoveto(pCur, &idxKey, &res)
+// res==0 → exact match; res≠0 → key not present
+
+if res != 0: return KVSTORE_NOTFOUND
+
+// Decode value from cell payload
+// Cell: [00 00 00 06][user:1][Alice]
+BtreePayload(pCur, 0, 4, hdr)      → storedKeyLen = 6
+valLen = payloadSz - 4 - 6         = 5
+BtreePayload(pCur, 4+6, 5, buf)    → "Alice"
+
+// pReadCur stays open — no close, no free
+pKV->stats.nGets++
+*ppValue = heap copy of value       // caller owns and must free
+*pnValue = valLen</pre>
+      </div>
+
+      <div class="callout">
+        <div class="callout-title">Cursor Safety After Writes</div>
+        <p>SQLite cursors transition to <code>REQUIRESSEEK</code> state when pages they reference are modified by a concurrent write. The next call to <code>BtreeIndexMoveto</code> transparently restores the cursor position. This makes reusing <code>pReadCur</code> across writes correct — no explicit invalidation is needed.</p>
+      </div>
+
+      <h3 id="delete">Delete</h3>
+
+      <p>
+        Delete follows the same auto-transaction pattern as put but uses a write cursor to seek and remove the cell. If the targeted leaf page underflows after removal, SQLite's B-tree engine rebalances by merging with a sibling. Freed pages go onto the internal freelist; the file does not shrink until a vacuum is performed.
+      </p>
+
+      <div class="diagram-block">
+        <pre>Leaf before: [user:0][user:1][user:2]
+                       ▲ BtreeDelete
+
+Leaf after:  [user:0][user:2]
+             (if page underflows → merge with sibling)
+             freed pages → internal freelist
+             (file size unchanged until kvstore_incremental_vacuum)</pre>
+      </div>
+
+      <h3 id="exists">Exists — Cheapest Point Lookup</h3>
+
+      <p>
+        <code>kvstore_exists</code> is the cheapest operation: it uses the cached read cursor, performs the B-tree traversal, but reads <em>zero bytes of payload</em>. Only the key comparison at the leaf node is performed. The caller gets a boolean — no allocation occurs at all on the hot path.
+      </p>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 6. COLUMN FAMILIES -->
+    <div class="section" id="column-families">
+      <div class="section-label">06 — Column Families</div>
+      <h2>Column Families: Isolated B-Tree Tables with a Shared Store</h2>
+
+      <p>
+        Each column family is a separate BLOBKEY B-tree table rooted at its own page number. They share the same B-tree handle, pager, WAL file, and transaction context — meaning a single <code>kvstore_begin</code>/<code>kvstore_commit</code> can write atomically to multiple CFs.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_cf_create — creation sequence</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>kvstore_cf_create(kv, "logs", &cf)
+
+  Validate name: non-null · 1–255 chars · not "default"
+
+  Check CF does not already exist:
+    kvstoreMetaSeekKey("logs") → found? → error (already exists)
+
+  Create new BLOBKEY table:
+    sqlite3BtreeCreateTable(pBt, &pgno, BTREE_BLOBKEY)
+    // Before: pages [1][2-default][3-meta][4-ptrmap]
+    // After:  pages [1][2][3][4][5 ← "logs" root]
+    // pgno = 5
+
+  Encode metadata payload (stack buffer, no heap):
+    [00 00 00 04][l][o][g][s][00 00 00 05]
+     name_len=4   "logs"       root_pgno=5
+
+  Insert metadata row:
+    slot = FNV-1a("logs")         ← 32-bit hash, linear probe on collision
+    BtreeInsert(metaCur, { key=slot, data=encodedMeta })
+
+  Update CF count:
+    BtreeGetMeta(META_CF_COUNT) → N
+    BtreeUpdateMeta(META_CF_COUNT, N+1)
+
+  Allocate KVColumnFamily {
+    iTable   = 5      (new root page)
+    refCount = 1
+    pMutex   = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE)
+    pReadCur = NULL   ← opened lazily on first get
+  }</pre>
+      </div>
+
+      <p>
+        <code>kvstore_cf_create</code> with the name <code>"default"</code> does not create a new CF — it silently redirects to <code>kvstore_cf_get_default()</code> and returns the existing default handle. Callers should not rely on creation semantics for that name.
+      </p>
+
+      <p>
+        <code>kvstore_cf_open</code> resolves the CF by name through the INTKEY metadata table using FNV-1a hashing with linear probing for collision resolution. If <code>inTrans == 0</code> at call time (the persistent read is absent), it starts a fresh read transaction with <code>autoTrans=1</code> and commits it after the metadata lookup. It does <em>not</em> assume the persistent read is always available.
+      </p>
+
+      <p>
+        <code>kvstore_cf_drop</code> performs its steps in this exact order: (1) delete the metadata row from the INTKEY table via <code>BtreeDelete</code>, (2) drop the CF's data B-tree via <code>BtreeDropTable</code> (moves all pages to freelist), (3) decrement the CF count via <code>UpdateMeta</code>. The metadata row is removed <em>before</em> the table is dropped — not after — so a crash mid-sequence leaves an orphaned metadata entry rather than an unreferenced live table, which is the safer failure mode.
+      </p>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 7. ITERATORS -->
+    <div class="section" id="iterators">
+      <div class="section-label">07 — Iterators</div>
+      <h2>Iterators: Own Cursor, Shared Transaction</h2>
+
+      <p>
+        Each iterator owns a <em>separate</em> B-tree cursor — distinct from <code>pCF->pReadCur</code>. This allows concurrent iteration and point-lookups on the same CF without one invalidating the other. The iterator's cursor is allocated at creation time and freed at close.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_iterator_create — key decisions</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>KVIterator {
+  eof      = 1   (not positioned — call iterator_first to begin)
+  isValid  = 1
+  ownsTrans = ?  (see below)
+  pCur     = own BtCursor*   ← NOT pCF->pReadCur
+}
+
+Transaction decision:
+  inTrans >= 1 → use existing transaction, ownsTrans = 0
+  inTrans == 0 → BtreeBeginTrans(0) → inTrans=1, ownsTrans = 1
+
+Iterator close — transaction cleanup:
+  ownsTrans == 0 → nothing to commit; leave inTrans unchanged
+  ownsTrans == 1 → BtreeCommit(pBt); inTrans = 0
+                   (persistent read not restored — store had none before)
+
+Buffer reuse (key and value reads):
+  pKeyBuf / pValBuf grown via sqlite3_realloc when needed
+  pointers returned to caller are owned by the iterator (do NOT free)</pre>
+      </div>
+
+      <h3 id="prefix-iter">Prefix Iteration — O(log n) Seek, Not O(n) Scan</h3>
+
+      <p>
+        <code>kvstore_prefix_iterator_create</code> does not scan from the beginning of the B-tree. It calls <code>kvstore_iterator_first</code>, which uses <code>sqlite3BtreeIndexMoveto</code> with the prefix as the search key to land directly at the first matching entry. Note: unlike the point-lookup path in <code>kvstoreSeekKey</code>, the prefix seek allocates an <code>UnpackedRecord</code> on the <strong>heap</strong> via <code>sqlite3VdbeAllocUnpackedRecord()</code>, then frees it immediately after the seek. Subsequent <code>next()</code> calls check the prefix bound and set <code>eof=1</code> the moment a key falls outside it.
+      </p>
+
+      <div class="diagram-block">
+        <pre>B-tree entries (sorted lexicographically):
+  [admin:1][admin:2][user:1][user:2][user:9][zzz:1]
+
+kvstore_prefix_iterator_create(kv, "user:", 5, &iter)
+
+kvstore_iterator_first():
+  pIdxKey = sqlite3VdbeAllocUnpackedRecord(pKeyInfo)  ← heap alloc
+  pIdxKey->u.z = "user:", pIdxKey->n = 5
+  sqlite3BtreeIndexMoveto(pCur, pIdxKey, &res)
+  sqlite3DbFree(db, pIdxKey)                          ← freed immediately
+
+  [admin:1][admin:2][user:1][user:2][user:9][zzz:1]
+                     ▲
+                     cursor lands at first entry ≥ "user:"
+  if res < 0: BtreeNext() to advance past the seek point
+  kvstoreIterCheckPrefix() → key starts with "user:"? → eof=0
+
+Subsequent next() calls:
+  "user:1" → memcmp(key[0..4], "user:", 5) == 0 → continue
+  "user:2" → match → continue
+  "user:9" → match → continue
+  "zzz:1"  → mismatch → eof = 1 (never scanned beyond prefix range)
+
+Complexity: O(log n) seek + O(k) scan where k = matching keys
+Note: contrast with kvstoreSeekKey() (get/exists/delete) which uses
+      a stack-allocated UnpackedRecord — zero heap alloc per lookup.</pre>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 8. CONCURRENCY -->
+    <div class="section" id="concurrency">
+      <div class="section-label">08 — Thread Safety</div>
+      <h2>Two-Level Recursive Mutex Locking</h2>
+
+      <p>
+        SNKV uses two levels of <code>SQLITE_MUTEX_RECURSIVE</code> mutexes. The CF-level mutex protects per-CF state (<code>pReadCur</code>, <code>refCount</code>); the store-level mutex protects global state (<code>inTrans</code>, <code>stats</code>, <code>closing</code>). The lock order is always CF mutex first, then store mutex — consistent ordering eliminates deadlock.
+      </p>
+
+      <div class="diagram-block">
+        <pre>Thread 1: kvstore_cf_put("logs", k, v)    Thread 2: kvstore_cf_put("metrics", k, v)
+─────────────────────────────────────     ──────────────────────────────────────────
+lock(logs.pMutex)                         lock(metrics.pMutex)
+lock(pKV->pMutex)   ← contended ──┐      lock(pKV->pMutex)   acquired ─────────────┐
+BtreeInsert(...)                   │      BtreeInsert(...)                           │
+unlock(pKV->pMutex)   ◄────────── ┘      unlock(pKV->pMutex) ──────────────────────┘
+unlock(logs.pMutex)                       unlock(metrics.pMutex)</pre>
+      </div>
+
+      <div class="callout">
+        <div class="callout-title">Why SQLITE_MUTEX_RECURSIVE?</div>
+        <p><code>kvstore_iterator_close</code> calls <code>kvstore_cf_close</code>, which may re-enter <code>pKV->pMutex</code> while the caller already holds it. A non-recursive mutex would deadlock here. <code>SQLITE_MUTEX_RECURSIVE</code> maps to <code>PTHREAD_MUTEX_RECURSIVE</code> on POSIX and a spin-count <code>CRITICAL_SECTION</code> on Windows — both safe for same-thread re-entry.</p>
+      </div>
+
+      <h3 id="mutex-migration">Mutex Design: sqlite3_mutex with RECURSIVE type</h3>
+
+      <p>
+        The current implementation uses SQLite's native <code>sqlite3_mutex</code> API throughout, allocated with <code>SQLITE_MUTEX_RECURSIVE</code>. Three problems the current design solves:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Problem</th><th>Old behavior</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Non-recursive default mutex</td>
+              <td><code>pthread_mutex_init(NULL)</code> creates a DEFAULT mutex — same-thread re-entry is UB (deadlock or silent corruption)</td>
+              <td><code>sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE)</code> — safe same-thread re-entry</td>
+            </tr>
+            <tr>
+              <td>Use-after-free on close</td>
+              <td>Freed <code>pMutex</code> while another thread was about to wake and dereference it</td>
+              <td><code>closing=1</code> set under mutex before any memory freed; all API functions check and bail early</td>
+            </tr>
+            <tr>
+              <td>Code duplication</td>
+              <td>Custom mutex code reimplemented what SQLite already provides (platform-aware, well-tested)</td>
+              <td>Use <code>sqlite3_mutex_alloc/enter/leave/free</code> directly; SQLite handles POSIX/Windows/no-op</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 9. WAL -->
+    <div class="section" id="wal">
+      <div class="section-label">09 — WAL &amp; Checkpointing</div>
+      <h2>WAL Growth and Auto-Checkpoint</h2>
+
+      <h3>Why the WAL Grows Unboundedly by Default</h3>
+
+      <p>
+        SQLite's built-in 1000-frame WAL auto-checkpoint hook is registered inside <code>sqlite3OpenTail</code> via <code>sqlite3_wal_hook</code>. Because SNKV opens via <code>sqlite3BtreeOpen</code> — not <code>sqlite3Open</code> — that hook is never installed. The WAL appends frames indefinitely until <code>kvstore_close</code> triggers <code>sqlite3WalClose</code>, which performs a final checkpoint.
+      </p>
+
+      <div class="diagram-block">
+        <pre>Default SQLite (via sqlite3Open):          SNKV (via sqlite3BtreeOpen):
+┌───────────────────────────────┐          ┌────────────────────────────────┐
+│ sqlite3Open()                 │          │ sqlite3BtreeOpen()             │
+│  └── sqlite3OpenTail()        │          │   (no OpenTail → no wal hook)  │
+│        └── sqlite3_wal_hook() │          │                                │
+│              registers        │          │  WAL frames accumulate freely  │
+│              1000-frame        │          │  until kvstore_close() calls   │
+│              auto-checkpoint  │          │  sqlite3WalClose() on last conn │
+└───────────────────────────────┘          └────────────────────────────────┘</pre>
+      </div>
+
+      <h3>kvstoreAutoCheckpoint — the TRANS_NONE Window</h3>
+
+      <p>
+        SNKV solves this with a commit counter checked in the <em>TRANS_NONE window</em> — the brief period after <code>BtreeCommit</code> releases the write lock but before the persistent read transaction is restored. A PASSIVE checkpoint can run safely here because no lock is held.
+      </p>
+
+      <p>
+        The implementation counts commits rather than WAL frames because <code>Btree</code> is an opaque typedef in <code>kvstore.c</code> — accessing <code>pBt->pPager</code> to read the WAL frame counter would be a compile error against the internal header. A commit counter is sufficient and cannot overflow: it resets to 0 on every checkpoint fire, so its maximum value is <code>walSizeLimit - 1</code>.
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstoreAutoCheckpoint — called after every committed write</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>kvstoreAutoCheckpoint(pKV):
+  if walSizeLimit == 0: return        ← disabled
+
+  walCommits++
+  if walCommits < walSizeLimit: return  ← threshold not reached
+
+  walCommits = 0                       ← reset counter
+  sqlite3BtreeCheckpoint(pKV->pBt, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL)
+  // runs in TRANS_NONE window:
+  //   write lock already released by BtreeCommit
+  //   persistent read not yet opened
+  //   → checkpoint can acquire WAL write lock without contention
+
+Timeline with walSizeLimit=3:
+  commit #1 → walCommits=1  (no checkpoint)
+  commit #2 → walCommits=2  (no checkpoint)
+  commit #3 → walCommits=3  ≥ limit → PASSIVE checkpoint → walCommits=0
+  commit #4 → walCommits=1  (no checkpoint)
+  ···</pre>
+      </div>
+
+      <h3>kvstore_checkpoint — public API</h3>
+
+      <p>
+        For explicit control, <code>kvstore_checkpoint</code> exposes all four SQLite checkpoint modes. An active write transaction causes an immediate <code>KVSTORE_BUSY</code> return. The persistent read is silently released before the checkpoint and restored after.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Mode</th><th>Behavior</th><th>WAL after</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>PASSIVE (0)</code></td><td>Copy frames without blocking readers or writers; may not copy all if a reader is active</td><td>may have remaining frames</td></tr>
+            <tr><td><code>FULL (1)</code></td><td>Wait for all readers, then copy all frames atomically</td><td>fully checkpointed</td></tr>
+            <tr><td><code>RESTART (2)</code></td><td>Like FULL + reset WAL write position to frame 0 (reuse the WAL file)</td><td>file not truncated, reset position</td></tr>
+            <tr><td><code>TRUNCATE (3)</code></td><td>Like RESTART + truncate WAL file to 0 bytes</td><td>0 bytes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="diagram-block">
+        <pre>State around kvstore_checkpoint():
+
+  inTrans=1               inTrans=0               inTrans=1
+(persistent read)   BtreeCommit   │   BtreeCheckpoint   │   BtreeBeginTrans(0)
+     ──────────────────────────► ─┼────────────────────┼─────────────────────►
+                                   │  TRANS_NONE window  │
+
+Write guard:
+  kvstore_begin(kv, 1)                     → inTrans=2
+  kvstore_checkpoint(kv, PASSIVE, ...)     → KVSTORE_BUSY (write not committed)
+  kvstore_rollback(kv)                     → inTrans=1
+  kvstore_checkpoint(kv, PASSIVE, ...)     → OK</pre>
+      </div>
+
+      <div class="callout">
+        <div class="callout-title">Choosing walSizeLimit vs. kvstore_checkpoint</div>
+        <p><strong>walSizeLimit=N</strong> (auto, PASSIVE) — set-and-forget; fires every N committed writes with no caller involvement. Best for most workloads. <strong>kvstore_checkpoint</strong> (any mode) — explicit control at shutdown, after large batches, or to shrink the WAL with TRUNCATE mode. Combine with <code>walSizeLimit=0</code> for fully manual checkpoint scheduling.</p>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 10. VACUUM -->
+    <div class="section" id="vacuum">
+      <div class="section-label">10 — Storage Reclamation</div>
+      <h2>Incremental Vacuum: Recovering Deleted Space</h2>
+
+      <p>
+        Deleted data pages are placed on SQLite's internal freelist. The file does not shrink automatically. <code>kvstore_incremental_vacuum</code> requires a write transaction with <code>wrflag=2</code> (exclusive), not the normal <code>wrflag=1</code> used by put/delete. Importantly, the vacuum path does <em>not</em> commit an active read transaction first — if <code>inTrans==1</code> it calls <code>BtreeBeginTrans(pBt, 2, 0)</code> directly to attempt an upgrade. This differs from the put/delete pattern which always commits the read before beginning a write.
+      </p>
+
+      <div class="diagram-block">
+        <pre>Transaction handling in kvstore_incremental_vacuum:
+
+  inTrans == 0 → BtreeBeginTrans(pBt, 2, 0)  ← wrflag=2 (exclusive)
+                 autoTrans = 1, inTrans = 2
+
+  inTrans == 1 → BtreeBeginTrans(pBt, 2, 0)  ← upgrade attempt (no commit first)
+  (read active)  autoTrans = 1, inTrans = 2
+                 NOTE: unlike put/delete which commit the read before writing,
+                 vacuum calls BeginTrans(2) directly over the read transaction.
+
+  inTrans == 2 → already in write txn, proceed (autoTrans = 0)
+
+BtreeIncrVacuum step (each call reclaims one page):
+  1. Identify last page (P8)
+  2. P8 is a data page → copy content to free slot P4
+  3. Update pointer-map so references to P8 now point to P4
+  4. Decrement page count
+
+File BEFORE: [P1][P2][P3][P4 free][P5][P6][P7][P8]
+File AFTER:  [P1][P2][P3][P8'][P5][P6][P7]   (truncated on commit)
+
+File size timeline:
+  insert 2000 records              → file ~500 KB
+  delete 1800 records              → file still ~500 KB (freelist)
+  kvstore_incremental_vacuum(kv, 0) → file shrinks to ~50 KB
+  (nPage=0 frees ALL unused pages; nPage=N frees up to N pages)</pre>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- 11. FULL STACK TRACE -->
+    <div class="section" id="full-stack">
+      <div class="section-label">11 — Putting It All Together</div>
+      <h2>Full Stack Trace: kvstore_put Through All Four Layers</h2>
+
+      <p>
+        A single <code>kvstore_put("hello", 5, "world", 5)</code> call traverses all four layers. Here is the complete call chain with layer annotations:
+      </p>
+
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-label">kvstore_put("hello", 5, "world", 5) — complete trace</span>
+          <div class="code-block-dots"><span></span><span></span><span></span></div>
+        </div>
+        <pre>[L4 kvstore.c]
+  lock CF mutex → lock KV mutex
+  if inTrans==1: BtreeCommit(read)     → inTrans=0
+  BtreeBeginTrans(1, 0)                → inTrans=2   (autoTrans)
+  kvstoreEncodeBlob()   [stack buf]    → [00 00 00 05][hello][world]
+  BtreeCursor(write, pCur)
+
+[L3 btree.c]
+  sqlite3BtreeInsert(pCur, {pKey=blob, nKey=15})
+    ├── BtreeIndexMoveto()             → traverse root → internal → leaf
+    │     sqlite3VdbeRecordCompare()   at each B-tree level
+    ├── insertCell()                   → write 15-byte cell to leaf page
+    ├── balance_nonroot()              → split/merge if page overflows
+    └── PagerWrite(pPage)             → mark page dirty in page cache
+
+[L2 pager.c]
+  pager_write()
+    ├── [Rollback] writeJournalHdr()   → OsWrite(journal fd)
+    └── [WAL]      walWriteLock()      → append WAL frame
+
+[L1 os.c / os_unix.c / os_win.c / os_kv.c]
+  sqlite3OsWrite()   → pwrite(fd, buf, amt, offset)
+  sqlite3OsSync()    → fsync(fd)      (on commit, SYNC_NORMAL or FULL)
+  sqlite3OsLock()    → fcntl(fd, F_SETLK, ...)
+
+[L4 kvstore.c — return path]
+  BtreeCloseCursor(write cursor)
+  BtreeCommit()                        → autoTrans commit
+  kvstoreAutoCheckpoint(pKV)           → PASSIVE ckpt if walSizeLimit hit
+  BtreeBeginTrans(0, 0)                → inTrans=1 (persistent read restored)
+  unlock KV mutex → unlock CF mutex</pre>
+      </div>
+
+      <h4>kvstore → btree mapping (quick reference)</h4>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>kvstore function</th><th>Primary btree calls</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>kvstore_open_v2</code></td><td><code>BtreeOpen, SetPageSize, SetCacheSize, SetPagerFlags, SetAutoVacuum, SetVersion, GetMeta, CreateTable, UpdateMeta, BeginTrans(0)</code></td></tr>
+            <tr><td><code>kvstore_close</code></td><td><code>BtreeRollback (if active), BtreeClose</code></td></tr>
+            <tr><td><code>kvstore_begin</code></td><td><code>BtreeCommit (if inTrans=1) + BtreeBeginTrans(wrflag)</code></td></tr>
+            <tr><td><code>kvstore_commit</code></td><td><code>BtreeCommit + AutoCheckpoint + BtreeBeginTrans(0)</code></td></tr>
+            <tr><td><code>kvstore_put</code></td><td><code>BtreeCursor(write), BtreeInsert, BtreeCloseCursor</code></td></tr>
+            <tr><td><code>kvstore_get</code></td><td><code>GetReadCursor (cached), BtreeIndexMoveto, BtreePayload ×2</code></td></tr>
+            <tr><td><code>kvstore_delete</code></td><td><code>BtreeCursor(write), BtreeIndexMoveto, BtreeDelete</code></td></tr>
+            <tr><td><code>kvstore_exists</code></td><td><code>GetReadCursor (cached), BtreeIndexMoveto</code></td></tr>
+            <tr><td><code>kvstore_cf_create</code></td><td><code>BtreeCreateTable(BLOBKEY), BtreeInsert (meta), UpdateMeta</code></td></tr>
+            <tr><td><code>kvstore_cf_drop</code></td><td><code>BtreeDelete (meta row first), BtreeDropTable, UpdateMeta (CF count)</code></td></tr>
+            <tr><td><code>kvstore_iterator_*</code></td><td><code>BtreeCursor (own), BtreeFirst, BtreeNext, BtreePayload; prefix seek uses heap-allocated UnpackedRecord (sqlite3VdbeAllocUnpackedRecord)</code></td></tr>
+            <tr><td><code>kvstore_incremental_vacuum</code></td><td><code>BtreeBeginTrans(wrflag=2, exclusive), BtreeIncrVacuum (loop until DONE or nPage reached)</code></td></tr>
+            <tr><td><code>kvstore_integrity_check</code></td><td><code>BtreeIntegrityCheck (all root pages)</code></td></tr>
+            <tr><td><code>kvstore_checkpoint</code></td><td><code>BtreeCommit (drop read) + BtreeCheckpoint(mode) + BtreeBeginTrans(0)</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+  </article>
+</div>
+
+<!-- FOOTER -->
+<footer class="article-footer">
+  <div class="footer-block">
+    <div class="footer-block-title">About this document</div>
+    <p>
+      This article covers the complete internal design of SNKV's kvstore layer — the public API surface that sits above SQLite's B-tree engine. Implementation details reflect the current <code>kvstore.c</code> source.
+    </p>
+  </div>
+  <div class="footer-block">
+    <div class="footer-block-title">Further reading</div>
+    <p>
+      SQLite WAL mode documentation · <code>btree.h</code> and <code>btreeInt.h</code> · <code>pager.c</code> journal and sync modes · <code>sqlite3_mutex</code> portability layer · <code>SQLITE_CHECKPOINT_*</code> modes in the SQLite C API reference.
+    </p>
+  </div>
+</footer>
+
+<script>
+  // Active TOC highlighting on scroll
+  const headings = document.querySelectorAll('h2[id], h3[id]');
+  const tocLinks = document.querySelectorAll('.toc a');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        tocLinks.forEach(link => {
+          link.classList.remove('active');
+          if (link.getAttribute('href') === '#' + entry.target.id) {
+            link.classList.add('active');
+          }
+        });
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+
+  headings.forEach(h => observer.observe(h));
+</script>
+</body>
+</html>
