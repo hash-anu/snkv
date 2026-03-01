@@ -1272,7 +1272,7 @@ struct BusyHandler {
 ** pointer will work here as long as it is distinct from SQLITE_STATIC
 ** and SQLITE_TRANSIENT.
 */
-#define SQLITE_DYNAMIC   ((sqlite3_destructor_type)sqlite3RowSetClear)
+#define SQLITE_DYNAMIC   ((sqlite3_destructor_type)sqlite3_free)
 
 /*
 ** When SQLITE_OMIT_WSD is defined, it means that the target platform does
@@ -1358,7 +1358,6 @@ typedef struct PrintfArguments PrintfArguments;
 typedef struct RCStr RCStr;
 typedef struct RenameToken RenameToken;
 typedef struct Returning Returning;
-typedef struct RowSet RowSet;
 typedef struct Savepoint Savepoint;
 typedef struct Select Select;
 typedef struct SQLiteThread SQLiteThread;
@@ -4578,12 +4577,6 @@ u32 sqlite3BitvecSize(Bitvec*);
 int sqlite3BitvecBuiltinTest(int,int*);
 #endif
 
-RowSet *sqlite3RowSetInit(sqlite3*);
-void sqlite3RowSetDelete(void*);
-void sqlite3RowSetClear(void*);
-void sqlite3RowSetInsert(RowSet*, i64);
-int sqlite3RowSetTest(RowSet*, int iBatch, i64);
-int sqlite3RowSetNext(RowSet*, i64*);
 
 
 #if !defined(SQLITE_OMIT_VIEW) || !defined(SQLITE_OMIT_VIRTUALTABLE)
