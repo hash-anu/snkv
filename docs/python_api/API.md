@@ -316,7 +316,8 @@ Both `db[key]` and `db.get(key)` perform lazy TTL expiry — expired keys raise
 | Syntax | Equivalent method | Notes |
 |--------|-------------------|-------|
 | `db["key"]` | `get` | Raises `NotFoundError` / `KeyError` on miss or expiry |
-| `db["key"] = "val"` | `put` | No TTL — use `put(key, val, ttl=...)` for expiry |
+| `db["key"] = "val"` | `put` | No TTL |
+| `db["key", ttl] = "val"` | `put(ttl=...)` | TTL in seconds (int or float) |
 | `del db["key"]` | `delete` | Raises `NotFoundError` / `KeyError` on miss |
 | `"key" in db` | `exists` | |
 | `for k, v in db` | `iterator()` | Yields `(bytes, bytes)` pairs |
@@ -327,6 +328,10 @@ print(db["session:abc"])          # b'active'
 print("session:abc" in db)        # True
 del db["session:abc"]
 print("session:abc" in db)        # False
+
+# Dict-style TTL — key expires after 60 seconds
+db["token:xyz", 60] = "bearer-abc123"
+print(db["token:xyz"])            # b'bearer-abc123'
 ```
 
 ---
@@ -646,13 +651,26 @@ print(f"Cleaned up {n} expired entries")
 
 ### Dict-like Interface
 
-`ColumnFamily` supports the same mapping-style operators as `KVStore`.
+`ColumnFamily` supports the same mapping-style operators as `KVStore`, including
+dict-style TTL using a `(key, ttl_seconds)` tuple on the left-hand side.
+
+| Syntax | Equivalent method | Notes |
+|--------|-------------------|-------|
+| `cf["key"]` | `get` | Raises `NotFoundError` / `KeyError` on miss or expiry |
+| `cf["key"] = "val"` | `put` | No TTL |
+| `cf["key", ttl] = "val"` | `put(ttl=...)` | TTL in seconds (int or float) |
+| `del cf["key"]` | `delete` | Raises `NotFoundError` / `KeyError` on miss |
+| `"key" in cf` | `exists` | |
 
 ```python
 cf["alice"] = "admin"
 print(cf["alice"])             # b'admin'
 print("alice" in cf)           # True
 del cf["alice"]
+
+# Dict-style TTL — key expires after 300 seconds
+cf["session:u42", 300] = "logged-in"
+print(cf["session:u42"])       # b'logged-in'
 ```
 
 ---

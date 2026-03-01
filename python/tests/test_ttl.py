@@ -296,3 +296,30 @@ def test_purge_expired_after_reopen(db_path):
     with KVStore(db_path) as db:
         n = db.purge_expired()
         assert n == 3
+
+
+# ---------------------------------------------------------------------------
+# Dict-style TTL  ( db[key, ttl] = value )
+# ---------------------------------------------------------------------------
+
+def test_dict_style_ttl_expiry(db):
+    """db[key, ttl] = value expires after ttl seconds."""
+    db[b"token", 0.999] = b"secret"
+    assert db[b"token"] == b"secret"   # alive before expiry
+
+    time.sleep(1.0)
+
+    with pytest.raises((NotFoundError, KeyError)):
+        _ = db[b"token"]
+
+
+def test_cf_dict_style_ttl_expiry(db):
+    """cf[key, ttl] = value expires after ttl seconds."""
+    with db.create_column_family("sessions") as cf:
+        cf[b"user:42", 0.999] = b"active"
+        assert cf[b"user:42"] == b"active"   # alive before expiry
+
+        time.sleep(1.0)
+
+        with pytest.raises((NotFoundError, KeyError)):
+            _ = cf[b"user:42"]
