@@ -25,6 +25,12 @@
 **  16.  cf_drop removes TTL index CFs too
 **  17.  Overwrite TTL key with longer TTL; key survives short TTL window
 **  18.  put_ttl rollback removes both data and TTL entries
+**
+** Gap-fix regression tests:
+**  19.  Iterator skips expired keys (gap 1)
+**  20.  nTtlActive — no false expiry after all TTL keys cleared (gap 2)
+**  21.  purge_expired handles more than KVSTORE_PURGE_BATCH (256) expired keys (gap 3)
+**  22.  Real wall-clock expiry: 499 ms TTL, sleep 500 ms, key must be NOTFOUND
 */
 
 #include "kvstore.h"
@@ -619,6 +625,220 @@ static void test18_rollback_removes_ttl(void){
   cleanup(&pKV, path);
 }
 
+/* ---- Test 19: iterator skips expired keys (gap 1) ---- */
+static void test19_iterator_skips_expired(void){
+  printf("\nTest 19: iterator skips expired keys\n");
+  const char *path = "tests/ttl19.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  int64_t past   = kvstore_now_ms() - 2000;
+  int64_t future = kvstore_now_ms() + 60000;
+
+  /*
+  ** Write keys a–e in lexicographic order; b and d are expired.
+  ** Expected iteration result: a, c, e only.
+  */
+  kvstore_put_ttl(pKV, "a", 1, "va", 2, future);
+  kvstore_put_ttl(pKV, "b", 1, "vb", 2, past);   /* expired */
+  kvstore_put_ttl(pKV, "c", 1, "vc", 2, future);
+  kvstore_put_ttl(pKV, "d", 1, "vd", 2, past);   /* expired */
+  kvstore_put_ttl(pKV, "e", 1, "ve", 2, future);
+
+  KVIterator *pIter = NULL;
+  int rc = kvstore_iterator_create(pKV, &pIter);
+  ASSERT("iter create ok", rc == KVSTORE_OK && pIter != NULL);
+  if( rc != KVSTORE_OK ){ cleanup(&pKV, path); return; }
+
+  rc = kvstore_iterator_first(pIter);
+  ASSERT("iter first ok", rc == KVSTORE_OK);
+
+  /* Collect all keys seen during iteration. */
+  char seen[8];
+  int  nSeen = 0;
+  while( !kvstore_iterator_eof(pIter) ){
+    void *pKey = NULL; int nKey = 0;
+    if( kvstore_iterator_key(pIter, &pKey, &nKey) == KVSTORE_OK &&
+        nKey == 1 && nSeen < 8 ){
+      seen[nSeen++] = ((char*)pKey)[0];
+    }
+    kvstore_iterator_next(pIter);
+  }
+  kvstore_iterator_close(pIter);
+
+  ASSERT("iter sees exactly 3 keys", nSeen == 3);
+  ASSERT("first key is a",           nSeen >= 1 && seen[0] == 'a');
+  ASSERT("second key is c",          nSeen >= 2 && seen[1] == 'c');
+  ASSERT("third key is e",           nSeen >= 3 && seen[2] == 'e');
+
+  /* Expired keys must also be absent from direct get. */
+  void *pVal = NULL; int nVal = 0;
+  ASSERT("b gone via get", kvstore_get(pKV, "b", 1, &pVal, &nVal) == KVSTORE_NOTFOUND);
+  ASSERT("d gone via get", kvstore_get(pKV, "d", 1, &pVal, &nVal) == KVSTORE_NOTFOUND);
+
+  cleanup(&pKV, path);
+}
+
+/* ---- Test 20: nTtlActive — no false expiry after all TTL keys cleared (gap 2) ---- */
+static void test20_ntttl_active_no_false_expiry(void){
+  printf("\nTest 20: nTtlActive — no false expiry after TTL cleared\n");
+  const char *path = "tests/ttl20.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  int64_t past   = kvstore_now_ms() - 1000;
+  int64_t future = kvstore_now_ms() + 60000;
+
+  /* Put 3 expired TTL keys — nTtlActive becomes 3. */
+  kvstore_put_ttl(pKV, "k1", 2, "v1", 2, past);
+  kvstore_put_ttl(pKV, "k2", 2, "v2", 2, past);
+  kvstore_put_ttl(pKV, "k3", 2, "v3", 2, past);
+
+  /* Purge all — nTtlActive goes to 0 (guard in put/get disables TTL seeks). */
+  int nDeleted = -1;
+  int rc = kvstore_purge_expired(pKV, &nDeleted);
+  ASSERT("purge ok",     rc == KVSTORE_OK);
+  ASSERT("deleted == 3", nDeleted == 3);
+
+  /*
+  ** Regular puts on the same keys must not trigger any false TTL cleanup
+  ** (regression: with a stale nTtlActive > 0 the put would do an unnecessary
+  ** seek and could corrupt the counter in the opposite direction).
+  */
+  rc = kvstore_put(pKV, "k1", 2, "new1", 4);
+  ASSERT("regular put k1 ok", rc == KVSTORE_OK);
+  rc = kvstore_put(pKV, "k2", 2, "new2", 4);
+  ASSERT("regular put k2 ok", rc == KVSTORE_OK);
+
+  /* Gets must return the new values — NOT KVSTORE_NOTFOUND. */
+  void *pVal = NULL; int nVal = 0;
+  rc = kvstore_get(pKV, "k1", 2, &pVal, &nVal);
+  ASSERT("k1 get ok",   rc == KVSTORE_OK);
+  ASSERT("k1 value ok", pVal && nVal == 4 && memcmp(pVal, "new1", 4) == 0);
+  if( pVal ) snkv_free(pVal);
+
+  rc = kvstore_get(pKV, "k2", 2, &pVal, &nVal);
+  ASSERT("k2 get ok",   rc == KVSTORE_OK);
+  ASSERT("k2 value ok", pVal && nVal == 4 && memcmp(pVal, "new2", 4) == 0);
+  if( pVal ) snkv_free(pVal);
+
+  /* After nTtlActive==0, a new put_ttl must increment the counter and work. */
+  rc = kvstore_put_ttl(pKV, "k4", 2, "v4", 2, future);
+  ASSERT("new put_ttl ok", rc == KVSTORE_OK);
+  int64_t rem = 0;
+  rc = kvstore_ttl_remaining(pKV, "k4", 2, &rem);
+  ASSERT("k4 ttl ok",      rc == KVSTORE_OK && rem > 0);
+
+  /* Purge again — must delete k4, leave k1/k2 untouched. */
+  /* (k4 is not expired, so purge returns 0.) */
+  nDeleted = -1;
+  kvstore_purge_expired(pKV, &nDeleted);
+  ASSERT("second purge sees 0", nDeleted == 0);
+
+  rc = kvstore_get(pKV, "k1", 2, &pVal, &nVal);
+  ASSERT("k1 still ok after second purge", rc == KVSTORE_OK);
+  if( pVal ) snkv_free(pVal);
+
+  cleanup(&pKV, path);
+}
+
+/* ---- Test 21: purge_expired handles > KVSTORE_PURGE_BATCH expired keys (gap 3) ---- */
+static void test21_purge_large_batch(void){
+  printf("\nTest 21: purge_expired handles > 256 expired keys (batch mode)\n");
+  const char *path = "tests/ttl21.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  const int N_EXPIRED = 300;  /* exceeds KVSTORE_PURGE_BATCH=256 */
+  const int N_LIVE    = 10;
+  int64_t past   = kvstore_now_ms() - 1000;
+  int64_t future = kvstore_now_ms() + 60000;
+  char keybuf[32];
+  int i;
+
+  /* Write in one transaction for speed. */
+  int rc = kvstore_begin(pKV, 1);
+  ASSERT("begin ok", rc == KVSTORE_OK);
+  for( i = 0; i < N_EXPIRED; i++ ){
+    snprintf(keybuf, sizeof(keybuf), "exp%04d", i);
+    kvstore_put_ttl(pKV, keybuf, (int)strlen(keybuf), "v", 1, past);
+  }
+  for( i = 0; i < N_LIVE; i++ ){
+    snprintf(keybuf, sizeof(keybuf), "live%04d", i);
+    kvstore_put_ttl(pKV, keybuf, (int)strlen(keybuf), "v", 1, future);
+  }
+  rc = kvstore_commit(pKV);
+  ASSERT("commit ok", rc == KVSTORE_OK);
+
+  /* Single purge call must span multiple internal batches and delete all 300. */
+  int nDeleted = -1;
+  rc = kvstore_purge_expired(pKV, &nDeleted);
+  ASSERT("purge ok",             rc == KVSTORE_OK);
+  ASSERT("deleted == N_EXPIRED", nDeleted == N_EXPIRED);
+
+  /* Spot-check expired keys at start, batch boundary, and end are gone. */
+  void *pVal = NULL; int nVal = 0;
+  ASSERT("exp0000 gone", kvstore_get(pKV, "exp0000", 7, &pVal, &nVal) == KVSTORE_NOTFOUND);
+  ASSERT("exp0255 gone", kvstore_get(pKV, "exp0255", 7, &pVal, &nVal) == KVSTORE_NOTFOUND);
+  ASSERT("exp0299 gone", kvstore_get(pKV, "exp0299", 7, &pVal, &nVal) == KVSTORE_NOTFOUND);
+
+  /* Live keys must survive. */
+  rc = kvstore_get(pKV, "live0000", 8, &pVal, &nVal);
+  ASSERT("live0000 ok", rc == KVSTORE_OK);
+  if( pVal ) snkv_free(pVal);
+
+  rc = kvstore_get(pKV, "live0009", 8, &pVal, &nVal);
+  ASSERT("live0009 ok", rc == KVSTORE_OK);
+  if( pVal ) snkv_free(pVal);
+
+  /* A second purge should find nothing left to delete. */
+  nDeleted = -1;
+  kvstore_purge_expired(pKV, &nDeleted);
+  ASSERT("second purge sees 0", nDeleted == 0);
+
+  cleanup(&pKV, path);
+}
+
+/* ---- Test 22: real wall-clock expiry via sleep ---- */
+static void test22_real_time_expiry(void){
+  printf("\nTest 22: real wall-clock expiry (499 ms TTL, sleep 500 ms)\n");
+  const char *path = "tests/ttl22.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  const char *key   = "shortlived";
+  const char *value = "gone_soon";
+  int64_t expire_ms = kvstore_now_ms() + 499;
+
+  int rc = kvstore_put_ttl(pKV, key, (int)strlen(key),
+                            value, (int)strlen(value), expire_ms);
+  ASSERT("put_ttl ok", rc == KVSTORE_OK);
+
+  /* Key must be alive immediately after write. */
+  void *pVal = NULL; int nVal = 0; int64_t rem = 0;
+  rc = kvstore_get_ttl(pKV, key, (int)strlen(key), &pVal, &nVal, &rem);
+  ASSERT("alive before sleep", rc == KVSTORE_OK);
+  ASSERT("remaining > 0",      rem > 0);
+  if( pVal ) snkv_free(pVal);
+
+  /* Wait for real time to elapse past the expiry. */
+  snkv_sleep_ms(500);
+
+  /* Now the key must be expired. */
+  pVal = NULL; nVal = 0; rem = 99;
+  rc = kvstore_get_ttl(pKV, key, (int)strlen(key), &pVal, &nVal, &rem);
+  ASSERT("expired after sleep",    rc == KVSTORE_NOTFOUND);
+  ASSERT("value is NULL",          pVal == NULL);
+  ASSERT("remaining == 0",         rem == 0);
+
+  /* Lazy delete must have removed it from the data CF too. */
+  void *pRaw = NULL; int nRaw = 0;
+  rc = kvstore_get(pKV, key, (int)strlen(key), &pRaw, &nRaw);
+  ASSERT("raw get also NOTFOUND",  rc == KVSTORE_NOTFOUND);
+
+  cleanup(&pKV, path);
+}
+
 /* ========== main ========== */
 int main(void){
   printf("=== TTL tests ===\n");
@@ -641,6 +861,10 @@ int main(void){
   test16_cf_drop_removes_ttl_cfs();
   test17_extend_ttl();
   test18_rollback_removes_ttl();
+  test19_iterator_skips_expired();
+  test20_ntttl_active_no_false_expiry();
+  test21_purge_large_batch();
+  test22_real_time_expiry();
 
   printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
   return failed > 0 ? 1 : 0;

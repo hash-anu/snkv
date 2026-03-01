@@ -26,11 +26,6 @@
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
-#ifdef _WIN32
-#  include <windows.h>
-#else
-#  include <sys/time.h>
-#endif
 
 /*
 ** Compile-time configuration
@@ -189,6 +184,7 @@ struct KVColumnFamily {
   sqlite3_mutex *pMutex;  /* Recursive mutex for this CF (SQLITE_MUTEX_RECURSIVE) */
   BtCursor *pReadCur;     /* Cached read-only cursor; NULL = not open yet */
   int hasTtl;                   /* 1 if TTL index CFs are open for this CF */
+  int nTtlActive;               /* number of keys currently in pTtlKeyCF (0 = no active TTL keys) */
   KVColumnFamily *pTtlKeyCF;    /* __snkv_ttl_k__<name>; NULL until first TTL use */
   KVColumnFamily *pTtlExpiryCF; /* __snkv_ttl_e__<name>; NULL until first TTL use */
 };
@@ -389,6 +385,42 @@ static int kvstoreSeekKey(
     *pFound = 1;
   }
   return rc;
+}
+
+/*
+** Position pCur at the first entry strictly greater than (pKey, nKey).
+** Sets *pEof = 1 if no such entry exists.
+** Uses the same UnpackedRecord pattern as kvstoreSeekKey.
+*/
+static int kvstoreSeekAfter(
+  BtCursor *pCur,
+  KeyInfo *pKeyInfo,
+  const void *pKey, int nKey,
+  int *pEof
+){
+  UnpackedRecord idxKey;
+  Mem memField;
+  int res = 0, rc;
+  *pEof = 0;
+  memset(&idxKey, 0, sizeof(idxKey));
+  memset(&memField, 0, sizeof(memField));
+  idxKey.pKeyInfo   = pKeyInfo;
+  idxKey.aMem       = &memField;
+  idxKey.u.z        = (char *)pKey;
+  idxKey.n          = nKey;
+  idxKey.nField     = 1;
+  idxKey.default_rc = 0;
+  rc = sqlite3BtreeIndexMoveto(pCur, &idxKey, &res);
+  if( rc != SQLITE_OK ){ *pEof = 1; return rc; }
+  if( res <= 0 ){
+    /* At or before target — advance to next entry. */
+    rc = sqlite3BtreeNext(pCur, 0);
+    if( rc == SQLITE_DONE ){ *pEof = 1; return SQLITE_OK; }
+    if( rc != SQLITE_OK ){ *pEof = 1; return rc; }
+  }
+  /* res > 0: cursor is already at the first entry > target. */
+  *pEof = sqlite3BtreeEof(pCur);
+  return SQLITE_OK;
 }
 
 /* ======================================================================
@@ -605,6 +637,27 @@ static void kvstoreFreeCFStruct(KVColumnFamily *pCF){
   if( pCF->pMutex )   sqlite3_mutex_free(pCF->pMutex);
   sqlite3_free(pCF->zName);
   sqlite3_free(pCF);
+}
+
+/*
+** Count the number of entries in pCF's B-tree.
+** Used to initialize nTtlActive accurately at open time.
+** Caller must hold pKV->pMutex and have an active transaction.
+*/
+static int kvstoreCountCFEntries(KVStore *pKV, KVColumnFamily *pCF){
+  BtCursor *pCur = kvstoreAllocCursor();
+  if( !pCur ) return 0;
+  int rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pCur);
+  if( rc != SQLITE_OK ){ sqlite3_free(pCur); return 0; }
+  int count = 0, res = 0;
+  rc = sqlite3BtreeFirst(pCur, &res);
+  while( rc == SQLITE_OK && !res ){
+    count++;
+    rc = sqlite3BtreeNext(pCur, 0);
+    if( rc == SQLITE_DONE ) break;
+  }
+  kvstoreFreeCursor(pCur);
+  return count;
 }
 
 static void kvstoreTeardownNoLock(KVStore *pKV){
@@ -911,6 +964,7 @@ int kvstore_open_v2(
       pKV->pDefaultCF->pTtlKeyCF    = pKeyCF;
       pKV->pDefaultCF->pTtlExpiryCF = pExpCF;
       pKV->pDefaultCF->hasTtl       = 1;
+      pKV->pDefaultCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF);
     } else {
       if( pKeyCF ) kvstoreFreeCFStruct(pKeyCF);
       if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
@@ -1973,6 +2027,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       pCF->pTtlKeyCF    = pKeyCF2;
       pCF->pTtlExpiryCF = pExpCF2;
       pCF->hasTtl       = 1;
+      pCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF2);
     } else {
       if( pKeyCF2 ) kvstoreFreeCFStruct(pKeyCF2);
       if( pExpCF2 ) kvstoreFreeCFStruct(pExpCF2);
@@ -2111,7 +2166,7 @@ static int kvstore_cf_put_internal(
   ** remove any existing TTL entries for this key so that a previous
   ** put_ttl on the same key cannot cause a future expiry on the new value.
   */
-  if( rc == SQLITE_OK && pCF->hasTtl && pCF->pTtlKeyCF ){
+  if( rc == SQLITE_OK && pCF->hasTtl && pCF->nTtlActive > 0 && pCF->pTtlKeyCF ){
     void *pOldTtl = NULL; int nOldTtl = 0;
     int rck = kvstoreRawBtreeGet(pKV, pCF->pTtlKeyCF->iTable,
                                   pKey, nKey, &pOldTtl, &nOldTtl);
@@ -2124,6 +2179,7 @@ static int kvstore_cf_put_internal(
         sqlite3_free(pExpKey);
       }
       kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+      if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
     }
     if( pOldTtl ) sqlite3_free(pOldTtl);
   }
@@ -2233,7 +2289,7 @@ static int kvstore_cf_get_internal(
 
   /* TTL lazy-expiry check.  kvstoreRawBtreeGet on the key CF (a different
   ** table) does not disturb pCur which is positioned on the data CF. */
-  if( pCF->hasTtl && pCF->pTtlKeyCF ){
+  if( pCF->hasTtl && pCF->nTtlActive > 0 && pCF->pTtlKeyCF ){
     void *pTtlVal = NULL; int nTtlVal = 0;
     int rck = kvstoreRawBtreeGet(pKV, pCF->pTtlKeyCF->iTable,
                                   pKey, nKey, &pTtlVal, &nTtlVal);
@@ -2257,6 +2313,7 @@ static int kvstore_cf_get_internal(
             kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
             sqlite3_free(pExpKey);
           }
+          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
           sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
           kvstoreAutoCheckpoint(pKV);
           if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
@@ -2729,6 +2786,122 @@ static int kvstoreIterCheckPrefix(KVIterator *pIter){
 }
 
 /*
+** While the iterator is positioned on an expired key, lazily delete it
+** and advance to the next live entry.  Called after BtreeFirst/BtreeNext.
+** No locks are held on entry; acquires pCF->pMutex + pKV->pMutex internally
+** for each TTL lookup and deletion.
+*/
+static int kvstoreIterSkipExpired(KVIterator *pIter){
+  KVColumnFamily *pCF = pIter->pCF;
+  KVStore *pKV = pCF->pKV;
+
+  if( !pCF->hasTtl || pCF->nTtlActive <= 0 || !pCF->pTtlKeyCF ) return SQLITE_OK;
+
+  for(;;){
+    if( pIter->eof ) return SQLITE_OK;
+
+    /* Read the current key from the iterator cursor. */
+    u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+    if( payloadSz < 4 ) return SQLITE_OK;
+    unsigned char hdr[4];
+    int rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
+    if( rc != SQLITE_OK ) return rc;
+    int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+    if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return SQLITE_OK;
+
+    if( pIter->nKeyBuf < keyLen ){
+      void *pNew = sqlite3Realloc(pIter->pKeyBuf, keyLen);
+      if( !pNew ) return SQLITE_NOMEM;
+      pIter->pKeyBuf = pNew;
+      pIter->nKeyBuf = keyLen;
+    }
+    rc = sqlite3BtreePayload(pIter->pCur, 4, keyLen, pIter->pKeyBuf);
+    if( rc != SQLITE_OK ) return rc;
+
+    /* Look up the TTL for this key. */
+    sqlite3_mutex_enter(pCF->pMutex);
+    sqlite3_mutex_enter(pKV->pMutex);
+    void *pTtlVal = NULL; int nTtlVal = 0;
+    kvstoreRawBtreeGet(pKV, pCF->pTtlKeyCF->iTable,
+                       pIter->pKeyBuf, keyLen, &pTtlVal, &nTtlVal);
+    sqlite3_mutex_leave(pKV->pMutex);
+    sqlite3_mutex_leave(pCF->pMutex);
+
+    if( !pTtlVal || nTtlVal != 8 ){
+      if( pTtlVal ) sqlite3_free(pTtlVal);
+      return SQLITE_OK; /* no TTL on this key — yield it */
+    }
+    int64_t expireMs = kvstoreDecodeBE64((const unsigned char*)pTtlVal);
+    sqlite3_free(pTtlVal);
+
+    if( kvstore_now_ms() < expireMs ) return SQLITE_OK; /* not expired — yield */
+
+    /* Expired.  Copy key before invalidating the cursor. */
+    void *pDeletedKey = sqlite3Malloc(keyLen);
+    if( !pDeletedKey ) return SQLITE_NOMEM;
+    memcpy(pDeletedKey, pIter->pKeyBuf, keyLen);
+    int nDeletedKey = keyLen;
+
+    /* Drop the iterator cursor — it will be invalidated by the write tx. */
+    kvstoreFreeCursor(pIter->pCur);
+    pIter->pCur = NULL;
+
+    /* Lazy delete from all three CFs inside one write transaction. */
+    sqlite3_mutex_enter(pCF->pMutex);
+    sqlite3_mutex_enter(pKV->pMutex);
+    if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+    if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+      pKV->inTrans = 2;
+      kvstoreRawBtreeDelete(pKV, pCF->iTable, pDeletedKey, nDeletedKey);
+      kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pDeletedKey, nDeletedKey);
+      unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
+      unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nDeletedKey);
+      if( pExpKey ){
+        memcpy(pExpKey, expBuf, 8);
+        memcpy(pExpKey + 8, pDeletedKey, nDeletedKey);
+        kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nDeletedKey);
+        sqlite3_free(pExpKey);
+      }
+      if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+      sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+      kvstoreAutoCheckpoint(pKV);
+      if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+    }
+    sqlite3_mutex_leave(pKV->pMutex);
+    sqlite3_mutex_leave(pCF->pMutex);
+
+    /* Re-open the iterator cursor and seek to the first entry > deleted key. */
+    pIter->pCur = kvstoreAllocCursor();
+    if( !pIter->pCur ){ sqlite3_free(pDeletedKey); pIter->eof = 1; return SQLITE_NOMEM; }
+
+    sqlite3_mutex_enter(pKV->pMutex);
+    rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pIter->pCur);
+    sqlite3_mutex_leave(pKV->pMutex);
+    if( rc != SQLITE_OK ){
+      kvstoreFreeCursor(pIter->pCur); pIter->pCur = NULL;
+      sqlite3_free(pDeletedKey);
+      pIter->eof = 1;
+      return rc;
+    }
+
+    int isEof = 0;
+    rc = kvstoreSeekAfter(pIter->pCur, pKV->pKeyInfo, pDeletedKey, nDeletedKey, &isEof);
+    sqlite3_free(pDeletedKey);
+    if( rc != SQLITE_OK || isEof ){
+      pIter->eof = 1;
+      return rc;
+    }
+
+    /* Check prefix bound after advancing. */
+    if( pIter->pPrefix && !kvstoreIterCheckPrefix(pIter) ){
+      pIter->eof = 1;
+      return SQLITE_OK;
+    }
+    /* Loop to check the next entry's TTL. */
+  }
+}
+
+/*
 ** Move iterator to first entry
 */
 int kvstore_iterator_first(KVIterator *pIter){
@@ -2773,6 +2946,9 @@ int kvstore_iterator_first(KVIterator *pIter){
     }
   }
 
+  if( rc == SQLITE_OK && !pIter->eof ){
+    rc = kvstoreIterSkipExpired(pIter);
+  }
   return rc;
 }
 
@@ -2799,6 +2975,10 @@ int kvstore_iterator_next(KVIterator *pIter){
     if( !kvstoreIterCheckPrefix(pIter) ){
       pIter->eof = 1;
     }
+  }
+
+  if( rc == SQLITE_OK && !pIter->eof ){
+    rc = kvstoreIterSkipExpired(pIter);
   }
 
   return rc;
@@ -3664,8 +3844,16 @@ int kvstore_cf_put_ttl(
         sqlite3_free(pExpKey);
       }
     }
+    int hadOldTtl = (pOldTtl != NULL && nOldTtl == 8);
     if( pOldTtl ) sqlite3_free(pOldTtl);
     kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+
+    /* Update active TTL count: new entry → increment; clear TTL → decrement. */
+    if( expire_ms > 0 && !hadOldTtl ){
+      pCF->nTtlActive++;
+    } else if( expire_ms == 0 && hadOldTtl ){
+      if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+    }
 
     if( expire_ms > 0 ){
       /* Write new key CF entry. */
@@ -3871,161 +4059,136 @@ int kvstore_ttl_remaining(
 ** stop at the first unexpired entry — O(expired keys), not O(all TTL keys).
 ** *pnDeleted (may be NULL) — set to number of data keys deleted.
 */
+/*
+** Maximum number of keys to scan and delete per purge batch.
+** The mutex is released between batches, allowing other operations to run.
+*/
+#define KVSTORE_PURGE_BATCH 256
+
 int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
-  int rc = SQLITE_OK;
   int nDeleted = 0;
-  int nExpired = 0, nAlloc = 32;
-  void **apExpKeys = NULL;  /* full composite keys [expireMs][userKey] */
-  int  *anExpKeys  = NULL;
-  BtCursor *pCur   = NULL;
-  int autoTrans    = 0;
 
   if( !pCF || !pCF->pKV ) return KVSTORE_ERROR;
   if( pnDeleted ) *pnDeleted = 0;
   KVStore *pKV = pCF->pKV;
 
-  sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  for(;;){
+    /* Stack-allocated batch arrays — avoids heap allocation per batch. */
+    void *apExpKeys[KVSTORE_PURGE_BATCH];
+    int   anExpKeys[KVSTORE_PURGE_BATCH];
+    int   nExpired = 0;
+    int   i, rc = SQLITE_OK;
 
-  if( pKV->closing || !pCF->hasTtl || !pCF->pTtlExpiryCF ){
-    sqlite3_mutex_leave(pKV->pMutex);
-    sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_OK;
-  }
-  if( pKV->isCorrupted ){
-    kvstoreSetError(pKV, "cannot purge_expired: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
-    sqlite3_mutex_leave(pCF->pMutex);
-    return KVSTORE_CORRUPT;
-  }
+    sqlite3_mutex_enter(pCF->pMutex);
+    sqlite3_mutex_enter(pKV->pMutex);
 
-  if( !pKV->inTrans ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
+    if( pKV->closing || !pCF->hasTtl || !pCF->pTtlExpiryCF ){
+      sqlite3_mutex_leave(pKV->pMutex);
+      sqlite3_mutex_leave(pCF->pMutex);
+      break;
+    }
+    if( pKV->isCorrupted ){
+      kvstoreSetError(pKV, "cannot purge_expired: database is corrupted");
+      sqlite3_mutex_leave(pKV->pMutex);
+      sqlite3_mutex_leave(pCF->pMutex);
+      return KVSTORE_CORRUPT;
+    }
+
+    /* Upgrade to a write transaction so the scan and delete are atomic
+    ** per batch.  Opening a read cursor inside a write transaction is safe. */
+    if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       sqlite3_mutex_leave(pKV->pMutex);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
-    autoTrans = 1;
-    pKV->inTrans = 1;
-  }
+    pKV->inTrans = 2;
 
-  /* Pass 1 — scan expiry CF (sorted by 8-byte BE expire_ms prefix).
-  ** Entries with expire_ms <= nowMs come first; stop on first unexpired. */
-  int64_t nowMs = kvstore_now_ms();
+    int64_t nowMs = kvstore_now_ms();
 
-  apExpKeys = (void**)sqlite3MallocZero(nAlloc * sizeof(void*));
-  anExpKeys = (int*)  sqlite3MallocZero(nAlloc * sizeof(int));
-  if( !apExpKeys || !anExpKeys ){ rc = SQLITE_NOMEM; goto purge_cleanup; }
-
-  pCur = kvstoreAllocCursor();
-  if( !pCur ){ rc = SQLITE_NOMEM; goto purge_cleanup; }
-
-  rc = sqlite3BtreeCursor(pKV->pBt, pCF->pTtlExpiryCF->iTable,
-                           0, pKV->pKeyInfo, pCur);
-  if( rc != SQLITE_OK ) goto purge_cleanup;
-
-  {
-    int res = 0;
-    rc = sqlite3BtreeFirst(pCur, &res);
-    while( rc == SQLITE_OK && !res ){
-      u32 payloadSz = sqlite3BtreePayloadSize(pCur);
-      /* Expiry CF cell: [4-byte key_len BE][8-byte BE expireMs][user_key][empty value]
-      ** key_len = 8 + len(user_key) >= 8. */
-      if( (int)payloadSz >= 4 + 8 ){
-        unsigned char hdr[4];
-        rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
-        if( rc != SQLITE_OK ) break;
-        int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
-        if( storedKeyLen >= 8 ){
-          /* Read just the first 8 bytes (expireMs). */
-          unsigned char timeBuf[8];
-          rc = sqlite3BtreePayload(pCur, 4, 8, timeBuf);
-          if( rc != SQLITE_OK ) break;
-          int64_t expireMs = kvstoreDecodeBE64(timeBuf);
-          if( nowMs < expireMs ) break;  /* all remaining entries are unexpired */
-
-          /* Collect the full composite key [expireMs(8)][user_key]. */
-          void *pExpKey = sqlite3Malloc(storedKeyLen);
-          if( !pExpKey ){ rc = SQLITE_NOMEM; break; }
-          rc = sqlite3BtreePayload(pCur, 4, storedKeyLen, pExpKey);
-          if( rc != SQLITE_OK ){ sqlite3_free(pExpKey); break; }
-
-          if( nExpired >= nAlloc ){
-            nAlloc *= 2;
-            void **apN = (void**)sqlite3Realloc(apExpKeys, nAlloc * sizeof(void*));
-            int   *anN = (int*)  sqlite3Realloc(anExpKeys,  nAlloc * sizeof(int));
-            if( !apN || !anN ){
-              sqlite3_free(pExpKey);
-              if( apN ) apExpKeys = apN;
-              if( anN ) anExpKeys = anN;
-              rc = SQLITE_NOMEM; break;
+    /* Scan up to KVSTORE_PURGE_BATCH expired entries from the expiry CF.
+    ** The expiry CF is sorted by 8-byte BE expire_ms prefix, so we stop
+    ** at the first unexpired entry — O(expired) not O(all TTL keys). */
+    {
+      BtCursor *pCur = kvstoreAllocCursor();
+      if( pCur ){
+        if( sqlite3BtreeCursor(pKV->pBt, pCF->pTtlExpiryCF->iTable,
+                               0, pKV->pKeyInfo, pCur) == SQLITE_OK ){
+          int res = 0;
+          rc = sqlite3BtreeFirst(pCur, &res);
+          while( rc == SQLITE_OK && !res && nExpired < KVSTORE_PURGE_BATCH ){
+            u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+            if( (int)payloadSz >= 4 + 8 ){
+              unsigned char hdr[4];
+              rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+              if( rc != SQLITE_OK ) break;
+              int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+              if( storedKeyLen >= 8 ){
+                unsigned char timeBuf[8];
+                rc = sqlite3BtreePayload(pCur, 4, 8, timeBuf);
+                if( rc != SQLITE_OK ) break;
+                int64_t expireMs = kvstoreDecodeBE64(timeBuf);
+                if( nowMs < expireMs ) break; /* stop at first unexpired */
+                void *pExpKey = sqlite3Malloc(storedKeyLen);
+                if( !pExpKey ){ rc = SQLITE_NOMEM; break; }
+                rc = sqlite3BtreePayload(pCur, 4, storedKeyLen, pExpKey);
+                if( rc != SQLITE_OK ){ sqlite3_free(pExpKey); break; }
+                apExpKeys[nExpired] = pExpKey;
+                anExpKeys[nExpired] = storedKeyLen;
+                nExpired++;
+              }
             }
-            apExpKeys = apN; anExpKeys = anN;
+            rc = sqlite3BtreeNext(pCur, 0);
+            if( rc == SQLITE_DONE ){ rc = SQLITE_OK; break; }
           }
-          apExpKeys[nExpired] = pExpKey;
-          anExpKeys[nExpired] = storedKeyLen;
-          nExpired++;
         }
+        kvstoreFreeCursor(pCur);
       }
-      rc = sqlite3BtreeNext(pCur, 0);
-      if( rc == SQLITE_DONE ){ rc = SQLITE_OK; break; }
     }
-  }
 
-purge_cleanup:
-  kvstoreFreeCursor(pCur);
-  pCur = NULL;
-
-  if( autoTrans ){
-    sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-    autoTrans = 0;
-  }
-
-  /* Pass 2 — delete collected keys in one write transaction. */
-  if( rc == SQLITE_OK && nExpired > 0 ){
-    if( pCF->pReadCur ){ kvstoreFreeCursor(pCF->pReadCur); pCF->pReadCur = NULL; }
-    if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
-    if( rc == SQLITE_OK ){
-      int i;
-      pKV->inTrans = 2;
+    /* Delete all collected entries in the same write transaction. */
+    if( rc == SQLITE_OK && nExpired > 0 ){
+      if( pCF->pReadCur ){ kvstoreFreeCursor(pCF->pReadCur); pCF->pReadCur = NULL; }
       for( i = 0; i < nExpired; i++ ){
-        /* apExpKeys[i] = [8-byte expireMs][user_key], length anExpKeys[i] */
-        int nUserKey   = anExpKeys[i] - 8;
+        int nUserKey        = anExpKeys[i] - 8;
         const void *pUserKey = (const char*)apExpKeys[i] + 8;
-        /* Delete from data CF (ignore NOTFOUND — might already be gone). */
         int rcd = kvstoreRawBtreeDelete(pKV, pCF->iTable, pUserKey, nUserKey);
-        if( rcd == SQLITE_OK ) nDeleted++;
-        /* Delete from key CF. */
+        if( rcd == SQLITE_OK ){
+          nDeleted++;
+          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+        }
         kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pUserKey, nUserKey);
-        /* Delete from expiry CF. */
         kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable,
                               apExpKeys[i], anExpKeys[i]);
       }
+    }
+
+    /* Free collected composite keys. */
+    for( i = 0; i < nExpired; i++ ) sqlite3_free(apExpKeys[i]);
+
+    /* Commit or rollback this batch. */
+    if( rc == SQLITE_OK ){
       rc = sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
       if( rc == SQLITE_OK ){
         kvstoreAutoCheckpoint(pKV);
         if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
-      } else {
-        sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0;
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
       }
+    } else {
+      sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0;
+      if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
+
+    sqlite3_mutex_leave(pKV->pMutex);
+    sqlite3_mutex_leave(pCF->pMutex);
+
+    if( rc != SQLITE_OK ) return rc;
+    /* If we found fewer than a full batch, there are no more expired keys. */
+    if( nExpired < KVSTORE_PURGE_BATCH ) break;
   }
 
-  /* Free collected composite keys. */
-  if( apExpKeys ){
-    int i;
-    for( i = 0; i < nExpired; i++ ) sqlite3_free(apExpKeys[i]);
-    sqlite3_free(apExpKeys);
-  }
-  sqlite3_free(anExpKeys);
-
-  sqlite3_mutex_leave(pKV->pMutex);
-  sqlite3_mutex_leave(pCF->pMutex);
-  if( rc == SQLITE_OK && pnDeleted ) *pnDeleted = nDeleted;
-  return (rc == SQLITE_OK) ? KVSTORE_OK : rc;
+  if( pnDeleted ) *pnDeleted = nDeleted;
+  return KVSTORE_OK;
 }
 
 int kvstore_purge_expired(KVStore *pKV, int *pnDeleted){
