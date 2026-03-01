@@ -31,6 +31,7 @@
 **  20.  nTtlActive — no false expiry after all TTL keys cleared (gap 2)
 **  21.  purge_expired handles more than KVSTORE_PURGE_BATCH (256) expired keys (gap 3)
 **  22.  Real wall-clock expiry: 499 ms TTL, sleep 500 ms, key must be NOTFOUND
+**  23.  exists() returns 0 for an expired key (lazy delete performed)
 */
 
 #include "kvstore.h"
@@ -839,6 +840,49 @@ static void test22_real_time_expiry(void){
   cleanup(&pKV, path);
 }
 
+/* ---- Test 23: exists returns 0 for an expired key ---- */
+static void test23_exists_expired_key(void){
+  printf("\nTest 23: exists() returns 0 for expired key\n");
+  const char *path = "tests/ttl23.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  const char *key = "willvanish";
+  int64_t past   = kvstore_now_ms() - 1000; /* already expired */
+  int64_t future = kvstore_now_ms() + 60000;
+
+  /* Expired key. */
+  int rc = kvstore_put_ttl(pKV, key, (int)strlen(key), "v", 1, past);
+  ASSERT("put_ttl ok", rc == KVSTORE_OK);
+
+  /* exists() must return 0, not 1. */
+  int exists = -1;
+  rc = kvstore_exists(pKV, key, (int)strlen(key), &exists);
+  ASSERT("exists ok",           rc == KVSTORE_OK);
+  ASSERT("expired → exists==0", exists == 0);
+
+  /* Lazy delete must have fired — raw get also NOTFOUND. */
+  void *pVal = NULL; int nVal = 0;
+  rc = kvstore_get(pKV, key, (int)strlen(key), &pVal, &nVal);
+  ASSERT("raw get NOTFOUND", rc == KVSTORE_NOTFOUND);
+
+  /* Live key must still return exists==1. */
+  rc = kvstore_put_ttl(pKV, "alive", 5, "v", 1, future);
+  ASSERT("put live ok", rc == KVSTORE_OK);
+  exists = -1;
+  rc = kvstore_exists(pKV, "alive", 5, &exists);
+  ASSERT("live exists==1", rc == KVSTORE_OK && exists == 1);
+
+  /* Key with no TTL must also return exists==1. */
+  rc = kvstore_put(pKV, "plain", 5, "v", 1);
+  ASSERT("put plain ok", rc == KVSTORE_OK);
+  exists = -1;
+  rc = kvstore_exists(pKV, "plain", 5, &exists);
+  ASSERT("plain exists==1", rc == KVSTORE_OK && exists == 1);
+
+  cleanup(&pKV, path);
+}
+
 /* ========== main ========== */
 int main(void){
   printf("=== TTL tests ===\n");
@@ -865,6 +909,7 @@ int main(void){
   test20_ntttl_active_no_false_expiry();
   test21_purge_large_batch();
   test22_real_time_expiry();
+  test23_exists_expired_key();
 
   printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
   return failed > 0 ? 1 : 0;

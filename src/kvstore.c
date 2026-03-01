@@ -2566,6 +2566,46 @@ static int kvstore_cf_exists_internal(
     *pExists = found;
   }
 
+  /* TTL lazy-expiry check — same logic as kvstore_cf_get_internal. */
+  if( rc == SQLITE_OK && found &&
+      pCF->hasTtl && pCF->nTtlActive > 0 && pCF->pTtlKeyCF ){
+    void *pTtlVal = NULL; int nTtlVal = 0;
+    int rck = kvstoreRawBtreeGet(pKV, pCF->pTtlKeyCF->iTable,
+                                  pKey, nKey, &pTtlVal, &nTtlVal);
+    if( rck == SQLITE_OK && nTtlVal == 8 ){
+      int64_t expireMs = kvstoreDecodeBE64((const unsigned char*)pTtlVal);
+      sqlite3_free(pTtlVal);
+      if( kvstore_now_ms() >= expireMs ){
+        kvstoreFreeCursor(pCF->pReadCur);
+        pCF->pReadCur = NULL;
+        if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+          pKV->inTrans = 2;
+          kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
+          kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+          unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
+          unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
+          if( pExpKey ){
+            memcpy(pExpKey, expBuf, 8);
+            memcpy(pExpKey + 8, pKey, nKey);
+            kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
+            sqlite3_free(pExpKey);
+          }
+          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+          kvstoreAutoCheckpoint(pKV);
+          if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+        }
+        *pExists = 0;
+        sqlite3_mutex_leave(pKV->pMutex);
+        sqlite3_mutex_leave(pCF->pMutex);
+        return KVSTORE_OK;
+      }
+    } else {
+      if( pTtlVal ) sqlite3_free(pTtlVal);
+    }
+  }
+
   sqlite3_mutex_leave(pKV->pMutex);
   sqlite3_mutex_leave(pCF->pMutex);
 
