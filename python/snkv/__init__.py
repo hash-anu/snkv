@@ -244,8 +244,13 @@ class ColumnFamily:
         value, _remaining = self._cf.get_ttl(_enc(key))
         return value
 
-    def __setitem__(self, key: _Encodable, value: _Encodable) -> None:
-        self._cf.put(_enc(key), _enc(value))
+    def __setitem__(self, key, value: _Encodable) -> None:
+        if isinstance(key, tuple):
+            k, ttl = key
+            expire_ms = int((time.time() + ttl) * 1000)
+            self._cf.put_ttl(_enc(k), _enc(value), expire_ms)
+        else:
+            self._cf.put(_enc(key), _enc(value))
 
     def __delitem__(self, key: _Encodable) -> None:
         # NotFoundError IS-A KeyError — let it propagate directly.
@@ -388,8 +393,13 @@ class KVStore:
         value, _remaining = self._db.get_ttl(_enc(key))
         return value
 
-    def __setitem__(self, key: _Encodable, value: _Encodable) -> None:
-        self._db.put(_enc(key), _enc(value))
+    def __setitem__(self, key, value: _Encodable) -> None:
+        if isinstance(key, tuple):
+            k, ttl = key
+            expire_ms = int((time.time() + ttl) * 1000)
+            self._db.put_ttl(_enc(k), _enc(value), expire_ms)
+        else:
+            self._db.put(_enc(key), _enc(value))
 
     def __delitem__(self, key: _Encodable) -> None:
         # NotFoundError IS-A KeyError — let it propagate directly.
