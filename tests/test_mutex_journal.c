@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2025 SNKV Contributors */
 /*
 ** Test Suite for KVStore Mutex Locks and Journal File Functionality
 ** 

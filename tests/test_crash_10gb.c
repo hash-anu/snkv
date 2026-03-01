@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2025 SNKV Contributors */
 /*
 ** test_crash_10gb.c
 **

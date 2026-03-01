@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2025 SNKV Contributors */
 /*
 **
 ** Key-Value Store Implementation - Column Families

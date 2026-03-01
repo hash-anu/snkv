@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2025 SNKV Contributors */
 /*
 ** Test Suite for KVStore WAL (Write-Ahead Logging) Mode
 **

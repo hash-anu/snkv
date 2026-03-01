@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025 SNKV Contributors
 """
 snkv - Python bindings for SNKV embedded key-value store.
 

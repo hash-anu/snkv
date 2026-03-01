@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2025 SNKV Contributors */
 /*
 ** platform_compat.h
 ** Cross-platform compatibility layer for Mac/Linux/Windows
