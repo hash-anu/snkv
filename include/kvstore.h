@@ -90,6 +90,12 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_CHECKPOINT_TRUNCATE  3  /* Like RESTART, then truncate the WAL file     */
 
 /*
+** KVSTORE_NO_TTL — sentinel returned by kvstore_ttl_remaining / kvstore_get_ttl
+** when the key exists but has no expiry associated with it.
+*/
+#define KVSTORE_NO_TTL  ((int64_t)(-1))
+
+/*
 ** Configuration structure for kvstore_open_v2.
 **
 ** Zero-initialize and set only the fields you need; unset fields use the
@@ -788,6 +794,123 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
 **       returns KVSTORE_OK with *pnLog = *pnCkpt = 0.
 */
 int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt);
+
+/* ========== TTL OPERATIONS ========== */
+
+/*
+** Return the current time in milliseconds since the Unix epoch.
+** Use this to compute absolute expiry values for kvstore_put_ttl:
+**
+**   int64_t expire_ms = kvstore_now_ms() + 30000;  // 30 seconds from now
+*/
+int64_t kvstore_now_ms(void);
+
+/*
+** Insert or update key/value with an expiry time.
+**
+**   expire_ms > 0  — absolute expiry in ms since Unix epoch.
+**   expire_ms == 0 — write with no TTL (removes any existing TTL entry).
+**
+** Both the data write and the TTL entry are committed atomically.
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+*/
+int kvstore_put_ttl(
+  KVStore *pKV,
+  const void *pKey, int nKey,
+  const void *pValue, int nValue,
+  int64_t expire_ms
+);
+
+/*
+** Retrieve a value with lazy TTL expiry check.
+**
+** If the key has expired:
+**   - The key and its TTL entry are deleted from the store.
+**   - Returns KVSTORE_NOTFOUND.
+**   - *pnRemaining is set to 0 (if not NULL).
+**
+** If the key is valid:
+**   - *ppValue / *pnValue are populated. Caller must snkv_free(*ppValue).
+**   - *pnRemaining is set to remaining ms, or KVSTORE_NO_TTL if no expiry.
+**
+** pnRemaining may be NULL.
+*/
+int kvstore_get_ttl(
+  KVStore *pKV,
+  const void *pKey, int nKey,
+  void **ppValue, int *pnValue,
+  int64_t *pnRemaining
+);
+
+/*
+** Return the remaining TTL for a key in milliseconds.
+**
+**   KVSTORE_NO_TTL (-1) — key exists but has no expiry.
+**   0                   — key just expired (lazy delete performed).
+**   N > 0               — N ms remain.
+**
+** Returns KVSTORE_NOTFOUND if the key does not exist at all.
+** pnRemaining must not be NULL.
+*/
+int kvstore_ttl_remaining(
+  KVStore *pKV,
+  const void *pKey, int nKey,
+  int64_t *pnRemaining
+);
+
+/*
+** Scan the TTL index and delete all expired key-value pairs in a single
+** write transaction.  Only TTL-bearing keys are scanned — O(TTL keys),
+** not O(all data keys).
+**
+** *pnDeleted (may be NULL) — set to the number of expired keys removed.
+**
+** Returns:
+**   KVSTORE_OK on success (including the case where nothing was expired).
+*/
+int kvstore_purge_expired(KVStore *pKV, int *pnDeleted);
+
+/* ========== CF-LEVEL TTL OPERATIONS ========== */
+
+/*
+** Insert or update key/value in the given column family with an expiry time.
+** Equivalent to kvstore_put_ttl() but operates on an explicit CF handle.
+*/
+int kvstore_cf_put_ttl(
+  KVColumnFamily *pCF,
+  const void *pKey, int nKey,
+  const void *pValue, int nValue,
+  int64_t expire_ms
+);
+
+/*
+** Get value from a column family with lazy TTL expiry check.
+** Equivalent to kvstore_get_ttl() but operates on an explicit CF handle.
+*/
+int kvstore_cf_get_ttl(
+  KVColumnFamily *pCF,
+  const void *pKey, int nKey,
+  void **ppValue, int *pnValue,
+  int64_t *pnRemaining
+);
+
+/*
+** Return remaining TTL in milliseconds for a key in the given column family.
+** Equivalent to kvstore_ttl_remaining() but operates on an explicit CF handle.
+*/
+int kvstore_cf_ttl_remaining(
+  KVColumnFamily *pCF,
+  const void *pKey, int nKey,
+  int64_t *pnRemaining
+);
+
+/*
+** Purge expired keys from the given column family.
+** Equivalent to kvstore_purge_expired() but operates on an explicit CF handle.
+*/
+int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted);
 
 #ifdef __cplusplus
 }

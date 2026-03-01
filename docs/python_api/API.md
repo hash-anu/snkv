@@ -17,6 +17,7 @@ embedded key-value store built on SQLite's B-Tree engine.
 - [KVStore](#kvstore)
   - [Opening a Store](#opening-a-store)
   - [Core Operations](#core-operations)
+  - [TTL / Key Expiry](#ttl--key-expiry)
   - [Dict-like Interface](#dict-like-interface)
   - [Transactions](#transactions)
   - [Column Families](#column-families)
@@ -25,6 +26,7 @@ embedded key-value store built on SQLite's B-Tree engine.
   - [Lifecycle](#lifecycle)
 - [ColumnFamily](#columnfamily)
   - [Core Operations](#core-operations-1)
+  - [TTL / Key Expiry](#ttl--key-expiry-1)
   - [Dict-like Interface](#dict-like-interface-1)
   - [Iterators](#iterators-1)
   - [Lifecycle](#lifecycle-1)
@@ -94,6 +96,12 @@ with KVStore("mydb.db") as db:
 | `CHECKPOINT_FULL` | Wait for all readers, then copy all frames |
 | `CHECKPOINT_RESTART` | Like FULL, then reset the WAL write position |
 | `CHECKPOINT_TRUNCATE` | Like RESTART, then truncate the WAL file to zero bytes |
+
+### TTL
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `NO_TTL` | `-1` | Sentinel returned by `ttl()` when a key exists but has no expiry |
 
 ---
 
@@ -174,29 +182,38 @@ with KVStore("mydb.db") as db:
 
 ### Core Operations
 
-#### `put(key, value) -> None`
+#### `put(key, value, ttl=None) -> None`
 
 Insert or overwrite a key-value pair in the default column family.
 
 ```python
 db.put("user:1", b"\x01\x02\x03")
 db.put(b"binary_key", "string_value")
+
+# With expiry: key disappears after 3600 seconds
+db.put("session:abc", "tok", ttl=3600)
+db.put("cache:x", data, ttl=0.5)   # half a second
 ```
 
 Both `key` and `value` accept `str` (UTF-8 encoded automatically) or `bytes` / `bytearray` / `memoryview`.
+
+`ttl` is a number of seconds (int or float) until the key expires. `None` (default) means no expiry.
+The data write and the TTL index write are committed atomically.
 
 ---
 
 #### `get(key, default=None) -> bytes | None`
 
-Return the stored value as `bytes`, or `default` if the key does not exist.
+Return the stored value as `bytes`, or `default` if the key does not exist **or has expired**.
 
 ```python
 val = db.get("user:1")          # b'\x01\x02\x03'  or  None
 val = db.get("missing", b"")    # b''  if not found
+val = db.get("session:abc")     # None if expired (lazy delete performed)
 ```
 
 Never raises `NotFoundError` — use `db[key]` if you want an exception on miss.
+Expired keys are lazily deleted on access and return `default`.
 
 ---
 
@@ -221,14 +238,85 @@ if db.exists("user:1"):
 
 ---
 
+### TTL / Key Expiry
+
+SNKV supports per-key TTL with zero overhead for stores that never use it.
+Expiry timestamps are stored in a hidden internal column family (`__snkv_ttl__`)
+that is created lazily on first use and never appears in `list_column_families()`.
+
+#### `put(key, value, ttl=seconds) -> None`
+
+See [Core Operations](#core-operations). Pass `ttl=<seconds>` to set an expiry.
+
+#### `ttl(key) -> float | None`
+
+Return the remaining TTL for `key` in seconds.
+
+| Return value | Meaning |
+|---|---|
+| Positive float | Seconds remaining |
+| `0.0` | Key just expired (lazy delete performed) |
+| `None` | Key exists but has no expiry |
+| raises `NotFoundError` | Key does not exist |
+
+```python
+db.put("session", "tok", ttl=3600)
+
+remaining = db.ttl("session")   # e.g. 3599.97
+remaining = db.ttl("permanent") # None  (no TTL set)
+
+try:
+    db.ttl("nonexistent")
+except NotFoundError:
+    print("key not found")
+```
+
+#### `purge_expired() -> int`
+
+Scan the TTL index and delete all expired keys in a single transaction.
+Returns the number of keys deleted.
+
+```python
+n = db.purge_expired()
+print(f"Removed {n} expired keys")
+```
+
+Lazy deletion (on `get` / `db[key]`) handles the common case automatically.
+`purge_expired()` is useful for background cleanup or after a bulk load of short-lived keys.
+
+**Full TTL example:**
+
+```python
+import time
+from snkv import KVStore, NotFoundError
+
+with KVStore("cache.db") as db:
+    db.put("rate_limit:user1", b"42", ttl=60)   # expires in 60 s
+    db.put("permanent_key",    b"data")          # no expiry
+
+    # Transparent: returns None once expired (no exception)
+    val = db.get("rate_limit:user1")             # b'42' while live
+
+    # Check remaining time
+    secs = db.ttl("rate_limit:user1")            # e.g. 59.9
+    secs = db.ttl("permanent_key")               # None
+
+    # Bulk purge
+    deleted = db.purge_expired()
+```
+
+---
+
 ### Dict-like Interface
 
 `KVStore` supports the standard Python mapping-style operators.
+Both `db[key]` and `db.get(key)` perform lazy TTL expiry — expired keys raise
+`KeyError` / return `None` just like missing keys.
 
 | Syntax | Equivalent method | Notes |
 |--------|-------------------|-------|
-| `db["key"]` | `get` | Raises `NotFoundError` / `KeyError` on miss |
-| `db["key"] = "val"` | `put` | |
+| `db["key"]` | `get` | Raises `NotFoundError` / `KeyError` on miss or expiry |
+| `db["key"] = "val"` | `put` | No TTL — use `put(key, val, ttl=...)` for expiry |
 | `del db["key"]` | `delete` | Raises `NotFoundError` / `KeyError` on miss |
 | `"key" in db` | `exists` | |
 | `for k, v in db` | `iterator()` | Yields `(bytes, bytes)` pairs |
@@ -320,7 +408,8 @@ cf = db.default_column_family()
 
 #### `list_column_families() -> list[str]`
 
-Return a list of all column family names (excluding the default family).
+Return a list of all user-defined column family names (excluding the default family
+and internal system families such as `__snkv_ttl__`).
 
 ```python
 names = db.list_column_families()   # e.g. ["users", "sessions"]
@@ -481,17 +570,24 @@ A logical namespace within a `KVStore`. Obtained via
 
 ### Core Operations
 
-#### `put(key, value) -> None`
+#### `put(key, value, ttl=None) -> None`
 
 Insert or overwrite a key-value pair.
 
+`ttl` — optional expiry in seconds (`int` or `float`). `None` means no expiry.
+Both the data write and the TTL index write are atomic.
+A plain `put()` on an existing TTL key removes the TTL entry.
+
 ```python
-cf.put("alice", b"admin")
+cf.put("alice", b"admin")              # permanent
+cf.put("token", b"xyz", ttl=300)       # expires in 5 minutes
+cf.put("token", b"xyz")                # overwrite — removes TTL
 ```
 
 #### `get(key, default=None) -> bytes | None`
 
-Return value bytes, or `default` if the key does not exist.
+Return value bytes, or `default` if the key does not exist or has expired.
+Performs lazy expiry on access.
 
 ```python
 role = cf.get("alice")           # b'admin'  or  None
@@ -512,6 +608,38 @@ Return `True` if the key exists.
 
 ```python
 cf.exists("alice")    # True / False
+```
+
+---
+
+### TTL / Key Expiry
+
+#### `ttl(key) -> float | None`
+
+Return remaining TTL in seconds.
+
+| Return value | Meaning |
+|-------------|---------|
+| `None` | Key exists but has no expiry |
+| `0.0` | Key just expired (lazy delete performed) |
+| `N > 0.0` | N seconds remain |
+| raises `NotFoundError` | Key does not exist at all |
+
+```python
+remaining = cf.ttl("token")   # e.g. 284.3
+```
+
+#### `purge_expired() -> int`
+
+Scan and delete all expired keys in **this column family only** in a single
+write transaction.  Uses the expiry index CF (sorted by expire time) to stop at
+the first non-expired entry — O(expired keys).
+
+Returns the number of data keys deleted.
+
+```python
+n = cf.purge_expired()
+print(f"Cleaned up {n} expired entries")
 ```
 
 ---
@@ -718,6 +846,17 @@ with KVStore("mydb.db",
     db["a"] = "1"
     db["b"] = "2"
     db.commit()
+
+    # TTL / key expiry
+    db.put("session:xyz", b"tok_abc", ttl=3600)   # expires in 1 hour
+    db.put("cache:foo",   b"data",    ttl=5)       # expires in 5 s
+    db.put("permanent",   b"data")                 # no expiry
+
+    print(db.ttl("session:xyz"))   # e.g. 3599.99 (seconds remaining)
+    print(db.ttl("permanent"))     # None (no expiry)
+
+    val = db.get("session:xyz")    # b'tok_abc' while live, None once expired
+    n   = db.purge_expired()       # bulk-delete all expired keys
 
     # Column families
     with db.create_column_family("users") as users:

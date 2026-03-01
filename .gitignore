@@ -17,6 +17,7 @@ tests/test_stress
 tests/test_prefix
 tests/test_crash_10gb
 tests/test_checkpoint
+tests/test_ttl
 examples/basic
 examples/benchmark
 examples/config
@@ -24,4 +25,5 @@ examples/column_families
 examples/iterators
 examples/session_store
 examples/transactions
+examples/ttl
 examples/checkpoint_demo

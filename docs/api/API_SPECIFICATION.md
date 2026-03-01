@@ -17,6 +17,7 @@
 - [Iterators](#iterators)
 - [Prefix Iterators](#prefix-iterators)
 - [Transactions](#transactions)
+- [TTL / Key Expiry](#ttl--key-expiry)
 - [Diagnostics](#diagnostics)
 - [Memory Management](#memory-management)
 - [Thread Safety](#thread-safety)
@@ -856,6 +857,180 @@ if (rc == KVSTORE_OK) {
 
 /* Reclaim WAL disk space (truncate WAL file to zero) */
 kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_TRUNCATE, NULL, NULL);
+```
+
+---
+
+## TTL / Key Expiry
+
+SNKV supports per-key Time-To-Live (TTL) with a **per-CF dual-index** design.
+Every user column family `<CF>` can have two hidden sibling CFs created lazily
+on the first `kvstore_cf_put_ttl` call:
+
+| Hidden CF | Key | Value | Purpose |
+|-----------|-----|-------|---------|
+| `__snkv_ttl_k__<CF>` | `user_key` | 8-byte BE `expire_ms` | O(1) point lookup |
+| `__snkv_ttl_e__<CF>` | `[8-byte BE expire_ms][user_key]` | empty | O(expired) range scan for purge |
+
+CFs that never use TTL pay **zero overhead** — the hidden index CFs are never
+created. Names beginning with `__` are reserved and invisible in `kvstore_cf_list`.
+
+### TTL Sentinel
+
+```c
+#define KVSTORE_NO_TTL (-1)   /* key exists but has no expiry */
+```
+
+### Time Helper
+
+```c
+int64_t kvstore_now_ms(void);
+```
+
+Returns the current time in milliseconds since the Unix epoch.  Use this to
+compute absolute expiry values:
+
+```c
+int64_t expire_ms = kvstore_now_ms() + 30000;  // 30 seconds from now
+```
+
+### Default Column Family TTL
+
+```c
+int kvstore_put_ttl(
+    KVStore *pKV,
+    const void *pKey, int nKey,
+    const void *pValue, int nValue,
+    int64_t expire_ms
+);
+```
+
+Insert or update a key with an expiry time.
+
+| `expire_ms` | Behaviour |
+|-------------|-----------|
+| `> 0` | Absolute expiry in ms since Unix epoch. |
+| `== 0` | Write key without TTL (removes any existing TTL entry). |
+
+Both the data write and the TTL index writes are committed atomically.
+
+---
+
+```c
+int kvstore_get_ttl(
+    KVStore *pKV,
+    const void *pKey, int nKey,
+    void **ppValue, int *pnValue,
+    int64_t *pnRemaining       /* may be NULL */
+);
+```
+
+Retrieve a value with lazy TTL expiry check.
+
+| Outcome | Return | `*ppValue` | `*pnRemaining` |
+|---------|--------|------------|----------------|
+| Key valid | `KVSTORE_OK` | populated (caller frees) | remaining ms, or `KVSTORE_NO_TTL` |
+| Key expired | `KVSTORE_NOTFOUND` | `NULL` | `0` |
+| Key absent | `KVSTORE_NOTFOUND` | `NULL` | `KVSTORE_NO_TTL` |
+
+On expiry the key and both TTL index entries are lazily deleted in a write
+transaction before returning.
+
+---
+
+```c
+int kvstore_ttl_remaining(
+    KVStore *pKV,
+    const void *pKey, int nKey,
+    int64_t *pnRemaining        /* must not be NULL */
+);
+```
+
+Return remaining TTL without fetching the value.
+
+| Return code | `*pnRemaining` | Meaning |
+|-------------|----------------|---------|
+| `KVSTORE_OK` | `KVSTORE_NO_TTL` | Key exists, no expiry |
+| `KVSTORE_OK` | `0` | Key just expired (lazy delete performed) |
+| `KVSTORE_OK` | `N > 0` | N ms remain |
+| `KVSTORE_NOTFOUND` | — | Key does not exist |
+
+---
+
+```c
+int kvstore_purge_expired(KVStore *pKV, int *pnDeleted);  /* pnDeleted may be NULL */
+```
+
+Scan the expiry index CF and delete all expired entries in a single write
+transaction.  Uses the 8-byte big-endian `expire_ms` prefix sort order to
+stop at the first non-expired entry — **O(expired keys)**, not O(all TTL keys).
+
+`*pnDeleted` is set to the number of data keys successfully deleted.
+
+### Column Family–Level TTL
+
+All four functions above have CF-level equivalents that operate on a
+`KVColumnFamily` handle instead of a `KVStore` handle.  Each user CF maintains
+**independent** TTL indexes; purging CF A never touches CF B.
+
+```c
+int kvstore_cf_put_ttl(
+    KVColumnFamily *pCF,
+    const void *pKey, int nKey,
+    const void *pValue, int nValue,
+    int64_t expire_ms
+);
+
+int kvstore_cf_get_ttl(
+    KVColumnFamily *pCF,
+    const void *pKey, int nKey,
+    void **ppValue, int *pnValue,
+    int64_t *pnRemaining       /* may be NULL */
+);
+
+int kvstore_cf_ttl_remaining(
+    KVColumnFamily *pCF,
+    const void *pKey, int nKey,
+    int64_t *pnRemaining       /* must not be NULL */
+);
+
+int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted);
+```
+
+Semantics are identical to the default-CF variants above.
+
+### TTL Lifecycle Notes
+
+- **Dropping a CF** (`kvstore_cf_drop`) automatically removes its two hidden
+  TTL index CFs.
+- **Re-opening a store** (`kvstore_open` / `kvstore_cf_open`) probes for
+  existing TTL index CFs and restores the `hasTtl` flag transparently.
+- **Overwriting with `kvstore_put`** removes any existing TTL entry for that
+  key atomically.
+- **Rolling back** a transaction containing `kvstore_put_ttl` discards both the
+  data write and the TTL index writes.
+
+### Example
+
+```c
+/* Write a session token that expires in 30 minutes. */
+int64_t expire_ms = kvstore_now_ms() + 30 * 60 * 1000;
+kvstore_put_ttl(pKV, "sess:abc", 8, token, token_len, expire_ms);
+
+/* Read it back — lazy expiry check included. */
+void *val = NULL; int nVal = 0; int64_t rem = 0;
+int rc = kvstore_get_ttl(pKV, "sess:abc", 8, &val, &nVal, &rem);
+if (rc == KVSTORE_OK) {
+    /* use val, rem is remaining ms */
+    snkv_free(val);
+} else if (rc == KVSTORE_NOTFOUND) {
+    /* session expired or never existed */
+}
+
+/* Nightly maintenance: purge expired sessions. */
+int n = 0;
+kvstore_purge_expired(pKV, &n);
+printf("Purged %d expired sessions\n", n);
 ```
 
 ---
