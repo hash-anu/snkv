@@ -214,7 +214,6 @@ SOURCES="
   random.c
   fault.c
   hash.c
-  rowset.c
   bitvec.c
   pcache.c
   pcache1.c

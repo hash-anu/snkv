@@ -53,7 +53,7 @@ SQLITE_CORE = src/btree.c src/btmutex.c \
               src/malloc.c src/status.c src/global.c \
               src/hash.c src/util.c src/printf.c src/random.c \
               src/threads.c \
-              src/fault.c src/mem1.c src/rowset.c
+              src/fault.c src/mem1.c
 
 # Library objects
 LIB_SRC = src/kvstore.c $(SQLITE_CORE)
