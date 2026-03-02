@@ -67,7 +67,10 @@ db.put(b"session", b"tok123", ttl=60)      # expires in 60 seconds
 db[b"token", 30] = b"bearer-xyz"           # dict-style TTL
 
 val = db.get(b"session")                   # None if expired
-remaining = db.ttl(b"session")             # seconds remaining, or None
+try:
+    remaining = db.ttl(b"session")         # seconds remaining, or None if no expiry
+except NotFoundError:
+    remaining = None                        # key does not exist
 n = db.purge_expired()                     # bulk-delete expired keys
 ```
 
