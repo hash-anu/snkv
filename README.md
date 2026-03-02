@@ -45,6 +45,36 @@ int main(void) {
 
 ---
 
+## TTL — Native Key Expiry
+
+SNKV has built-in TTL (Time-To-Live) support. Keys expire automatically — no background thread, no cron job. Expiry is enforced lazily on access and can be bulk-purged on demand.
+
+```c
+/* C API */
+int64_t expire_ms = kvstore_now_ms() + 60000;  /* 60 seconds from now */
+kvstore_put_ttl(db, "session", 7, "tok123", 6, expire_ms);
+
+void *val; int len; int64_t remaining_ms;
+kvstore_get_ttl(db, "session", 7, &val, &len, &remaining_ms);
+
+int n;
+kvstore_purge_expired(db, &n);  /* bulk-delete all expired keys */
+```
+
+```python
+# Python API
+db.put(b"session", b"tok123", ttl=60)      # expires in 60 seconds
+db[b"token", 30] = b"bearer-xyz"           # dict-style TTL
+
+val = db.get(b"session")                   # None if expired
+remaining = db.ttl(b"session")             # seconds remaining, or None
+n = db.purge_expired()                     # bulk-delete expired keys
+```
+
+TTL is supported on both the default store and on column families. Expired keys are lazily deleted on `get()` and `exists()` — consistent results without a background thread.
+
+---
+
 ## Configuration
 
 Use `kvstore_open_v2` to control how the store is opened. Zero-initialise the
@@ -230,6 +260,7 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 
 **SNKV is a good fit if:**
 - Your workload is read-heavy or mixed (reads + writes)
+- You need native TTL — sessions, rate limiting, caches, OTP codes, leases
 - You're running in a memory-constrained or embedded environment
 - You want a clean KV API without writing SQL strings, preparing statements, and binding parameters
 - You need single-header C integration with no external dependencies
@@ -246,6 +277,7 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 
 - **ACID Transactions** — commit / rollback safety
 - **WAL Mode** — concurrent readers + single writer
+- **Native TTL** — per-key expiry with lazy eviction and `purge_expired()`; no background thread required
 - **Column Families** — logical namespaces within a single database
 - **Iterators** — ordered key traversal
 - **Thread Safe** — built-in synchronization
@@ -253,7 +285,7 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 - **Zero memory leaks** — verified with Valgrind
 - **SSD-friendly** — WAL appends sequentially, reducing random writes
 
-- **Python Bindings** — idiomatic Python 3.8+ API with dict-style access, context managers, typed exceptions, and prefix iterators — see [python/README.md](python/README.md)
+- **Python Bindings** — idiomatic Python 3.8+ API with dict-style access, TTL support, context managers, typed exceptions, and prefix iterators — see [python/README.md](python/README.md)
 
 ---
 
