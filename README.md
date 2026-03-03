@@ -237,16 +237,16 @@ SQLite benchmark uses `WITHOUT ROWID` with a BLOB primary key — the fairest po
 
 | Benchmark         | SQLite       | SNKV         | Notes                        |
 | ----------------- | ------------ | ------------ | ---------------------------- |
-| Sequential writes | 140K ops/s   | 146K ops/s   | **SNKV 1.05x faster**        |
-| Random reads      | 87K ops/s    | 139K ops/s   | **SNKV 1.6x faster**         |
-| Sequential scan   | 1.61M ops/s  | 3.16M ops/s  | **SNKV 2x faster**           |
-| Random updates    | 17K ops/s    | 24K ops/s    | **SNKV 1.4x faster**         |
-| Random deletes    | 17K ops/s    | 20K ops/s    | **SNKV 1.2x faster**         |
-| Exists checks     | 87K ops/s    | 149K ops/s   | **SNKV 1.7x faster**         |
-| Mixed workload    | 35K ops/s    | 50K ops/s    | **SNKV 1.4x faster**         |
-| Bulk insert       | 211K ops/s   | 240K ops/s   | **SNKV 1.1x faster**         |
+| Sequential writes | 142K ops/s   | 232K ops/s   | **SNKV 1.64x faster**        |
+| Random reads      | 90K ops/s    | 160K ops/s   | **SNKV 1.77x faster**        |
+| Sequential scan   | 1.56M ops/s  | 2.89M ops/s  | **SNKV 1.85x faster**        |
+| Random updates    | 16K ops/s    | 31K ops/s    | **SNKV 1.9x faster**         |
+| Random deletes    | 16K ops/s    | 31K ops/s    | **SNKV ~2x faster**          |
+| Exists checks     | 93K ops/s    | 173K ops/s   | **SNKV 1.85x faster**        |
+| Mixed workload    | 34K ops/s    | 62K ops/s    | **SNKV 1.79x faster**        |
+| Bulk insert       | 211K ops/s   | 248K ops/s   | **SNKV 1.17x faster**        |
 
-With identical storage configuration, SNKV wins across every benchmark. The gains come from two sources: bypassing the SQL layer (no parsing, no query planner, no VDBE) and a per-column-family cached read cursor that eliminates repeated cursor open/close overhead on the hot read path. The biggest wins are on read-heavy operations — random reads (+60%), exists checks (+70%), and sequential scan (+100%) — exactly where the cursor caching pays off most.
+With identical storage configuration, SNKV wins across every benchmark. The gains come entirely from bypassing the SQL layer — no parsing, no query planner, no VDBE — and a per-column-family cached read cursor that eliminates repeated cursor open/close overhead on the hot read path. Updates and deletes show the biggest gains (~2x) since SQLite must parse, plan, and execute a full SQL statement per operation. Bulk insert is the closest (17%) because both commit a single large B-tree transaction with minimal per-row overhead.
 
 ---
 
