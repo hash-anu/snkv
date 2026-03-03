@@ -297,7 +297,6 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 Because SNKV uses SQLite's file format and pager layer, backup tools that operate at the WAL or page level work out of the box:
 
 - ✅ **LiteFS** — distributed SQLite replication works with SNKV databases
-- ✅ **SQLite Online Backup API** — operates at the page level, fully compatible
 - ✅ **WAL-based backup tools** — any tool consuming WAL files works correctly
 - ✅ **Rollback journal tools** — journal mode is fully supported
 
