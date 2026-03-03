@@ -20,7 +20,8 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Auto-checkpoint** — set `wal_size_limit=N` to checkpoint automatically after every N WAL frames
 - **Typed exceptions** — `NotFoundError`, `BusyError`, `LockedError`, `ReadOnlyError`, `CorruptError` all subclass `snkv.Error`
 - **No Python dependencies** — pure CPython C extension; only requires a C compiler and `python3-dev`
-- **247 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, JSON, and more
+- **Native TTL** — per-key expiry with `put(ttl=seconds)`, dict-style `db[key, ttl] = value`, lazy expiry on get, and `purge_expired()`
+- **279 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, and more
 
 ---
 
@@ -252,6 +253,35 @@ db.integrity_check()      # raises CorruptError if database is corrupt
 stats = db.stats()        # dict: {"puts": N, "gets": N, "deletes": N, "iterations": N}
 ```
 
+### TTL — Native Key Expiry
+
+Per-key TTL with automatic lazy expiry on read.
+
+```python
+# Put with TTL (seconds, float precision)
+db.put(b"session", b"tok123", ttl=60)   # expires in 60 s
+db[b"token", 30] = b"bearer-xyz"        # dict-style shorthand
+
+# Get — expired keys are silently evicted and raise NotFoundError
+val = db.get(b"session")                # returns bytes or None if expired
+
+# Check remaining lifetime
+from snkv import NotFoundError
+try:
+    remaining = db.ttl(b"session")      # seconds remaining (float)
+except NotFoundError:
+    remaining = None                    # key expired or never set
+
+# Purge all expired keys from disk (returns count removed)
+n = db.purge_expired()
+
+# Column families support TTL identically
+with db.create_column_family("cache") as cf:
+    cf.put(b"item", b"data", ttl=10)
+    cf[b"item2", 5] = b"data2"
+    n = cf.purge_expired()
+```
+
 ---
 
 ## Error Hierarchy
@@ -303,7 +333,7 @@ cd python
 PYTHONPATH=. python3 -m pytest tests/ -v
 ```
 
-All 247 tests should pass.
+All 279 tests should pass.
 
 ---
 
@@ -319,6 +349,8 @@ PYTHONPATH=. python3 examples/iterators.py       # ordered scan, prefix scan
 PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WAL limit
 PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
+PYTHONPATH=. python3 examples/ttl.py             # TTL expiry, rate limiter demo
+PYTHONPATH=. python3 examples/multiprocess.py    # 5 concurrent processes, busy_timeout
 ```
 
 **Windows — Native Python (x64 Native Tools Command Prompt for VS 2022)**
@@ -332,6 +364,8 @@ python examples\iterators.py
 python examples\config.py
 python examples\checkpoint.py
 python examples\session_store.py
+python examples\ttl.py
+python examples\multiprocess.py
 ```
 
 **Windows — MSYS2 MinGW64 shell**

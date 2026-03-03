@@ -145,11 +145,11 @@ def main():
             print(f"FAIL: {missing} keys missing or incorrect.")
 
     # Cleanup
-    #for ext in ("", "-wal", "-shm"):
-    #    try:
-    #        os.remove(DB_FILE + ext)
-    #    except FileNotFoundError:
-    #        pass
+    for ext in ("", "-wal", "-shm"):
+        try:
+            os.remove(DB_FILE + ext)
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":
