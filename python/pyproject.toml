@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snkv"
-version = "0.3.0"
+version = "0.4.0"
 requires-python = ">=3.8"
-description = "Python bindings for SNKV - crash-safe embedded key-value store built on SQLite's B-Tree"
+description = "Crash-safe embedded key-value store — native TTL, reverse iterators, column families, ACID transactions"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 classifiers = [

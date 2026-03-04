@@ -16,6 +16,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Dict-style API** — `db["key"] = value`, `val = db["key"]`, `del db["key"]`, `"key" in db`
 - **Context managers** — `with KVStore(...) as db` and `with db.create_column_family(...) as cf` for guaranteed cleanup
 - **Prefix iterators** — efficient namespace scans with `db.prefix_iterator(b"user:")`
+- **Reverse iterators** — walk keys in descending order with `db.reverse_iterator()` and `db.reverse_prefix_iterator(b"user:")`
 - **WAL checkpoint control** — PASSIVE / FULL / RESTART / TRUNCATE modes via `db.checkpoint()`
 - **Auto-checkpoint** — set `wal_size_limit=N` to checkpoint automatically after every N WAL frames
 - **Typed exceptions** — `NotFoundError`, `BusyError`, `LockedError`, `ReadOnlyError`, `CorruptError` all subclass `snkv.Error`
@@ -229,6 +230,35 @@ with db.iterator() as it:
         ...
 ```
 
+### Reverse Iterators
+
+Walk keys in descending order — no full scan, no sort, pure B-tree traversal.
+
+```python
+# Full reverse scan
+for key, value in db.reverse_iterator():
+    print(key, value)
+
+# Reverse prefix scan — visits only matching keys, largest first
+for key, value in db.reverse_prefix_iterator(b"user:"):
+    print(key, value)
+
+# Manual control
+it = db.reverse_iterator()
+it.last()
+while not it.eof:
+    print(it.key, it.value)
+    it.prev()
+it.close()
+
+# As a context manager
+with db.reverse_prefix_iterator(b"log:") as it:
+    for key, value in it:
+        ...
+```
+
+Column families support reverse iterators identically via `cf.reverse_iterator()` and `cf.reverse_prefix_iterator()`.
+
 ### WAL Checkpoint
 
 ```python
@@ -350,6 +380,7 @@ PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WA
 PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
 PYTHONPATH=. python3 examples/ttl.py             # TTL expiry, rate limiter demo
+PYTHONPATH=. python3 examples/iterator_reverse.py # reverse iterators, descending scans
 PYTHONPATH=. python3 examples/multiprocess.py    # 5 concurrent processes, busy_timeout
 ```
 
@@ -365,7 +396,9 @@ python examples\config.py
 python examples\checkpoint.py
 python examples\session_store.py
 python examples\ttl.py
+python examples\iterator_reverse.py
 python examples\multiprocess.py
+python examples\all_apis.py
 ```
 
 **Windows — MSYS2 MinGW64 shell**
