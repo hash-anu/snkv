@@ -71,7 +71,8 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_autovacuum.c \
            tests/test_config.c \
            tests/test_checkpoint.c \
-           tests/test_ttl.c
+           tests/test_ttl.c \
+           tests/test_iterator_reverse.c
 TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
 
 # ---- Example files ----

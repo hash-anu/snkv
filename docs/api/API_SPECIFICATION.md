@@ -16,6 +16,7 @@
 - [Key-Value Operations (Specific Column Family)](#key-value-operations-specific-column-family)
 - [Iterators](#iterators)
 - [Prefix Iterators](#prefix-iterators)
+- [Reverse Iterators](#reverse-iterators)
 - [Transactions](#transactions)
 - [TTL / Key Expiry](#ttl--key-expiry)
 - [Diagnostics](#diagnostics)
@@ -628,6 +629,116 @@ while (!kvstore_iterator_eof(it)) {
     kvstore_iterator_next(it);
 }
 
+kvstore_iterator_close(it);
+```
+
+---
+
+## Reverse Iterators
+
+Reverse iterators traverse key-value pairs in **descending** key order (last key first).
+They use the same `KVIterator` handle as forward iterators but are created with dedicated
+functions and moved with `kvstore_iterator_last` / `kvstore_iterator_prev`.
+
+All forward iterator accessors (`kvstore_iterator_key`, `kvstore_iterator_value`,
+`kvstore_iterator_eof`, `kvstore_iterator_close`) work identically on reverse iterators.
+
+### kvstore_reverse_iterator_create
+
+Create a reverse iterator for the default column family.
+
+```c
+int kvstore_reverse_iterator_create(KVStore *pKV, KVIterator **ppIter);
+```
+
+### kvstore_cf_reverse_iterator_create
+
+Create a reverse iterator for a specific column family.
+
+```c
+int kvstore_cf_reverse_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter);
+```
+
+### kvstore_reverse_prefix_iterator_create
+
+Create a reverse iterator limited to keys that start with `pPrefix`.
+The iterator is pre-positioned at the last matching key.
+
+```c
+int kvstore_reverse_prefix_iterator_create(
+  KVStore *pKV,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+);
+```
+
+### kvstore_cf_reverse_prefix_iterator_create
+
+```c
+int kvstore_cf_reverse_prefix_iterator_create(
+  KVColumnFamily *pCF,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+);
+```
+
+**Important:** Reverse prefix iterators are already positioned at the last matching key.
+**Do not call `kvstore_iterator_last()`** — read the key/value directly, then call
+`kvstore_iterator_prev()`.
+
+### kvstore_iterator_last
+
+Position the iterator at the last key-value pair.
+**Only valid on reverse iterators** (created with one of the four functions above).
+Calling this on a forward iterator returns `KVSTORE_ERROR`.
+
+```c
+int kvstore_iterator_last(KVIterator *pIter);
+```
+
+### kvstore_iterator_prev
+
+Advance the iterator to the previous key-value pair.
+**Only valid on reverse iterators.**
+
+```c
+int kvstore_iterator_prev(KVIterator *pIter);
+```
+
+### Reverse Iterator Examples
+
+**Full reverse scan:**
+
+```c
+KVIterator *it = NULL;
+kvstore_reverse_iterator_create(kv, &it);
+kvstore_iterator_last(it);
+
+while (!kvstore_iterator_eof(it)) {
+    void *key, *value;
+    int   klen, vlen;
+    kvstore_iterator_key(it, &key, &klen);
+    kvstore_iterator_value(it, &value, &vlen);
+    /* use key/value — do NOT free them */
+    kvstore_iterator_prev(it);
+}
+kvstore_iterator_close(it);
+```
+
+**Reverse prefix scan:**
+
+```c
+KVIterator *it = NULL;
+kvstore_reverse_prefix_iterator_create(kv, "user:", 5, &it);
+/* Already at last matching key — do NOT call kvstore_iterator_last() */
+
+while (!kvstore_iterator_eof(it)) {
+    void *key, *value;
+    int   klen, vlen;
+    kvstore_iterator_key(it, &key, &klen);
+    kvstore_iterator_value(it, &value, &vlen);
+    kvstore_iterator_prev(it);
+}
 kvstore_iterator_close(it);
 ```
 
