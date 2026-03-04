@@ -587,6 +587,54 @@ int kvstore_cf_prefix_iterator_create(
 );
 
 /*
+** Create a reverse iterator for the default column family.
+**
+** A reverse iterator starts before the last entry.  Call
+** kvstore_iterator_last() to move to the largest key, then
+** kvstore_iterator_prev() to advance toward smaller keys.
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+**
+** Thread safety: creation is thread-safe; the returned KVIterator *
+** handle must be used by a single thread at a time.
+*/
+int kvstore_reverse_iterator_create(KVStore *pKV, KVIterator **ppIter);
+
+/*
+** CF variant of kvstore_reverse_iterator_create.
+*/
+int kvstore_cf_reverse_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter);
+
+/*
+** Create a reverse prefix iterator for the default column family.
+**
+** Scoped to keys that begin with (pPrefix, nPrefix).
+** kvstore_iterator_last() positions at the last key with the given prefix;
+** kvstore_iterator_prev() walks backward and sets eof=1 when keys no longer
+** match the prefix.
+**
+** pPrefix bytes are copied; the caller may free the buffer immediately.
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+*/
+int kvstore_reverse_prefix_iterator_create(
+  KVStore *pKV,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+);
+
+/*
+** CF variant of kvstore_reverse_prefix_iterator_create.
+*/
+int kvstore_cf_reverse_prefix_iterator_create(
+  KVColumnFamily *pCF,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+);
+
+/*
 ** Move iterator to the first key-value pair.
 **
 ** Parameters:
@@ -598,6 +646,20 @@ int kvstore_cf_prefix_iterator_create(
 int kvstore_iterator_first(KVIterator *pIter);
 
 /*
+** Position a reverse iterator at the last (largest) key.
+**
+** Equivalent to kvstore_iterator_first() for forward iterators.
+** Returns KVSTORE_ERROR if called on a forward iterator (direction mismatch).
+**
+** Parameters:
+**   pIter - Reverse iterator handle
+**
+** Returns:
+**   KVSTORE_OK on success (check kvstore_iterator_eof for emptiness).
+*/
+int kvstore_iterator_last(KVIterator *pIter);
+
+/*
 ** Move iterator to the next key-value pair.
 **
 ** Parameters:
@@ -607,6 +669,21 @@ int kvstore_iterator_first(KVIterator *pIter);
 **   KVSTORE_OK on success, error code otherwise
 */
 int kvstore_iterator_next(KVIterator *pIter);
+
+/*
+** Advance a reverse iterator to the previous (smaller) key.
+**
+** Equivalent to kvstore_iterator_next() for forward iterators.
+** Sets eof=1 when the beginning (or prefix boundary) is reached.
+** Returns KVSTORE_ERROR if called on a forward iterator (direction mismatch).
+**
+** Parameters:
+**   pIter - Reverse iterator handle
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+*/
+int kvstore_iterator_prev(KVIterator *pIter);
 
 /*
 ** Check if iterator has reached the end.

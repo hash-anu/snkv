@@ -241,6 +241,7 @@ struct KVIterator {
   int isValid;       /* Iterator validity flag */
   void *pPrefix;     /* Prefix filter (NULL = no filter) */
   int nPrefix;       /* Length of prefix */
+  int reverse;       /* 1 = reverse (BtreeLast/BtreePrevious); 0 = forward */
 };
 
 /*
@@ -422,6 +423,71 @@ static int kvstoreSeekAfter(
   /* res > 0: cursor is already at the first entry > target. */
   *pEof = sqlite3BtreeEof(pCur);
   return SQLITE_OK;
+}
+
+/*
+** Position pCur at the last entry strictly less than (pKey, nKey).
+** Sets *pEof = 1 if no such entry exists.
+** Mirrors kvstoreSeekAfter for reverse iteration.
+*/
+static int kvstoreSeekBefore(
+  BtCursor *pCur,
+  KeyInfo *pKeyInfo,
+  const void *pKey, int nKey,
+  int *pEof
+){
+  UnpackedRecord idxKey;
+  Mem memField;
+  int res = 0, rc;
+  *pEof = 0;
+  memset(&idxKey, 0, sizeof(idxKey));
+  memset(&memField, 0, sizeof(memField));
+  idxKey.pKeyInfo   = pKeyInfo;
+  idxKey.aMem       = &memField;
+  idxKey.u.z        = (char *)pKey;
+  idxKey.n          = nKey;
+  idxKey.nField     = 1;
+  idxKey.default_rc = 0;
+  rc = sqlite3BtreeIndexMoveto(pCur, &idxKey, &res);
+  if( rc != SQLITE_OK ){ *pEof = 1; return rc; }
+  if( res >= 0 ){
+    /* At or after target — back up one entry. */
+    rc = sqlite3BtreePrevious(pCur, 0);
+    if( rc == SQLITE_DONE ){ *pEof = 1; return SQLITE_OK; }
+    if( rc != SQLITE_OK ){ *pEof = 1; return rc; }
+  }
+  /* res < 0: cursor is already at the last entry < target. */
+  *pEof = sqlite3BtreeEof(pCur);
+  return SQLITE_OK;
+}
+
+/*
+** Compute the prefix successor: the smallest key strictly greater than
+** all keys that begin with (pPrefix, nPrefix).
+**
+** Scan from the last byte backward to find the first byte != 0xFF,
+** increment it by 1, and truncate there.  The result is written into
+** pSucc (caller must provide at least nPrefix bytes) and its length
+** is stored in *pnSucc.
+**
+** Returns 1 if a successor was found, 0 if the entire prefix is 0xFF
+** (no finite successor exists; caller must fall back to BtreeLast).
+*/
+static int kvstorePrefixSuccessor(
+  const void *pPrefix, int nPrefix,
+  unsigned char *pSucc, int *pnSucc
+){
+  int i;
+  memcpy(pSucc, pPrefix, nPrefix);
+  for( i = nPrefix - 1; i >= 0; i-- ){
+    if( pSucc[i] != 0xFF ){
+      pSucc[i]++;
+      *pnSucc = i + 1;
+      return 1;
+    }
+  }
+  *pnSucc = 0;
+  return 0; /* all 0xFF — no finite successor */
 }
 
 /* ======================================================================
@@ -2793,6 +2859,84 @@ int kvstore_prefix_iterator_create(
 }
 
 /*
+** Create a reverse iterator for a specific column family.
+** The iterator starts before the last entry; call kvstore_iterator_last()
+** to position at the largest key, then kvstore_iterator_prev() to advance.
+*/
+int kvstore_cf_reverse_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
+  int rc = kvstore_cf_iterator_create(pCF, ppIter);
+  if( rc != KVSTORE_OK ) return rc;
+  (*ppIter)->reverse = 1;
+  return KVSTORE_OK;
+}
+
+/*
+** Create a reverse iterator for the default column family.
+*/
+int kvstore_reverse_iterator_create(KVStore *pKV, KVIterator **ppIter){
+  if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
+  return kvstore_cf_reverse_iterator_create(pKV->pDefaultCF, ppIter);
+}
+
+/*
+** Create a reverse prefix iterator for a specific column family.
+** Scoped to keys starting with (pPrefix, nPrefix).  kvstore_iterator_last()
+** positions at the last matching key; kvstore_iterator_prev() walks backward
+** and sets eof=1 when keys no longer match the prefix.
+** pPrefix bytes are copied; caller may free immediately after return.
+*/
+int kvstore_cf_reverse_prefix_iterator_create(
+  KVColumnFamily *pCF,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+){
+  int rc;
+  KVIterator *pIter;
+
+  if( !pCF || !ppIter || !pPrefix || nPrefix <= 0 ){
+    return KVSTORE_ERROR;
+  }
+
+  rc = kvstore_cf_iterator_create(pCF, ppIter);
+  if( rc != KVSTORE_OK ) return rc;
+
+  pIter = *ppIter;
+  pIter->reverse = 1;
+
+  pIter->pPrefix = sqlite3Malloc(nPrefix);
+  if( !pIter->pPrefix ){
+    kvstore_iterator_close(pIter);
+    *ppIter = NULL;
+    return KVSTORE_NOMEM;
+  }
+  memcpy(pIter->pPrefix, pPrefix, nPrefix);
+  pIter->nPrefix = nPrefix;
+
+  /* Position at the last matching key. */
+  rc = kvstore_iterator_last(pIter);
+  if( rc != KVSTORE_OK ){
+    kvstore_iterator_close(pIter);
+    *ppIter = NULL;
+    return rc;
+  }
+
+  return KVSTORE_OK;
+}
+
+/*
+** Create a reverse prefix iterator for the default column family.
+*/
+int kvstore_reverse_prefix_iterator_create(
+  KVStore *pKV,
+  const void *pPrefix, int nPrefix,
+  KVIterator **ppIter
+){
+  if( !pKV || !pKV->pDefaultCF ) return KVSTORE_ERROR;
+  return kvstore_cf_reverse_prefix_iterator_create(
+           pKV->pDefaultCF, pPrefix, nPrefix, ppIter);
+}
+
+/*
 ** Check if the current cursor entry's key starts with the iterator's prefix.
 ** Returns 1 if match (or no prefix filter), 0 otherwise.
 */
@@ -2943,6 +3087,122 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
 }
 
 /*
+** While the iterator is positioned on an expired key, lazily delete it
+** and retreat to the previous live entry.  Called after BtreeLast/BtreePrevious.
+** Mirrors kvstoreIterSkipExpired for reverse iteration.
+** No locks are held on entry; acquires pCF->pMutex + pKV->pMutex internally.
+*/
+static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
+  KVColumnFamily *pCF = pIter->pCF;
+  KVStore *pKV = pCF->pKV;
+
+  if( !pCF->hasTtl || pCF->nTtlActive <= 0 || !pCF->pTtlKeyCF ) return SQLITE_OK;
+
+  for(;;){
+    if( pIter->eof ) return SQLITE_OK;
+
+    /* Read the current key from the iterator cursor. */
+    u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+    if( payloadSz < 4 ) return SQLITE_OK;
+    unsigned char hdr[4];
+    int rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
+    if( rc != SQLITE_OK ) return rc;
+    int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+    if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return SQLITE_OK;
+
+    if( pIter->nKeyBuf < keyLen ){
+      void *pNew = sqlite3Realloc(pIter->pKeyBuf, keyLen);
+      if( !pNew ) return SQLITE_NOMEM;
+      pIter->pKeyBuf = pNew;
+      pIter->nKeyBuf = keyLen;
+    }
+    rc = sqlite3BtreePayload(pIter->pCur, 4, keyLen, pIter->pKeyBuf);
+    if( rc != SQLITE_OK ) return rc;
+
+    /* Look up the TTL for this key. */
+    sqlite3_mutex_enter(pCF->pMutex);
+    sqlite3_mutex_enter(pKV->pMutex);
+    void *pTtlVal = NULL; int nTtlVal = 0;
+    kvstoreRawBtreeGet(pKV, pCF->pTtlKeyCF->iTable,
+                       pIter->pKeyBuf, keyLen, &pTtlVal, &nTtlVal);
+    sqlite3_mutex_leave(pKV->pMutex);
+    sqlite3_mutex_leave(pCF->pMutex);
+
+    if( !pTtlVal || nTtlVal != 8 ){
+      if( pTtlVal ) sqlite3_free(pTtlVal);
+      return SQLITE_OK; /* no TTL on this key — yield it */
+    }
+    int64_t expireMs = kvstoreDecodeBE64((const unsigned char*)pTtlVal);
+    sqlite3_free(pTtlVal);
+
+    if( kvstore_now_ms() < expireMs ) return SQLITE_OK; /* not expired — yield */
+
+    /* Expired.  Copy key before invalidating the cursor. */
+    void *pDeletedKey = sqlite3Malloc(keyLen);
+    if( !pDeletedKey ) return SQLITE_NOMEM;
+    memcpy(pDeletedKey, pIter->pKeyBuf, keyLen);
+    int nDeletedKey = keyLen;
+
+    /* Drop the iterator cursor — it will be invalidated by the write tx. */
+    kvstoreFreeCursor(pIter->pCur);
+    pIter->pCur = NULL;
+
+    /* Lazy delete from all three CFs inside one write transaction. */
+    sqlite3_mutex_enter(pCF->pMutex);
+    sqlite3_mutex_enter(pKV->pMutex);
+    if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+    if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+      pKV->inTrans = 2;
+      kvstoreRawBtreeDelete(pKV, pCF->iTable, pDeletedKey, nDeletedKey);
+      kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pDeletedKey, nDeletedKey);
+      unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
+      unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nDeletedKey);
+      if( pExpKey ){
+        memcpy(pExpKey, expBuf, 8);
+        memcpy(pExpKey + 8, pDeletedKey, nDeletedKey);
+        kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nDeletedKey);
+        sqlite3_free(pExpKey);
+      }
+      if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+      sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+      kvstoreAutoCheckpoint(pKV);
+      if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+    }
+    sqlite3_mutex_leave(pKV->pMutex);
+    sqlite3_mutex_leave(pCF->pMutex);
+
+    /* Re-open the iterator cursor and seek to the last entry < deleted key. */
+    pIter->pCur = kvstoreAllocCursor();
+    if( !pIter->pCur ){ sqlite3_free(pDeletedKey); pIter->eof = 1; return SQLITE_NOMEM; }
+
+    sqlite3_mutex_enter(pKV->pMutex);
+    rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pIter->pCur);
+    sqlite3_mutex_leave(pKV->pMutex);
+    if( rc != SQLITE_OK ){
+      kvstoreFreeCursor(pIter->pCur); pIter->pCur = NULL;
+      sqlite3_free(pDeletedKey);
+      pIter->eof = 1;
+      return rc;
+    }
+
+    int isEof = 0;
+    rc = kvstoreSeekBefore(pIter->pCur, pKV->pKeyInfo, pDeletedKey, nDeletedKey, &isEof);
+    sqlite3_free(pDeletedKey);
+    if( rc != SQLITE_OK || isEof ){
+      pIter->eof = 1;
+      return rc;
+    }
+
+    /* Check prefix bound after retreating. */
+    if( pIter->pPrefix && !kvstoreIterCheckPrefix(pIter) ){
+      pIter->eof = 1;
+      return SQLITE_OK;
+    }
+    /* Loop to check the previous entry's TTL. */
+  }
+}
+
+/*
 ** Move iterator to first entry
 */
 int kvstore_iterator_first(KVIterator *pIter){
@@ -3023,6 +3283,87 @@ int kvstore_iterator_next(KVIterator *pIter){
   }
 
   return rc;
+}
+
+/*
+** Position a reverse iterator at the last (largest) key.
+** For a reverse prefix iterator, positions at the last key with the prefix.
+** Equivalent to kvstore_iterator_first() for forward iterators.
+*/
+int kvstore_iterator_last(KVIterator *pIter){
+  int res, rc;
+
+  if( !pIter || !pIter->isValid ) return KVSTORE_ERROR;
+  if( !pIter->reverse ) return KVSTORE_ERROR; /* direction mismatch */
+
+  if( pIter->pPrefix ){
+    KVStore *pKV = pIter->pCF->pKV;
+    unsigned char *pSucc = (unsigned char *)sqlite3Malloc(pIter->nPrefix);
+    if( !pSucc ) return KVSTORE_NOMEM;
+    int nSucc = 0;
+    int hasSucc = kvstorePrefixSuccessor(pIter->pPrefix, pIter->nPrefix, pSucc, &nSucc);
+
+    if( hasSucc ){
+      int isEof = 0;
+      rc = kvstoreSeekBefore(pIter->pCur, pKV->pKeyInfo, pSucc, nSucc, &isEof);
+      sqlite3_free(pSucc);
+      if( rc != SQLITE_OK ){ pIter->eof = 1; return rc; }
+      pIter->eof = isEof;  /* update eof before kvstoreIterCheckPrefix which checks it */
+      if( pIter->eof || !kvstoreIterCheckPrefix(pIter) ){
+        pIter->eof = 1;
+        return KVSTORE_OK;
+      }
+    } else {
+      /* Entire prefix is 0xFF bytes — no successor; fall back to BtreeLast
+         and verify the last key actually starts with the prefix. */
+      sqlite3_free(pSucc);
+      rc = sqlite3BtreeLast(pIter->pCur, &res);
+      if( rc != SQLITE_OK ){ pIter->eof = 1; return rc; }
+      pIter->eof = res;
+      if( pIter->eof || !kvstoreIterCheckPrefix(pIter) ){
+        pIter->eof = 1;
+        return KVSTORE_OK;
+      }
+    }
+  } else {
+    rc = sqlite3BtreeLast(pIter->pCur, &res);
+    if( rc != SQLITE_OK ){ pIter->eof = 1; return rc; }
+    pIter->eof = res;
+  }
+
+  if( !pIter->eof ){
+    rc = kvstoreIterSkipExpiredReverse(pIter);
+    if( rc != SQLITE_OK ) return rc;
+  }
+  return KVSTORE_OK;
+}
+
+/*
+** Advance a reverse iterator to the previous (smaller) key.
+** Equivalent to kvstore_iterator_next() for forward iterators.
+** Sets eof=1 when the beginning (or prefix boundary) is reached.
+*/
+int kvstore_iterator_prev(KVIterator *pIter){
+  int rc;
+
+  if( !pIter || !pIter->isValid ) return KVSTORE_ERROR;
+  if( !pIter->reverse ) return KVSTORE_ERROR; /* direction mismatch */
+  if( pIter->eof ) return KVSTORE_OK;
+
+  rc = sqlite3BtreePrevious(pIter->pCur, 0);
+  if( rc == SQLITE_DONE ){
+    pIter->eof = 1;
+    return KVSTORE_OK;
+  }
+  if( rc != SQLITE_OK ) return rc;
+
+  /* Prefix boundary check for non-expired keys walking past the prefix. */
+  if( pIter->pPrefix && !kvstoreIterCheckPrefix(pIter) ){
+    pIter->eof = 1;
+    return KVSTORE_OK;
+  }
+
+  return kvstoreIterSkipExpiredReverse(pIter);
 }
 
 /*

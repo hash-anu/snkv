@@ -80,13 +80,13 @@ def _enc(v: _Encodable) -> bytes:
 
 class Iterator:
     """
-    Ordered key-value iterator returned by KVStore.iterator() and
-    KVStore.prefix_iterator().
+    Ordered key-value iterator returned by KVStore.iterator() and related methods.
 
     Can be used as:
       - A Python iterator:  for key, value in db.iterator(): ...
       - A context manager:  with db.iterator() as it: ...
-      - Manual control:     it.first(); while not it.eof: key = it.key; ...
+      - Manual forward:     it.first(); while not it.eof: key = it.key; it.next()
+      - Manual reverse:     it.last();  while not it.eof: key = it.key; it.prev()
     """
 
     __slots__ = ("_it",)
@@ -97,17 +97,26 @@ class Iterator:
     # --- Manual control ---
 
     def first(self) -> "Iterator":
-        """Seek to the first key. Returns self for chaining."""
+        """Seek to the first key (forward iterator). Returns self for chaining."""
         self._it.first()
         return self
 
+    def last(self) -> "Iterator":
+        """Seek to the last key (reverse iterator). Returns self for chaining."""
+        self._it.last()
+        return self
+
     def next(self) -> None:
-        """Advance to the next key."""
+        """Advance to the next key (forward iterator)."""
         self._it.next()
+
+    def prev(self) -> None:
+        """Advance to the previous key (reverse iterator)."""
+        self._it.prev()
 
     @property
     def eof(self) -> bool:
-        """True if the iterator is past the last key."""
+        """True if the iterator has no more keys in the current direction."""
         return self._it.eof()
 
     @property
@@ -228,13 +237,38 @@ class ColumnFamily:
 
     # --- Iterators ---
 
-    def iterator(self) -> Iterator:
-        """Return an Iterator over all keys in this column family."""
+    def iterator(
+        self,
+        *,
+        reverse: bool = False,
+        prefix: Optional[_Encodable] = None,
+    ) -> Iterator:
+        """
+        Return an Iterator over keys in this column family.
+
+        reverse -- if True, iterate from last key to first (descending order)
+        prefix  -- if given, only yield keys that start with this prefix
+        """
+        if prefix is not None:
+            p = _enc(prefix)
+            if reverse:
+                return Iterator(self._cf.reverse_prefix_iterator(p))
+            return Iterator(self._cf.prefix_iterator(p))
+        if reverse:
+            return Iterator(self._cf.reverse_iterator())
         return Iterator(self._cf.iterator())
 
     def prefix_iterator(self, prefix: _Encodable) -> Iterator:
-        """Return an Iterator over keys that start with prefix."""
+        """Return a forward Iterator over keys that start with prefix."""
         return Iterator(self._cf.prefix_iterator(_enc(prefix)))
+
+    def reverse_iterator(self) -> Iterator:
+        """Return a reverse Iterator over all keys (last to first)."""
+        return Iterator(self._cf.reverse_iterator())
+
+    def reverse_prefix_iterator(self, prefix: _Encodable) -> Iterator:
+        """Return a reverse Iterator over keys that start with prefix."""
+        return Iterator(self._cf.reverse_prefix_iterator(_enc(prefix)))
 
     # --- dict-like interface ---
 
@@ -452,13 +486,38 @@ class KVStore:
 
     # --- Iterators ---
 
-    def iterator(self) -> Iterator:
-        """Return an Iterator over all keys in the default column family."""
+    def iterator(
+        self,
+        *,
+        reverse: bool = False,
+        prefix: Optional[_Encodable] = None,
+    ) -> Iterator:
+        """
+        Return an Iterator over keys in the default column family.
+
+        reverse -- if True, iterate from last key to first (descending order)
+        prefix  -- if given, only yield keys that start with this prefix
+        """
+        if prefix is not None:
+            p = _enc(prefix)
+            if reverse:
+                return Iterator(self._db.reverse_prefix_iterator(p))
+            return Iterator(self._db.prefix_iterator(p))
+        if reverse:
+            return Iterator(self._db.reverse_iterator())
         return Iterator(self._db.iterator())
 
     def prefix_iterator(self, prefix: _Encodable) -> Iterator:
-        """Return an Iterator over keys that start with prefix."""
+        """Return a forward Iterator over keys that start with prefix."""
         return Iterator(self._db.prefix_iterator(_enc(prefix)))
+
+    def reverse_iterator(self) -> Iterator:
+        """Return a reverse Iterator over all keys (last to first)."""
+        return Iterator(self._db.reverse_iterator())
+
+    def reverse_prefix_iterator(self, prefix: _Encodable) -> Iterator:
+        """Return a reverse Iterator over keys that start with prefix."""
+        return Iterator(self._db.reverse_prefix_iterator(_enc(prefix)))
 
     # --- Maintenance ---
 

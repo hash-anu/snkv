@@ -18,6 +18,7 @@ tests/test_prefix
 tests/test_crash_10gb
 tests/test_checkpoint
 tests/test_ttl
+tests/test_iterator_reverse
 examples/basic
 examples/benchmark
 examples/config
@@ -27,3 +28,5 @@ examples/session_store
 examples/transactions
 examples/ttl
 examples/checkpoint_demo
+examples/iterator_reverse
+examples/snkv.h

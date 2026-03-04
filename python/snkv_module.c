@@ -93,8 +93,9 @@ typedef struct {
     KVIterator    *iter;
     PyObject      *store_ref;   /* KVStoreObject* kept alive via Py_INCREF */
     KVStore       *db;          /* convenience pointer for error messages    */
-    int            needs_first; /* 1 = normal iter (call first() on __next__) */
+    int            needs_first; /* 1 = normal iter (call first()/last() on __next__) */
     int            started;     /* 0 = before first read, 1 = in progress    */
+    int            reverse;     /* 1 = reverse iter (__next__ uses last/prev) */
 } IteratorObject;
 
 static void
@@ -129,6 +130,32 @@ Iterator_next_method(IteratorObject *self, PyObject *Py_UNUSED(ignored))
     IT_CHECK_OPEN(self);
     Py_BEGIN_ALLOW_THREADS
     rc = kvstore_iterator_next(self->iter);
+    Py_END_ALLOW_THREADS
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+Iterator_last(IteratorObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int rc;
+    IT_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_iterator_last(self->iter);
+    Py_END_ALLOW_THREADS
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    self->started = 1;
+    self->needs_first = 0;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+Iterator_prev(IteratorObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int rc;
+    IT_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_iterator_prev(self->iter);
     Py_END_ALLOW_THREADS
     if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
     Py_RETURN_NONE;
@@ -246,17 +273,29 @@ Iterator_iternext(IteratorObject *self)
         /* First call */
         self->started = 1;
         if (self->needs_first) {
-            Py_BEGIN_ALLOW_THREADS
-            rc = kvstore_iterator_first(self->iter);
-            Py_END_ALLOW_THREADS
+            if (self->reverse) {
+                Py_BEGIN_ALLOW_THREADS
+                rc = kvstore_iterator_last(self->iter);
+                Py_END_ALLOW_THREADS
+            } else {
+                Py_BEGIN_ALLOW_THREADS
+                rc = kvstore_iterator_first(self->iter);
+                Py_END_ALLOW_THREADS
+            }
             if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
         }
         /* Prefix iterators are already positioned; fall through to read. */
     } else {
         /* Advance to next position */
-        Py_BEGIN_ALLOW_THREADS
-        rc = kvstore_iterator_next(self->iter);
-        Py_END_ALLOW_THREADS
+        if (self->reverse) {
+            Py_BEGIN_ALLOW_THREADS
+            rc = kvstore_iterator_prev(self->iter);
+            Py_END_ALLOW_THREADS
+        } else {
+            Py_BEGIN_ALLOW_THREADS
+            rc = kvstore_iterator_next(self->iter);
+            Py_END_ALLOW_THREADS
+        }
         if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
     }
 
@@ -269,9 +308,11 @@ Iterator_iternext(IteratorObject *self)
 }
 
 static PyMethodDef Iterator_methods[] = {
-    {"first",  (PyCFunction)Iterator_first,        METH_NOARGS, "Move to first key."},
-    {"next",   (PyCFunction)Iterator_next_method,  METH_NOARGS, "Advance to next key."},
-    {"eof",    (PyCFunction)Iterator_eof,           METH_NOARGS, "True if past last key."},
+    {"first",  (PyCFunction)Iterator_first,        METH_NOARGS, "Move to first key (forward iterator)."},
+    {"last",   (PyCFunction)Iterator_last,         METH_NOARGS, "Move to last key (reverse iterator)."},
+    {"next",   (PyCFunction)Iterator_next_method,  METH_NOARGS, "Advance to next key (forward)."},
+    {"prev",   (PyCFunction)Iterator_prev,         METH_NOARGS, "Advance to previous key (reverse)."},
+    {"eof",    (PyCFunction)Iterator_eof,           METH_NOARGS, "True if past last/first key."},
     {"key",    (PyCFunction)Iterator_key,           METH_NOARGS, "Return current key bytes."},
     {"value",  (PyCFunction)Iterator_value,         METH_NOARGS, "Return current value bytes."},
     {"item",   (PyCFunction)Iterator_item,          METH_NOARGS, "Return (key, value) tuple."},
@@ -307,7 +348,7 @@ typedef struct {
 
 /* Forward declaration for make_iterator */
 static PyObject *make_iterator(KVIterator *iter, PyObject *store_ref,
-                                KVStore *db, int needs_first);
+                                KVStore *db, int needs_first, int reverse);
 
 static void
 ColumnFamily_dealloc(ColumnFamilyObject *self)
@@ -426,7 +467,7 @@ ColumnFamily_iterator(ColumnFamilyObject *self, PyObject *Py_UNUSED(ignored))
     rc = kvstore_cf_iterator_create(self->cf, &iter);
     Py_END_ALLOW_THREADS
     if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
-    return make_iterator(iter, self->store_ref, self->db, /*needs_first=*/1);
+    return make_iterator(iter, self->store_ref, self->db, /*needs_first=*/1, /*reverse=*/0);
 }
 
 static PyObject *
@@ -449,7 +490,45 @@ ColumnFamily_prefix_iterator(ColumnFamilyObject *self, PyObject *args)
     PyBuffer_Release(&prefix_buf);
 
     if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
-    return make_iterator(iter, self->store_ref, self->db, /*needs_first=*/0);
+    return make_iterator(iter, self->store_ref, self->db, /*needs_first=*/0, /*reverse=*/0);
+}
+
+static PyObject *
+ColumnFamily_reverse_iterator(ColumnFamilyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    KVIterator *iter = NULL;
+    int rc;
+
+    CF_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_reverse_iterator_create(self->cf, &iter);
+    Py_END_ALLOW_THREADS
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return make_iterator(iter, self->store_ref, self->db, /*needs_first=*/1, /*reverse=*/1);
+}
+
+static PyObject *
+ColumnFamily_reverse_prefix_iterator(ColumnFamilyObject *self, PyObject *args)
+{
+    Py_buffer  prefix_buf;
+    KVIterator *iter = NULL;
+    int        rc;
+
+    CF_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &prefix_buf)) return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_reverse_prefix_iterator_create(self->cf,
+                                                    prefix_buf.buf,
+                                                    (int)prefix_buf.len,
+                                                    &iter);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&prefix_buf);
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    /* Already positioned at last matching key — needs_first=0, reverse=1 */
+    return make_iterator(iter, self->store_ref, self->db, /*needs_first=*/0, /*reverse=*/1);
 }
 
 static PyObject *
@@ -592,8 +671,10 @@ static PyMethodDef ColumnFamily_methods[] = {
     {"get",              (PyCFunction)ColumnFamily_get,              METH_VARARGS, "get(key) -> bytes"},
     {"delete",           (PyCFunction)ColumnFamily_delete,           METH_VARARGS, "delete(key) -> None"},
     {"exists",           (PyCFunction)ColumnFamily_exists,           METH_VARARGS, "exists(key) -> bool"},
-    {"iterator",         (PyCFunction)ColumnFamily_iterator,         METH_NOARGS,  "iterator() -> Iterator"},
-    {"prefix_iterator",  (PyCFunction)ColumnFamily_prefix_iterator,  METH_VARARGS, "prefix_iterator(prefix) -> Iterator"},
+    {"iterator",                (PyCFunction)ColumnFamily_iterator,                METH_NOARGS,  "iterator() -> Iterator"},
+    {"prefix_iterator",         (PyCFunction)ColumnFamily_prefix_iterator,         METH_VARARGS, "prefix_iterator(prefix) -> Iterator"},
+    {"reverse_iterator",        (PyCFunction)ColumnFamily_reverse_iterator,        METH_NOARGS,  "reverse_iterator() -> Iterator"},
+    {"reverse_prefix_iterator", (PyCFunction)ColumnFamily_reverse_prefix_iterator, METH_VARARGS, "reverse_prefix_iterator(prefix) -> Iterator"},
     /* TTL */
     {"put_ttl",          (PyCFunction)ColumnFamily_put_ttl,          METH_VARARGS, "put_ttl(key, value, expire_ms) -> None"},
     {"get_ttl",          (PyCFunction)ColumnFamily_get_ttl,          METH_VARARGS, "get_ttl(key) -> (bytes, int)"},
@@ -622,7 +703,8 @@ static PyTypeObject ColumnFamilyType = {
 ** ===================================================================== */
 
 static PyObject *
-make_iterator(KVIterator *iter, PyObject *store_ref, KVStore *db, int needs_first)
+make_iterator(KVIterator *iter, PyObject *store_ref, KVStore *db,
+              int needs_first, int reverse)
 {
     IteratorObject *obj;
     obj = (IteratorObject *)IteratorType.tp_alloc(&IteratorType, 0);
@@ -635,6 +717,7 @@ make_iterator(KVIterator *iter, PyObject *store_ref, KVStore *db, int needs_firs
     obj->db          = db;
     obj->needs_first = needs_first;
     obj->started     = 0;
+    obj->reverse     = reverse;
     Py_XINCREF(store_ref);
     return (PyObject *)obj;
 }
@@ -1140,7 +1223,7 @@ KVStore_iterator(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
     Py_END_ALLOW_THREADS
 
     if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
-    return make_iterator(iter, (PyObject *)self, self->db, /*needs_first=*/1);
+    return make_iterator(iter, (PyObject *)self, self->db, /*needs_first=*/1, /*reverse=*/0);
 }
 
 /* KVStore.prefix_iterator(prefix) -> Iterator */
@@ -1164,7 +1247,48 @@ KVStore_prefix_iterator(KVStoreObject *self, PyObject *args)
     PyBuffer_Release(&prefix_buf);
 
     if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
-    return make_iterator(iter, (PyObject *)self, self->db, /*needs_first=*/0);
+    return make_iterator(iter, (PyObject *)self, self->db, /*needs_first=*/0, /*reverse=*/0);
+}
+
+/* KVStore.reverse_iterator() -> Iterator */
+static PyObject *
+KVStore_reverse_iterator(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
+{
+    KVIterator *iter = NULL;
+    int         rc;
+
+    KV_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_reverse_iterator_create(self->db, &iter);
+    Py_END_ALLOW_THREADS
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return make_iterator(iter, (PyObject *)self, self->db, /*needs_first=*/1, /*reverse=*/1);
+}
+
+/* KVStore.reverse_prefix_iterator(prefix) -> Iterator */
+static PyObject *
+KVStore_reverse_prefix_iterator(KVStoreObject *self, PyObject *args)
+{
+    Py_buffer   prefix_buf;
+    KVIterator *iter = NULL;
+    int         rc;
+
+    KV_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &prefix_buf)) return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_reverse_prefix_iterator_create(self->db,
+                                                 prefix_buf.buf,
+                                                 (int)prefix_buf.len,
+                                                 &iter);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&prefix_buf);
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    /* Already positioned at last matching key — needs_first=0, reverse=1 */
+    return make_iterator(iter, (PyObject *)self, self->db, /*needs_first=*/0, /*reverse=*/1);
 }
 
 /* KVStore.__enter__ */
@@ -1327,8 +1451,10 @@ static PyMethodDef KVStore_methods[] = {
     {"cf_drop",          (PyCFunction)KVStore_cf_drop,           METH_VARARGS,  "cf_drop(name) -> None"},
 
     /* Iterators */
-    {"iterator",         (PyCFunction)KVStore_iterator,          METH_NOARGS,   "iterator() -> Iterator"},
-    {"prefix_iterator",  (PyCFunction)KVStore_prefix_iterator,   METH_VARARGS,  "prefix_iterator(prefix) -> Iterator"},
+    {"iterator",                (PyCFunction)KVStore_iterator,                METH_NOARGS,   "iterator() -> Iterator"},
+    {"prefix_iterator",         (PyCFunction)KVStore_prefix_iterator,         METH_VARARGS,  "prefix_iterator(prefix) -> Iterator"},
+    {"reverse_iterator",        (PyCFunction)KVStore_reverse_iterator,        METH_NOARGS,   "reverse_iterator() -> Iterator"},
+    {"reverse_prefix_iterator", (PyCFunction)KVStore_reverse_prefix_iterator, METH_VARARGS,  "reverse_prefix_iterator(prefix) -> Iterator"},
 
     /* Maintenance */
     {"errmsg",           (PyCFunction)KVStore_errmsg,            METH_NOARGS,   "errmsg() -> str"},

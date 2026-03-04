@@ -447,27 +447,62 @@ Always close a `ColumnFamily` handle (or use it as a context manager) before clo
 
 ### Iterators
 
-#### `iterator() -> Iterator`
+#### `iterator(*, reverse=False, prefix=None) -> Iterator`
 
-Return an `Iterator` over all (key, value) pairs in the default column family,
-in ascending key order.
+Return an `Iterator` over keys in the default column family.
+
+| Parameter | Default | Behaviour |
+|-----------|---------|-----------|
+| `reverse` | `False` | `True` → descending order (last key first) |
+| `prefix`  | `None`  | Restrict iteration to keys that start with this prefix |
 
 ```python
-with db.iterator() as it:
-    for key, value in it:
-        print(key.decode(), value.decode())
+# Forward (default)
+for key, value in db.iterator():
+    print(key.decode(), value.decode())
+
+# Reverse — last key first
+for key, value in db.iterator(reverse=True):
+    print(key.decode(), value.decode())
+
+# Prefix, ascending
+for key, value in db.iterator(prefix="user:"):
+    print(key, value)
+
+# Prefix, descending
+for key, value in db.iterator(prefix="user:", reverse=True):
+    print(key, value)
 ```
 
 #### `prefix_iterator(prefix) -> Iterator`
 
-Return an `Iterator` over keys that start with `prefix`, in ascending key order.
+Return a forward `Iterator` over keys starting with `prefix` (ascending order).
+Equivalent to `iterator(prefix=prefix)`.
 
 ```python
 for key, value in db.prefix_iterator("user:"):
     print(key, value)
 ```
 
-`prefix` accepts `str` or `bytes`.
+#### `reverse_iterator() -> Iterator`
+
+Return a reverse `Iterator` over all keys (descending order).
+Equivalent to `iterator(reverse=True)`.
+
+```python
+for key, value in db.reverse_iterator():
+    print(key.decode(), value.decode())
+```
+
+#### `reverse_prefix_iterator(prefix) -> Iterator`
+
+Return a reverse `Iterator` over keys starting with `prefix`.
+Equivalent to `iterator(prefix=prefix, reverse=True)`.
+
+```python
+for key, value in db.reverse_prefix_iterator("user:"):
+    print(key, value)
+```
 
 ---
 
@@ -677,21 +712,52 @@ print(cf["session:u42"])       # b'logged-in'
 
 ### Iterators
 
-#### `iterator() -> Iterator`
+#### `iterator(*, reverse=False, prefix=None) -> Iterator`
 
-Return an `Iterator` over all keys in this column family in ascending order.
+Return an `Iterator` over keys in this column family.
 
 ```python
+# Forward
 for key, value in cf.iterator():
+    print(key, value)
+
+# Reverse
+for key, value in cf.iterator(reverse=True):
+    print(key, value)
+
+# Prefix, ascending
+for key, value in cf.iterator(prefix="user:"):
+    print(key, value)
+
+# Prefix, descending
+for key, value in cf.iterator(prefix="user:", reverse=True):
     print(key, value)
 ```
 
 #### `prefix_iterator(prefix) -> Iterator`
 
-Return an `Iterator` over keys starting with `prefix`.
+Return a forward `Iterator` over keys starting with `prefix`.
 
 ```python
 for key, value in cf.prefix_iterator("user:"):
+    print(key, value)
+```
+
+#### `reverse_iterator() -> Iterator`
+
+Return a reverse `Iterator` over all keys (last to first).
+
+```python
+for key, value in cf.reverse_iterator():
+    print(key, value)
+```
+
+#### `reverse_prefix_iterator(prefix) -> Iterator`
+
+Return a reverse `Iterator` over keys starting with `prefix`.
+
+```python
+for key, value in cf.reverse_prefix_iterator("user:"):
     print(key, value)
 ```
 
@@ -717,17 +783,24 @@ with db.create_column_family("sessions") as cf:
 ## Iterator
 
 Ordered key-value iterator returned by `KVStore.iterator()`,
-`KVStore.prefix_iterator()`, `ColumnFamily.iterator()`, and
-`ColumnFamily.prefix_iterator()`.
+`KVStore.prefix_iterator()`, `KVStore.reverse_iterator()`,
+`KVStore.reverse_prefix_iterator()`, and their `ColumnFamily` equivalents.
 
 Iterators reflect a point-in-time snapshot of the B-Tree cursor position.
+Forward iterators traverse keys in ascending order; reverse iterators traverse
+keys in descending order.
 
 ### Python Iterator Protocol
 
 The most common usage — iterate with a `for` loop:
 
 ```python
+# Forward
 for key, value in db.iterator():
+    print(key.decode(), value.decode())
+
+# Reverse
+for key, value in db.iterator(reverse=True):
     print(key.decode(), value.decode())
 
 # As a context manager (auto-closes the iterator)
@@ -746,28 +819,44 @@ For fine-grained cursor control:
 
 #### `first() -> Iterator`
 
-Seek to the first key. Returns `self` for chaining.
+Seek to the first key (forward iterator). Returns `self` for chaining.
 
 ```python
 it.first()
 ```
 
+#### `last() -> Iterator`
+
+Seek to the last key (reverse iterator). Returns `self` for chaining.
+
+```python
+it.last()
+```
+
 #### `next() -> None`
 
-Advance to the next key.
+Advance to the next key (forward iterator).
 
 ```python
 it.next()
 ```
 
+#### `prev() -> None`
+
+Advance to the previous key (reverse iterator).
+
+```python
+it.prev()
+```
+
 #### `eof -> bool`
 
-`True` when the iterator is past the last key.
+`True` when the iterator has no more keys in the current direction.
 
 ```python
 while not it.eof:
     print(it.key, it.value)
-    it.next()
+    it.next()  # or it.prev() for reverse
 ```
 
 #### `key -> bytes`
@@ -786,7 +875,7 @@ Return the current `(key, value)` tuple.
 k, v = it.item()
 ```
 
-**Full manual example:**
+**Full forward example:**
 
 ```python
 it = db.iterator()
@@ -794,6 +883,17 @@ it.first()
 while not it.eof:
     print(it.key.decode(), "->", it.value.decode())
     it.next()
+it.close()
+```
+
+**Full reverse example:**
+
+```python
+it = db.reverse_iterator()
+it.last()
+while not it.eof:
+    print(it.key.decode(), "->", it.value.decode())
+    it.prev()
 it.close()
 ```
 
