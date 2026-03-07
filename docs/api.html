@@ -1,0 +1,1664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNKV API Reference — C/C++ and Python</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #0f0f0f;
+    --ink-2:     #2a2a2a;
+    --ink-3:     #4a4a4a;
+    --ink-4:     #767676;
+    --paper:     #f9f7f4;
+    --paper-2:   #f1ede8;
+    --paper-3:   #e6e0d8;
+    --accent:    #c8401a;
+    --accent-2:  #e85d35;
+    --code-bg:   #13100e;
+    --code-fg:   #e8ddd0;
+    --code-com:  #7a6a58;
+    --code-key:  #e0845a;
+    --code-str:  #8ab87a;
+    --code-num:  #7aabd4;
+    --divider:   #d4cdc4;
+    --rule:      1px solid var(--divider);
+    --py-accent: #3572A5;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 17px; scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Lora', Georgia, serif;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── SITE HEADER ─────────────────────────────────────────── */
+  .site-header {
+    border-bottom: var(--rule);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+  .site-header .logo {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .site-header .logo span { color: var(--accent); }
+  .site-header nav {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  .site-header nav a {
+    color: inherit;
+    text-decoration: none;
+    letter-spacing: 0.04em;
+    transition: color 0.15s;
+  }
+  .site-header nav a:hover { color: var(--accent); }
+  .site-header nav a.active { color: var(--accent); font-weight: 500; }
+  .github-star {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--ink);
+    color: var(--paper) !important;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: none !important;
+    transition: background 0.15s;
+  }
+  .github-star:hover { background: var(--accent) !important; color: var(--paper) !important; }
+
+  /* ── HERO ───────────────────────────────────────────────── */
+  .hero {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 4rem 2rem 2rem;
+    border-bottom: var(--rule);
+  }
+  .hero .category {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .hero .category::before {
+    content: '';
+    display: block;
+    width: 20px;
+    height: 1px;
+    background: var(--accent);
+  }
+  .hero h1 {
+    font-family: 'Lora', serif;
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 1rem;
+  }
+  .hero .subtitle {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1.05rem;
+    color: var(--ink-3);
+    font-weight: 300;
+    line-height: 1.6;
+    max-width: 620px;
+    margin-bottom: 2rem;
+  }
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    color: var(--ink-4);
+    flex-wrap: wrap;
+  }
+  .meta-row .sep { color: var(--divider); }
+  .meta-row .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 2px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ── LANG TABS ──────────────────────────────────────────── */
+  .lang-tabs {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    display: flex;
+    gap: 0;
+    border-bottom: var(--rule);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.84rem;
+  }
+  .lang-tab {
+    padding: 0.85rem 1.6rem;
+    cursor: pointer;
+    color: var(--ink-4);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 400;
+    letter-spacing: 0.03em;
+    user-select: none;
+  }
+  .lang-tab:hover { color: var(--ink-2); }
+  .lang-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+  .lang-tab .lang-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    background: var(--paper-2);
+    color: var(--ink-3);
+    border: var(--rule);
+  }
+  .lang-tab.active .lang-badge { background: #fde8e0; border-color: #e0a090; color: var(--accent); }
+
+  /* ── LAYOUT ──────────────────────────────────────────────── */
+  .content-wrap {
+    display: grid;
+    grid-template-columns: 230px 1fr;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── SIDEBAR TOC ──────────────────────────────────────────── */
+  .toc {
+    position: sticky;
+    top: 56px;
+    height: calc(100vh - 56px);
+    overflow-y: auto;
+    padding: 2rem 1.5rem 2rem 2rem;
+    border-right: var(--rule);
+    font-family: 'DM Sans', sans-serif;
+  }
+  .toc::-webkit-scrollbar { width: 4px; }
+  .toc::-webkit-scrollbar-track { background: transparent; }
+  .toc::-webkit-scrollbar-thumb { background: var(--paper-3); border-radius: 2px; }
+  .toc-title {
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 1rem;
+  }
+  .toc ul { list-style: none; }
+  .toc li { margin-bottom: 0.1rem; }
+  .toc a {
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    text-decoration: none;
+    display: block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    line-height: 1.4;
+    transition: color 0.12s, background 0.12s;
+  }
+  .toc a:hover { color: var(--ink); background: var(--paper-2); }
+  .toc a.active { color: var(--accent); background: #fde8e0; }
+  .toc .toc-section { margin-top: 1rem; }
+  .toc .toc-section > a {
+    font-weight: 500;
+    font-size: 0.8rem;
+    color: var(--ink-2);
+  }
+  .toc .toc-sub { padding-left: 0.75rem; margin-top: 0.1rem; }
+  .toc .toc-sub a { font-size: 0.76rem; color: var(--ink-4); }
+
+  /* ── MAIN CONTENT ──────────────────────────────────────── */
+  .main-content {
+    padding: 3rem 3rem 5rem 3.5rem;
+    min-width: 0;
+  }
+
+  /* Language panels */
+  .lang-panel { display: none; }
+  .lang-panel.active { display: block; }
+
+  /* ── SECTION HEADINGS ──────────────────────────────────── */
+  .api-section {
+    margin-bottom: 3.5rem;
+    padding-top: 1rem;
+  }
+  .section-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+  }
+  h2.section-title {
+    font-family: 'Lora', serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 0.8rem;
+    letter-spacing: -0.01em;
+  }
+  h3.fn-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--ink-2);
+    margin: 2rem 0 0.5rem;
+    padding-top: 1.5rem;
+    border-top: var(--rule);
+  }
+  h3.fn-name:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+  h4.subsec {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin: 1.5rem 0 0.5rem;
+    letter-spacing: 0.01em;
+  }
+
+  /* ── FUNCTION ENTRY ──────────────────────────────────── */
+  .fn-entry {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 6px;
+    padding: 1.2rem 1.4rem 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .fn-entry .fn-sig {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: var(--code-fg);
+    background: var(--code-bg);
+    padding: 0.9rem 1.1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin-bottom: 0.9rem;
+    white-space: pre;
+    line-height: 1.65;
+  }
+  .fn-desc {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    color: var(--ink-3);
+    line-height: 1.65;
+    margin-bottom: 0.75rem;
+  }
+
+  /* ── PARAMS TABLE ──────────────────────────────────── */
+  .table-wrap { overflow-x: auto; margin: 0.75rem 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+  }
+  th {
+    text-align: left;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    border-bottom: var(--rule);
+    background: var(--paper-3);
+  }
+  td {
+    padding: 0.45rem 0.75rem;
+    border-bottom: var(--rule);
+    color: var(--ink-2);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code, th code { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--accent); }
+
+  /* ── CODE BLOCKS ──────────────────────────────────── */
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1rem 1.2rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    margin: 0.75rem 0;
+    tab-size: 2;
+  }
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82em;
+    background: var(--paper-3);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; border-radius: 0; }
+
+  /* Syntax highlight classes */
+  .kw  { color: var(--code-key); }
+  .str { color: var(--code-str); }
+  .cm  { color: var(--code-com); font-style: italic; }
+  .nm  { color: var(--code-num); }
+  .fn  { color: #c9a96e; }
+
+  /* ── CALLOUT / NOTE ──────────────────────────────── */
+  .note {
+    border-left: 3px solid var(--accent);
+    background: #fde8e0;
+    padding: 0.7rem 1rem;
+    border-radius: 0 4px 4px 0;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.84rem;
+    color: var(--ink-2);
+    margin: 0.75rem 0;
+    line-height: 1.6;
+  }
+  .note strong { color: var(--accent); }
+  .note-info {
+    border-left-color: #3a8a6a;
+    background: #e6f5ee;
+    color: var(--ink-2);
+  }
+  .note-info strong { color: #2a6a4a; }
+
+  /* ── RETURNS BADGE ─────────────────────────────── */
+  .returns-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-top: 0.75rem;
+    margin-bottom: 0.3rem;
+  }
+
+  /* ── DIVIDER ───────────────────────────────────── */
+  .section-divider {
+    border: none;
+    border-top: var(--rule);
+    margin: 3rem 0;
+  }
+
+  /* ── OVERVIEW GRID ─────────────────────────────── */
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .overview-card {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 5px;
+    padding: 1.1rem 1.2rem;
+  }
+  .overview-card .card-icon {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
+    margin-bottom: 0.4rem;
+    letter-spacing: 0.06em;
+  }
+  .overview-card .card-title {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--ink);
+    margin-bottom: 0.35rem;
+  }
+  .overview-card .card-body {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    line-height: 1.5;
+  }
+
+  /* ── ERROR CODES TABLE ─────────────────────────── */
+  .errcode-ok   { color: #2a6a4a; font-weight: 600; }
+  .errcode-err  { color: var(--accent); font-weight: 600; }
+
+  /* ── RESPONSIVE ──────────────────────────────── */
+  @media (max-width: 860px) {
+    .content-wrap { grid-template-columns: 1fr; }
+    .toc { display: none; }
+    .main-content { padding: 2rem 1.5rem 4rem; }
+    .site-header nav { gap: 1rem; font-size: 0.78rem; }
+    .lang-tabs { padding: 0 1rem; }
+  }
+  @media (max-width: 500px) {
+    .site-header nav a:not(.github-star):not(:last-child) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SITE HEADER ──────────────────────────────────────────────── -->
+<header class="site-header">
+  <a href="index.html" class="logo">SNKV <span>/</span> Docs</a>
+  <nav>
+    <a href="index.html">Internals</a>
+    <a href="ttl.html">TTL</a>
+    <a href="api.html" class="active">API</a>
+    <a href="benchmark.html">Benchmarks</a>
+    <a href="https://github.com/hash-anu/snkv" target="_blank" rel="noopener" class="github-star">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </nav>
+</header>
+
+<!-- ── HERO ─────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="category">Reference</div>
+  <h1>SNKV API Reference</h1>
+  <p class="subtitle">Complete API for the C/C++ library and the Python bindings — covering lifecycle, CRUD, column families, iterators, TTL, transactions, and maintenance.</p>
+  <div class="meta-row">
+    <span class="tag">v1.1</span>
+    <span class="sep">·</span>
+    <span>Built on SQLite v3.51.200 B-tree engine</span>
+    <span class="sep">·</span>
+    <span>Apache-2.0</span>
+  </div>
+</section>
+
+<!-- ── LANGUAGE TABS ─────────────────────────────────────────────── -->
+<div class="lang-tabs">
+  <div class="lang-tab active" data-lang="c" onclick="switchLang('c')">
+    <span class="lang-badge">C</span> C / C++
+  </div>
+  <div class="lang-tab" data-lang="py" onclick="switchLang('py')">
+    <span class="lang-badge">Py</span> Python
+  </div>
+</div>
+
+<!-- ── CONTENT WRAP ──────────────────────────────────────────────── -->
+<div class="content-wrap">
+
+  <!-- ── SIDEBAR ──────────────────────────────────────────────── -->
+  <aside class="toc" id="toc-c">
+    <div class="toc-title">C / C++ API</div>
+    <ul>
+      <li class="toc-section"><a href="#c-types">Types &amp; Handles</a></li>
+      <li class="toc-section"><a href="#c-errors">Error Codes</a></li>
+      <li class="toc-section"><a href="#c-constants">Constants</a></li>
+      <li class="toc-section"><a href="#c-config">Configuration</a></li>
+      <li class="toc-section"><a href="#c-lifecycle">Database Lifecycle</a>
+        <ul class="toc-sub">
+          <li><a href="#c-open-v2">kvstore_open_v2</a></li>
+          <li><a href="#c-open">kvstore_open</a></li>
+          <li><a href="#c-close">kvstore_close</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#c-kv">Key-Value Operations</a>
+        <ul class="toc-sub">
+          <li><a href="#c-put">kvstore_put</a></li>
+          <li><a href="#c-get">kvstore_get</a></li>
+          <li><a href="#c-delete">kvstore_delete</a></li>
+          <li><a href="#c-exists">kvstore_exists</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#c-cf">Column Families</a>
+        <ul class="toc-sub">
+          <li><a href="#c-cf-create">cf_create</a></li>
+          <li><a href="#c-cf-open">cf_open</a></li>
+          <li><a href="#c-cf-default">cf_get_default</a></li>
+          <li><a href="#c-cf-drop">cf_drop</a></li>
+          <li><a href="#c-cf-list">cf_list</a></li>
+          <li><a href="#c-cf-close">cf_close</a></li>
+          <li><a href="#c-cf-kv">cf put/get/delete/exists</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#c-iter">Iterators</a>
+        <ul class="toc-sub">
+          <li><a href="#c-iter-create">iterator_create</a></li>
+          <li><a href="#c-iter-first">iterator_first/next/eof</a></li>
+          <li><a href="#c-iter-kv">iterator_key/value</a></li>
+          <li><a href="#c-iter-close">iterator_close</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#c-prefix">Prefix Iterators</a></li>
+      <li class="toc-section"><a href="#c-reverse">Reverse Iterators</a></li>
+      <li class="toc-section"><a href="#c-txn">Transactions</a></li>
+      <li class="toc-section"><a href="#c-ttl">TTL / Key Expiry</a>
+        <ul class="toc-sub">
+          <li><a href="#c-put-ttl">put_ttl / get_ttl</a></li>
+          <li><a href="#c-ttl-remaining">ttl_remaining</a></li>
+          <li><a href="#c-purge">purge_expired</a></li>
+          <li><a href="#c-cf-put-ttl">cf_put_ttl / cf_get_ttl</a></li>
+          <li><a href="#c-cf-ttl-remaining">cf_ttl_remaining</a></li>
+          <li><a href="#c-cf-purge">cf_purge_expired</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#c-diag">Diagnostics</a>
+        <ul class="toc-sub">
+          <li><a href="#c-errmsg">errmsg</a></li>
+          <li><a href="#c-stats">stats</a></li>
+          <li><a href="#c-integrity">integrity_check</a></li>
+          <li><a href="#c-sync">sync</a></li>
+          <li><a href="#c-vacuum">incremental_vacuum</a></li>
+          <li><a href="#c-checkpoint">checkpoint</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#c-memory">Memory</a></li>
+      <li class="toc-section"><a href="#c-threads">Thread Safety</a></li>
+    </ul>
+  </aside>
+
+  <aside class="toc" id="toc-py" style="display:none;">
+    <div class="toc-title">Python API</div>
+    <ul>
+      <li class="toc-section"><a href="#py-install">Installation</a></li>
+      <li class="toc-section"><a href="#py-quickstart">Quick Start</a></li>
+      <li class="toc-section"><a href="#py-constants">Constants</a></li>
+      <li class="toc-section"><a href="#py-exceptions">Exceptions</a></li>
+      <li class="toc-section"><a href="#py-kvstore">KVStore</a>
+        <ul class="toc-sub">
+          <li><a href="#py-open">Opening</a></li>
+          <li><a href="#py-core">put / get / delete / exists</a></li>
+          <li><a href="#py-ttl">TTL</a></li>
+          <li><a href="#py-dict">Dict Interface</a></li>
+          <li><a href="#py-txn">Transactions</a></li>
+          <li><a href="#py-cf-mgmt">Column Families</a></li>
+          <li><a href="#py-iter">Iterators</a></li>
+          <li><a href="#py-maintenance">Maintenance</a></li>
+          <li><a href="#py-lifecycle">Lifecycle</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#py-cf">ColumnFamily</a>
+        <ul class="toc-sub">
+          <li><a href="#py-cf-core">put / get / delete / exists</a></li>
+          <li><a href="#py-cf-ttl">TTL</a></li>
+          <li><a href="#py-cf-dict">Dict Interface</a></li>
+          <li><a href="#py-cf-iter">Iterators</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#py-iterator">Iterator</a>
+        <ul class="toc-sub">
+          <li><a href="#py-iter-proto">Python Protocol</a></li>
+          <li><a href="#py-iter-manual">Manual Control</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#py-types">Type Notes</a></li>
+    </ul>
+  </aside>
+
+  <!-- ── MAIN ───────────────────────────────────────────────────── -->
+  <main class="main-content">
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- C / C++ PANEL                                               -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <div class="lang-panel active" id="panel-c">
+
+      <!-- Types -->
+      <section class="api-section" id="c-types">
+        <div class="section-label">C / C++ API</div>
+        <h2 class="section-title">Types &amp; Handles</h2>
+        <div class="table-wrap"><table>
+          <tr><th>Type</th><th>Description</th></tr>
+          <tr><td><code>KVStore</code></td><td>Opaque handle to an open database.</td></tr>
+          <tr><td><code>KVColumnFamily</code></td><td>Opaque handle to a column family.</td></tr>
+          <tr><td><code>KVIterator</code></td><td>Opaque handle to a key-value iterator.</td></tr>
+          <tr><td><code>KVStoreStats</code></td><td>Statistics counters (see Diagnostics).</td></tr>
+          <tr><td><code>KVStoreConfig</code></td><td>Configuration struct for <code>kvstore_open_v2</code>.</td></tr>
+        </table></div>
+      </section>
+
+      <!-- Error Codes -->
+      <section class="api-section" id="c-errors">
+        <h2 class="section-title">Error Codes</h2>
+        <div class="table-wrap"><table>
+          <tr><th>Code</th><th>Value</th><th>Description</th></tr>
+          <tr><td><code class="errcode-ok">KVSTORE_OK</code></td><td>0</td><td>Operation succeeded.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_ERROR</code></td><td>1</td><td>Generic error.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_BUSY</code></td><td>5</td><td>Database locked by another connection.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_LOCKED</code></td><td>6</td><td>Database locked within the same connection.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_NOMEM</code></td><td>7</td><td>Memory allocation failed.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_READONLY</code></td><td>8</td><td>Database is read-only.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_CORRUPT</code></td><td>11</td><td>Database file is corrupted.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_NOTFOUND</code></td><td>12</td><td>Key or column family not found.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_PROTOCOL</code></td><td>15</td><td>Database lock protocol error.</td></tr>
+        </table></div>
+        <p class="fn-desc" style="margin-top:0.5rem;">All codes are aliases for the corresponding <code>SQLITE_*</code> values.</p>
+      </section>
+
+      <!-- Constants -->
+      <section class="api-section" id="c-constants">
+        <h2 class="section-title">Constants</h2>
+        <h4 class="subsec">Journal Modes</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
+          <tr><td><code>KVSTORE_JOURNAL_DELETE</code></td><td>0</td><td>Rollback journal mode.</td></tr>
+          <tr><td><code>KVSTORE_JOURNAL_WAL</code></td><td>1</td><td>Write-Ahead Logging — recommended.</td></tr>
+        </table></div>
+        <h4 class="subsec">Sync Levels</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
+          <tr><td><code>KVSTORE_SYNC_OFF</code></td><td>0</td><td>No fsync — fastest, not crash-safe.</td></tr>
+          <tr><td><code>KVSTORE_SYNC_NORMAL</code></td><td>1</td><td>WAL-safe — survives process crash (default).</td></tr>
+          <tr><td><code>KVSTORE_SYNC_FULL</code></td><td>2</td><td>Power-safe — fsync on every commit.</td></tr>
+        </table></div>
+        <h4 class="subsec">Checkpoint Modes</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
+          <tr><td><code>KVSTORE_CHECKPOINT_PASSIVE</code></td><td>0</td><td>Non-blocking copy; may not flush all frames.</td></tr>
+          <tr><td><code>KVSTORE_CHECKPOINT_FULL</code></td><td>1</td><td>Wait for writers, then copy all frames.</td></tr>
+          <tr><td><code>KVSTORE_CHECKPOINT_RESTART</code></td><td>2</td><td>Like FULL, then reset WAL write position.</td></tr>
+          <tr><td><code>KVSTORE_CHECKPOINT_TRUNCATE</code></td><td>3</td><td>Like RESTART, then truncate WAL file to zero.</td></tr>
+        </table></div>
+        <h4 class="subsec">Other</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
+          <tr><td><code>KVSTORE_MAX_COLUMN_FAMILIES</code></td><td>64</td><td>Maximum column families per database.</td></tr>
+          <tr><td><code>KVSTORE_NO_TTL</code></td><td>-1</td><td>Sentinel: key exists but has no expiry.</td></tr>
+        </table></div>
+      </section>
+
+      <!-- Configuration -->
+      <section class="api-section" id="c-config">
+        <h2 class="section-title">Configuration — <code>KVStoreConfig</code></h2>
+        <pre><span class="kw">typedef struct</span> KVStoreConfig KVStoreConfig;
+<span class="kw">struct</span> KVStoreConfig {
+  <span class="kw">int</span> journalMode;   <span class="cm">/* KVSTORE_JOURNAL_WAL (default) or KVSTORE_JOURNAL_DELETE */</span>
+  <span class="kw">int</span> syncLevel;     <span class="cm">/* KVSTORE_SYNC_NORMAL (default), _OFF, or _FULL */</span>
+  <span class="kw">int</span> cacheSize;     <span class="cm">/* page cache in pages (0 = default = 2000 pages ≈ 8 MB) */</span>
+  <span class="kw">int</span> pageSize;      <span class="cm">/* page size in bytes (0 = 4096; new databases only) */</span>
+  <span class="kw">int</span> readOnly;      <span class="cm">/* 1 = open read-only; default 0 */</span>
+  <span class="kw">int</span> busyTimeout;   <span class="cm">/* ms to retry on SQLITE_BUSY (0 = fail immediately) */</span>
+  <span class="kw">int</span> walSizeLimit;  <span class="cm">/* auto-checkpoint every N commits in WAL mode (0 = off) */</span>
+};</pre>
+        <div class="table-wrap"><table>
+          <tr><th>Field</th><th>Default</th><th>Notes</th></tr>
+          <tr><td><code>journalMode</code></td><td><code>KVSTORE_JOURNAL_WAL</code></td><td>WAL strongly recommended.</td></tr>
+          <tr><td><code>syncLevel</code></td><td><code>KVSTORE_SYNC_NORMAL</code></td><td>Safe against process crash.</td></tr>
+          <tr><td><code>cacheSize</code></td><td>2000 (~8 MB)</td><td>Larger cache improves read-heavy loads.</td></tr>
+          <tr><td><code>pageSize</code></td><td>4096 bytes</td><td>Ignored for existing databases.</td></tr>
+          <tr><td><code>readOnly</code></td><td>0</td><td></td></tr>
+          <tr><td><code>busyTimeout</code></td><td>0 (fail immediately)</td><td>Set &gt; 0 for multi-process workloads.</td></tr>
+          <tr><td><code>walSizeLimit</code></td><td>0 (disabled)</td><td>Auto-checkpoint every N committed writes.</td></tr>
+        </table></div>
+      </section>
+
+      <!-- Database Lifecycle -->
+      <section class="api-section" id="c-lifecycle">
+        <h2 class="section-title">Database Lifecycle</h2>
+
+        <div class="fn-entry" id="c-open-v2">
+          <h3 class="fn-name">kvstore_open_v2</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_open_v2</span>(
+  <span class="kw">const char</span> *zFilename,   <span class="cm">/* path to file; NULL = in-memory */</span>
+  KVStore      **ppKV,      <span class="cm">/* out: handle */</span>
+  <span class="kw">const</span> KVStoreConfig *pConfig  <span class="cm">/* NULL = all defaults */</span>
+);</div>
+          <p class="fn-desc">Open or create a database with full configuration control. Pass <code>NULL</code> for <code>pConfig</code> to use all defaults (WAL mode, NORMAL sync, 8 MB cache).</p>
+          <pre><span class="cm">/* default open */</span>
+KVStore *kv;
+<span class="fn">kvstore_open_v2</span>(<span class="str">"mydb.db"</span>, &amp;kv, <span class="kw">NULL</span>);
+
+<span class="cm">/* fully configured */</span>
+KVStoreConfig cfg = {<span class="nm">0</span>};
+cfg.journalMode = KVSTORE_JOURNAL_WAL;
+cfg.syncLevel   = KVSTORE_SYNC_FULL;
+cfg.cacheSize   = <span class="nm">4000</span>;
+cfg.busyTimeout = <span class="nm">5000</span>;
+<span class="fn">kvstore_open_v2</span>(<span class="str">"mydb.db"</span>, &amp;kv, &amp;cfg);
+
+<span class="cm">/* read-only */</span>
+KVStoreConfig ro = {<span class="nm">0</span>};
+ro.readOnly = <span class="nm">1</span>;
+<span class="fn">kvstore_open_v2</span>(<span class="str">"mydb.db"</span>, &amp;kv, &amp;ro);</pre>
+          <div class="returns-label">Returns</div>
+          <p class="fn-desc"><code>KVSTORE_OK</code> on success, error code otherwise.</p>
+        </div>
+
+        <div class="fn-entry" id="c-open">
+          <h3 class="fn-name">kvstore_open</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_open</span>(
+  <span class="kw">const char</span> *zFilename,
+  KVStore     **ppKV,
+  <span class="kw">int</span>           journalMode   <span class="cm">/* KVSTORE_JOURNAL_WAL or _DELETE */</span>
+);</div>
+          <p class="fn-desc">Simplified open. Equivalent to <code>kvstore_open_v2</code> with only <code>journalMode</code> set; all other fields use defaults.</p>
+          <pre>KVStore *kv = <span class="kw">NULL</span>;
+<span class="fn">kvstore_open</span>(<span class="str">"mydata.db"</span>, &amp;kv, KVSTORE_JOURNAL_WAL);</pre>
+        </div>
+
+        <div class="fn-entry" id="c-close">
+          <h3 class="fn-name">kvstore_close</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_close</span>(KVStore *pKV);</div>
+          <p class="fn-desc">Close the database and free all resources. Any uncommitted transaction is rolled back. Runs a WAL checkpoint before closing.</p>
+        </div>
+      </section>
+
+      <!-- Key-Value Operations -->
+      <section class="api-section" id="c-kv">
+        <h2 class="section-title">Key-Value Operations — Default Column Family</h2>
+
+        <div class="fn-entry" id="c-put">
+          <h3 class="fn-name">kvstore_put</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_put</span>(
+  KVStore       *pKV,
+  <span class="kw">const void</span>   *pKey,   <span class="kw">int</span> nKey,
+  <span class="kw">const void</span>   *pValue, <span class="kw">int</span> nValue
+);</div>
+          <p class="fn-desc">Insert or update a key-value pair. If the key already exists, its value is replaced. Keys and values are binary-safe. Without an explicit transaction, each call auto-commits.</p>
+        </div>
+
+        <div class="fn-entry" id="c-get">
+          <h3 class="fn-name">kvstore_get</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_get</span>(
+  KVStore      *pKV,
+  <span class="kw">const void</span>  *pKey,   <span class="kw">int</span>   nKey,
+  <span class="kw">void</span>       **ppValue, <span class="kw">int</span>  *pnValue
+);</div>
+          <p class="fn-desc">Retrieve a value by key. The returned buffer is heap-allocated by SNKV. Caller must free with <code>sqliteFree()</code> / <code>snkv_free()</code>.</p>
+          <pre><span class="kw">void</span> *value = <span class="kw">NULL</span>; <span class="kw">int</span> vlen = <span class="nm">0</span>;
+<span class="kw">int</span> rc = <span class="fn">kvstore_get</span>(kv, <span class="str">"user:1"</span>, <span class="nm">6</span>, &amp;value, &amp;vlen);
+<span class="kw">if</span> (rc == KVSTORE_OK) {
+    printf(<span class="str">"%.*s\n"</span>, vlen, (<span class="kw">char</span>*)value);
+    <span class="fn">sqliteFree</span>(value);
+}</pre>
+          <div class="returns-label">Returns</div>
+          <p class="fn-desc"><code>KVSTORE_OK</code> if found · <code>KVSTORE_NOTFOUND</code> if key does not exist.</p>
+        </div>
+
+        <div class="fn-entry" id="c-delete">
+          <h3 class="fn-name">kvstore_delete</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_delete</span>(KVStore *pKV, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);</div>
+          <p class="fn-desc">Delete a key. Returns <code>KVSTORE_NOTFOUND</code> if the key did not exist.</p>
+        </div>
+
+        <div class="fn-entry" id="c-exists">
+          <h3 class="fn-name">kvstore_exists</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_exists</span>(KVStore *pKV, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">int</span> *pExists);</div>
+          <p class="fn-desc">Check if a key exists without reading its value. More efficient than <code>kvstore_get</code> for existence checks. Sets <code>*pExists</code> to 1 if found, 0 otherwise.</p>
+        </div>
+      </section>
+
+      <!-- Column Families -->
+      <section class="api-section" id="c-cf">
+        <h2 class="section-title">Column Family Management</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Column families provide multiple logical key-value namespaces within a single file. Each is stored in its own B-tree. Maximum <code>KVSTORE_MAX_COLUMN_FAMILIES</code> (64) per database.</p>
+
+        <div class="fn-entry" id="c-cf-create">
+          <h3 class="fn-name">kvstore_cf_create</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_create</span>(KVStore *pKV, <span class="kw">const char</span> *zName, KVColumnFamily **ppCF);</div>
+          <p class="fn-desc">Create a new column family. <code>zName</code> max 255 characters, must be unique. <code>*ppCF</code> receives the handle.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-open">
+          <h3 class="fn-name">kvstore_cf_open</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_open</span>(KVStore *pKV, <span class="kw">const char</span> *zName, KVColumnFamily **ppCF);</div>
+          <p class="fn-desc">Open an existing column family. Returns <code>KVSTORE_NOTFOUND</code> if it does not exist.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-default">
+          <h3 class="fn-name">kvstore_cf_get_default</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_get_default</span>(KVStore *pKV, KVColumnFamily **ppCF);</div>
+          <p class="fn-desc">Get a handle to the default column family. Always exists; created automatically on open.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-drop">
+          <h3 class="fn-name">kvstore_cf_drop</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_drop</span>(KVStore *pKV, <span class="kw">const char</span> *zName);</div>
+          <p class="fn-desc">Delete a column family and all its data permanently. The default column family cannot be dropped. Also removes any hidden TTL index CFs.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-list">
+          <h3 class="fn-name">kvstore_cf_list</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_list</span>(KVStore *pKV, <span class="kw">char</span> ***pazNames, <span class="kw">int</span> *pnCount);</div>
+          <p class="fn-desc">List all column families. Caller must free each name and the array with <code>sqliteFree()</code>.</p>
+          <pre><span class="kw">char</span> **names = <span class="kw">NULL</span>; <span class="kw">int</span> count = <span class="nm">0</span>;
+<span class="fn">kvstore_cf_list</span>(kv, &amp;names, &amp;count);
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; count; i++) {
+    printf(<span class="str">"%s\n"</span>, names[i]);
+    <span class="fn">sqliteFree</span>(names[i]);
+}
+<span class="fn">sqliteFree</span>(names);</pre>
+        </div>
+
+        <div class="fn-entry" id="c-cf-close">
+          <h3 class="fn-name">kvstore_cf_close</h3>
+          <div class="fn-sig"><span class="kw">void</span> <span class="fn">kvstore_cf_close</span>(KVColumnFamily *pCF);</div>
+          <p class="fn-desc">Release the column family handle. Does not delete data.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-kv">
+          <h3 class="fn-name">CF Key-Value Operations</h3>
+          <p class="fn-desc">Identical to the default-CF variants but take a <code>KVColumnFamily*</code> handle.</p>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_put</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">const void</span> *pValue, <span class="kw">int</span> nValue);
+<span class="kw">int</span> <span class="fn">kvstore_cf_get</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">void</span> **ppValue, <span class="kw">int</span> *pnValue);
+<span class="kw">int</span> <span class="fn">kvstore_cf_delete</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);
+<span class="kw">int</span> <span class="fn">kvstore_cf_exists</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">int</span> *pExists);</div>
+          <div class="note"><strong>Note:</strong> Caller must free the value from <code>kvstore_cf_get</code> with <code>sqliteFree()</code>.</div>
+        </div>
+      </section>
+
+      <!-- Iterators -->
+      <section class="api-section" id="c-iter">
+        <h2 class="section-title">Iterators</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Iterate all key-value pairs in ascending lexicographic key order.</p>
+
+        <div class="fn-entry" id="c-iter-create">
+          <h3 class="fn-name">kvstore_iterator_create / kvstore_cf_iterator_create</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_iterator_create</span>(KVStore *pKV, KVIterator **ppIter);
+<span class="kw">int</span> <span class="fn">kvstore_cf_iterator_create</span>(KVColumnFamily *pCF, KVIterator **ppIter);</div>
+          <p class="fn-desc">Create a forward iterator for the default or a specific column family.</p>
+        </div>
+
+        <div class="fn-entry" id="c-iter-first">
+          <h3 class="fn-name">kvstore_iterator_first / next / eof</h3>
+          <div class="fn-sig"><span class="kw">int</span>  <span class="fn">kvstore_iterator_first</span>(KVIterator *pIter);
+<span class="kw">int</span>  <span class="fn">kvstore_iterator_next</span>(KVIterator *pIter);
+<span class="kw">int</span>  <span class="fn">kvstore_iterator_eof</span>(KVIterator *pIter);   <span class="cm">/* returns 1 at end */</span></div>
+          <p class="fn-desc">Position at first entry, advance to next, or test for end-of-sequence.</p>
+        </div>
+
+        <div class="fn-entry" id="c-iter-kv">
+          <h3 class="fn-name">kvstore_iterator_key / value</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_iterator_key</span>(KVIterator *pIter, <span class="kw">void</span> **ppKey,   <span class="kw">int</span> *pnKey);
+<span class="kw">int</span> <span class="fn">kvstore_iterator_value</span>(KVIterator *pIter, <span class="kw">void</span> **ppValue, <span class="kw">int</span> *pnValue);</div>
+          <p class="fn-desc">Read the current key or value. Pointers are owned by the iterator — <strong>do not free them</strong>. Valid until the next <code>next()</code> or <code>close()</code> call.</p>
+          <pre>KVIterator *it = <span class="kw">NULL</span>;
+<span class="fn">kvstore_iterator_create</span>(kv, &amp;it);
+<span class="fn">kvstore_iterator_first</span>(it);
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(it)) {
+    <span class="kw">void</span> *key, *val; <span class="kw">int</span> klen, vlen;
+    <span class="fn">kvstore_iterator_key</span>(it, &amp;key, &amp;klen);
+    <span class="fn">kvstore_iterator_value</span>(it, &amp;val, &amp;vlen);
+    printf(<span class="str">"%.*s\n"</span>, klen, (<span class="kw">char</span>*)key);
+    <span class="fn">kvstore_iterator_next</span>(it);
+}
+<span class="fn">kvstore_iterator_close</span>(it);</pre>
+        </div>
+
+        <div class="fn-entry" id="c-iter-close">
+          <h3 class="fn-name">kvstore_iterator_close</h3>
+          <div class="fn-sig"><span class="kw">void</span> <span class="fn">kvstore_iterator_close</span>(KVIterator *pIter);</div>
+          <p class="fn-desc">Release the iterator and its cursor. Always call this when done.</p>
+        </div>
+      </section>
+
+      <!-- Prefix Iterators -->
+      <section class="api-section" id="c-prefix">
+        <h2 class="section-title">Prefix Iterators</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Pre-positioned at the first key matching the prefix. Stop automatically when keys no longer match. <strong>Do not call <code>kvstore_iterator_first()</code></strong> — read directly, then call <code>next()</code>.</p>
+        <div class="fn-entry">
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_prefix_iterator_create</span>(
+  KVStore        *pKV,
+  <span class="kw">const void</span>    *pPrefix, <span class="kw">int</span> nPrefix,
+  KVIterator    **ppIter
+);
+<span class="kw">int</span> <span class="fn">kvstore_cf_prefix_iterator_create</span>(
+  KVColumnFamily *pCF,
+  <span class="kw">const void</span>    *pPrefix, <span class="kw">int</span> nPrefix,
+  KVIterator    **ppIter
+);</div>
+          <pre>KVIterator *it = <span class="kw">NULL</span>;
+<span class="fn">kvstore_prefix_iterator_create</span>(kv, <span class="str">"user:"</span>, <span class="nm">5</span>, &amp;it);
+<span class="cm">/* already at first match — do NOT call first() */</span>
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(it)) {
+    <span class="kw">void</span> *key; <span class="kw">int</span> klen;
+    <span class="fn">kvstore_iterator_key</span>(it, &amp;key, &amp;klen);
+    <span class="fn">kvstore_iterator_next</span>(it);
+}
+<span class="fn">kvstore_iterator_close</span>(it);</pre>
+        </div>
+      </section>
+
+      <!-- Reverse Iterators -->
+      <section class="api-section" id="c-reverse">
+        <h2 class="section-title">Reverse Iterators</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Traverse keys in <strong>descending</strong> order. Use <code>kvstore_iterator_last()</code> and <code>kvstore_iterator_prev()</code> instead of <code>first()</code> and <code>next()</code>. All key/value/eof/close accessors work identically.</p>
+        <div class="fn-entry">
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_reverse_iterator_create</span>(KVStore *pKV, KVIterator **ppIter);
+<span class="kw">int</span> <span class="fn">kvstore_cf_reverse_iterator_create</span>(KVColumnFamily *pCF, KVIterator **ppIter);
+
+<span class="cm">/* Reverse prefix — pre-positioned at last matching key */</span>
+<span class="kw">int</span> <span class="fn">kvstore_reverse_prefix_iterator_create</span>(
+  KVStore        *pKV,
+  <span class="kw">const void</span>    *pPrefix, <span class="kw">int</span> nPrefix,
+  KVIterator    **ppIter
+);
+<span class="kw">int</span> <span class="fn">kvstore_cf_reverse_prefix_iterator_create</span>(
+  KVColumnFamily *pCF,
+  <span class="kw">const void</span>    *pPrefix, <span class="kw">int</span> nPrefix,
+  KVIterator    **ppIter
+);
+
+<span class="kw">int</span>  <span class="fn">kvstore_iterator_last</span>(KVIterator *pIter);   <span class="cm">/* seek to last key */</span>
+<span class="kw">int</span>  <span class="fn">kvstore_iterator_prev</span>(KVIterator *pIter);   <span class="cm">/* move to previous key */</span></div>
+          <pre><span class="cm">/* Full reverse scan */</span>
+KVIterator *it = <span class="kw">NULL</span>;
+<span class="fn">kvstore_reverse_iterator_create</span>(kv, &amp;it);
+<span class="fn">kvstore_iterator_last</span>(it);
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(it)) {
+    <span class="kw">void</span> *key; <span class="kw">int</span> klen;
+    <span class="fn">kvstore_iterator_key</span>(it, &amp;key, &amp;klen);
+    <span class="fn">kvstore_iterator_prev</span>(it);
+}
+<span class="fn">kvstore_iterator_close</span>(it);
+
+<span class="cm">/* Reverse prefix — do NOT call last(), already positioned */</span>
+<span class="fn">kvstore_reverse_prefix_iterator_create</span>(kv, <span class="str">"user:"</span>, <span class="nm">5</span>, &amp;it);
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(it)) {
+    <span class="fn">kvstore_iterator_prev</span>(it);
+}
+<span class="fn">kvstore_iterator_close</span>(it);</pre>
+        </div>
+      </section>
+
+      <!-- Transactions -->
+      <section class="api-section" id="c-txn">
+        <h2 class="section-title">Transactions</h2>
+        <div class="fn-entry">
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_begin</span>(KVStore *pKV, <span class="kw">int</span> wrflag);   <span class="cm">/* 1=write, 0=read */</span>
+<span class="kw">int</span> <span class="fn">kvstore_commit</span>(KVStore *pKV);
+<span class="kw">int</span> <span class="fn">kvstore_rollback</span>(KVStore *pKV);</div>
+          <p class="fn-desc">Explicit ACID transactions for batching operations atomically. Without an explicit transaction, each put/delete auto-commits. Wrapping bulk writes in a single transaction is significantly faster.</p>
+          <pre><span class="fn">kvstore_begin</span>(kv, <span class="nm">1</span>);
+<span class="fn">kvstore_put</span>(kv, <span class="str">"key1"</span>, <span class="nm">4</span>, <span class="str">"val1"</span>, <span class="nm">4</span>);
+<span class="fn">kvstore_put</span>(kv, <span class="str">"key2"</span>, <span class="nm">4</span>, <span class="str">"val2"</span>, <span class="nm">4</span>);
+<span class="fn">kvstore_commit</span>(kv);   <span class="cm">/* both writes are atomic */</span></pre>
+          <div class="note"><strong>KVSTORE_BUSY:</strong> Set <code>cfg.busyTimeout &gt; 0</code> to auto-retry on lock contention, or handle the return code and retry manually.</div>
+        </div>
+      </section>
+
+      <!-- TTL -->
+      <section class="api-section" id="c-ttl">
+        <h2 class="section-title">TTL / Key Expiry</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Per-key expiry with zero overhead for stores that never use TTL. Hidden index CFs are created lazily on first use and are invisible in <code>kvstore_cf_list</code>.</p>
+
+        <div class="fn-entry" id="c-put-ttl">
+          <h3 class="fn-name">kvstore_put_ttl / kvstore_get_ttl</h3>
+          <div class="fn-sig"><span class="kw">int64_t</span> <span class="fn">kvstore_now_ms</span>(<span class="kw">void</span>);   <span class="cm">/* current time in ms since Unix epoch */</span>
+
+<span class="kw">int</span> <span class="fn">kvstore_put_ttl</span>(
+  KVStore       *pKV,
+  <span class="kw">const void</span>   *pKey,   <span class="kw">int</span>      nKey,
+  <span class="kw">const void</span>   *pValue, <span class="kw">int</span>      nValue,
+  <span class="kw">int64_t</span>       expire_ms   <span class="cm">/* absolute ms since epoch; 0 = no TTL */</span>
+);
+
+<span class="kw">int</span> <span class="fn">kvstore_get_ttl</span>(
+  KVStore       *pKV,
+  <span class="kw">const void</span>   *pKey,      <span class="kw">int</span>      nKey,
+  <span class="kw">void</span>        **ppValue,   <span class="kw">int</span>     *pnValue,
+  <span class="kw">int64_t</span>      *pnRemaining  <span class="cm">/* may be NULL */</span>
+);</div>
+          <pre><span class="cm">/* write key that expires in 30 minutes */</span>
+<span class="kw">int64_t</span> exp = <span class="fn">kvstore_now_ms</span>() + <span class="nm">30</span> * <span class="nm">60</span> * <span class="nm">1000</span>;
+<span class="fn">kvstore_put_ttl</span>(kv, <span class="str">"sess:abc"</span>, <span class="nm">8</span>, token, tlen, exp);
+
+<span class="cm">/* read with lazy expiry */</span>
+<span class="kw">void</span> *val = <span class="kw">NULL</span>; <span class="kw">int</span> nVal = <span class="nm">0</span>; <span class="kw">int64_t</span> rem = <span class="nm">0</span>;
+<span class="kw">int</span> rc = <span class="fn">kvstore_get_ttl</span>(kv, <span class="str">"sess:abc"</span>, <span class="nm">8</span>, &amp;val, &amp;nVal, &amp;rem);
+<span class="kw">if</span> (rc == KVSTORE_OK) { <span class="cm">/* rem = ms remaining */</span> <span class="fn">sqliteFree</span>(val); }</pre>
+        </div>
+
+        <div class="fn-entry" id="c-ttl-remaining">
+          <h3 class="fn-name">kvstore_ttl_remaining</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_ttl_remaining</span>(KVStore *pKV, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">int64_t</span> *pnRemaining);</div>
+          <div class="table-wrap"><table>
+            <tr><th>Return</th><th><code>*pnRemaining</code></th><th>Meaning</th></tr>
+            <tr><td><code>KVSTORE_OK</code></td><td><code>KVSTORE_NO_TTL</code> (-1)</td><td>Key exists, no expiry.</td></tr>
+            <tr><td><code>KVSTORE_OK</code></td><td><code>0</code></td><td>Key just expired (lazy delete performed).</td></tr>
+            <tr><td><code>KVSTORE_OK</code></td><td><code>N &gt; 0</code></td><td>N ms remain.</td></tr>
+            <tr><td><code>KVSTORE_NOTFOUND</code></td><td>—</td><td>Key does not exist.</td></tr>
+          </table></div>
+        </div>
+
+        <div class="fn-entry" id="c-purge">
+          <h3 class="fn-name">kvstore_purge_expired</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_purge_expired</span>(KVStore *pKV, <span class="kw">int</span> *pnDeleted);  <span class="cm">/* pnDeleted may be NULL */</span></div>
+          <p class="fn-desc">Scan the expiry index and delete all expired keys in one write transaction. O(expired keys) — uses sorted expire-time prefix to stop at first non-expired entry.</p>
+        </div>
+
+        <div class="note-info note" style="margin-top:1rem; margin-bottom:1rem;">
+          <strong>CF-level TTL:</strong> All four functions have CF equivalents operating on a <code>KVColumnFamily*</code> handle. Each user CF maintains <strong>independent</strong> TTL indexes; purging CF A never touches CF B.
+        </div>
+
+        <div class="fn-entry" id="c-cf-put-ttl">
+          <h3 class="fn-name">kvstore_cf_put_ttl / kvstore_cf_get_ttl</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_put_ttl</span>(
+  KVColumnFamily *pCF,
+  <span class="kw">const void</span>     *pKey,   <span class="kw">int</span>      nKey,
+  <span class="kw">const void</span>     *pValue, <span class="kw">int</span>      nValue,
+  <span class="kw">int64_t</span>         expire_ms   <span class="cm">/* absolute ms since epoch; 0 = no TTL */</span>
+);
+
+<span class="kw">int</span> <span class="fn">kvstore_cf_get_ttl</span>(
+  KVColumnFamily *pCF,
+  <span class="kw">const void</span>     *pKey,       <span class="kw">int</span>      nKey,
+  <span class="kw">void</span>          **ppValue,    <span class="kw">int</span>     *pnValue,
+  <span class="kw">int64_t</span>        *pnRemaining  <span class="cm">/* may be NULL */</span>
+);</div>
+          <p class="fn-desc">CF-level equivalents of <code>kvstore_put_ttl</code> / <code>kvstore_get_ttl</code>. Semantics are identical; the TTL indexes are created lazily per CF and are fully independent.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-ttl-remaining">
+          <h3 class="fn-name">kvstore_cf_ttl_remaining</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_ttl_remaining</span>(
+  KVColumnFamily *pCF,
+  <span class="kw">const void</span>     *pKey, <span class="kw">int</span> nKey,
+  <span class="kw">int64_t</span>        *pnRemaining   <span class="cm">/* must not be NULL */</span>
+);</div>
+          <p class="fn-desc">Return remaining TTL for a key in this column family without fetching the value. Return codes and <code>*pnRemaining</code> semantics are identical to <code>kvstore_ttl_remaining</code>.</p>
+        </div>
+
+        <div class="fn-entry" id="c-cf-purge">
+          <h3 class="fn-name">kvstore_cf_purge_expired</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_purge_expired</span>(KVColumnFamily *pCF, <span class="kw">int</span> *pnDeleted);  <span class="cm">/* pnDeleted may be NULL */</span></div>
+          <p class="fn-desc">Scan and delete all expired keys in this column family only, in a single write transaction. O(expired keys). Purging CF A never affects other column families.</p>
+        </div>
+      </section>
+
+      <!-- Diagnostics -->
+      <section class="api-section" id="c-diag">
+        <h2 class="section-title">Diagnostics &amp; Maintenance</h2>
+
+        <div class="fn-entry" id="c-errmsg">
+          <h3 class="fn-name">kvstore_errmsg</h3>
+          <div class="fn-sig"><span class="kw">const char</span> *<span class="fn">kvstore_errmsg</span>(KVStore *pKV);</div>
+          <p class="fn-desc">Return the last error message string. Do not free. Valid until the next operation on the same handle.</p>
+        </div>
+
+        <div class="fn-entry" id="c-stats">
+          <h3 class="fn-name">kvstore_stats</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_stats</span>(KVStore *pKV, KVStoreStats *pStats);</div>
+          <div class="table-wrap"><table>
+            <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            <tr><td><code>nPuts</code></td><td>u64</td><td>Total put operations.</td></tr>
+            <tr><td><code>nGets</code></td><td>u64</td><td>Total get operations.</td></tr>
+            <tr><td><code>nDeletes</code></td><td>u64</td><td>Total delete operations.</td></tr>
+            <tr><td><code>nIterations</code></td><td>u64</td><td>Total iterators created.</td></tr>
+            <tr><td><code>nErrors</code></td><td>u64</td><td>Total errors encountered.</td></tr>
+          </table></div>
+        </div>
+
+        <div class="fn-entry" id="c-integrity">
+          <h3 class="fn-name">kvstore_integrity_check</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_integrity_check</span>(KVStore *pKV, <span class="kw">char</span> **pzErrMsg);</div>
+          <p class="fn-desc">Walk the entire B-tree and verify structural integrity. Returns <code>KVSTORE_OK</code> or <code>KVSTORE_CORRUPT</code> with details in <code>*pzErrMsg</code>. Caller must free <code>*pzErrMsg</code> with <code>sqliteFree()</code>.</p>
+        </div>
+
+        <div class="fn-entry" id="c-sync">
+          <h3 class="fn-name">kvstore_sync</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_sync</span>(KVStore *pKV);</div>
+          <p class="fn-desc">Force all pending changes to disk. If a write transaction is active, performs a commit-and-reopen cycle to flush the WAL.</p>
+        </div>
+
+        <div class="fn-entry" id="c-vacuum">
+          <h3 class="fn-name">kvstore_incremental_vacuum</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_incremental_vacuum</span>(KVStore *pKV, <span class="kw">int</span> nPage);</div>
+          <p class="fn-desc">Reclaim unused pages and shrink the database file. Pass <code>0</code> to free all unused pages, or a positive <code>nPage</code> to limit work per call (good for latency-sensitive apps).</p>
+          <pre><span class="fn">kvstore_incremental_vacuum</span>(kv, <span class="nm">0</span>);    <span class="cm">/* free all */</span>
+<span class="fn">kvstore_incremental_vacuum</span>(kv, <span class="nm">50</span>);   <span class="cm">/* incremental: 50 pages */</span></pre>
+        </div>
+
+        <div class="fn-entry" id="c-checkpoint">
+          <h3 class="fn-name">kvstore_checkpoint</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_checkpoint</span>(KVStore *pKV, <span class="kw">int</span> mode, <span class="kw">int</span> *pnLog, <span class="kw">int</span> *pnCkpt);</div>
+          <p class="fn-desc">Copy WAL frames back into the main database file. <code>pnLog</code> and <code>pnCkpt</code> may be <code>NULL</code>. Requires no active write transaction. Non-WAL databases: no-op returning <code>KVSTORE_OK</code>.</p>
+          <pre><span class="kw">int</span> nLog = <span class="nm">0</span>, nCkpt = <span class="nm">0</span>;
+<span class="fn">kvstore_checkpoint</span>(kv, KVSTORE_CHECKPOINT_PASSIVE, &amp;nLog, &amp;nCkpt);
+printf(<span class="str">"%d frames total, %d checkpointed\n"</span>, nLog, nCkpt);
+
+<span class="cm">/* reclaim WAL disk space */</span>
+<span class="fn">kvstore_checkpoint</span>(kv, KVSTORE_CHECKPOINT_TRUNCATE, <span class="kw">NULL</span>, <span class="kw">NULL</span>);</pre>
+        </div>
+      </section>
+
+      <!-- Memory -->
+      <section class="api-section" id="c-memory">
+        <h2 class="section-title">Memory Management</h2>
+        <div class="table-wrap"><table>
+          <tr><th>Macro</th><th>Description</th></tr>
+          <tr><td><code>sqliteMalloc(n)</code></td><td>Allocate <code>n</code> zero-initialised bytes.</td></tr>
+          <tr><td><code>sqliteFree(p)</code></td><td>Free memory allocated by SNKV.</td></tr>
+          <tr><td><code>sqliteRealloc(p, n)</code></td><td>Resize allocation.</td></tr>
+          <tr><td><code>sqliteStrDup(s)</code></td><td>Duplicate a C string (equivalent to <code>sqlite3_mprintf("%s", s)</code>).</td></tr>
+          <tr><td><code>snkv_malloc(n)</code></td><td>Alias for <code>sqliteMalloc</code> (single-header build).</td></tr>
+          <tr><td><code>snkv_free(p)</code></td><td>Alias for <code>sqliteFree</code> (single-header build).</td></tr>
+        </table></div>
+        <div class="note"><strong>Rule:</strong> Any pointer returned by <code>kvstore_get</code>, <code>kvstore_cf_get</code>, <code>kvstore_cf_list</code>, or <code>kvstore_integrity_check</code> must be freed with <code>sqliteFree()</code>. Iterator key/value pointers are iterator-owned — do NOT free them.</div>
+      </section>
+
+      <!-- Thread Safety -->
+      <section class="api-section" id="c-threads">
+        <h2 class="section-title">Thread Safety</h2>
+        <ul style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);line-height:2;padding-left:1.2rem;">
+          <li>All <code>kvstore_*</code> calls are mutex-protected — a single <code>KVStore</code> handle is safe across threads.</li>
+          <li>In WAL mode, multiple readers run concurrently with a single writer.</li>
+          <li>Only one write transaction can be active at a time; concurrent writes return <code>KVSTORE_BUSY</code>.</li>
+          <li>For maximum throughput, each thread can open its own <code>KVStore</code> to the same file.</li>
+          <li><code>KVIterator</code> handles are <strong>not</strong> thread-safe — do not share across threads.</li>
+        </ul>
+      </section>
+
+    </div><!-- /panel-c -->
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- PYTHON PANEL                                                -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <div class="lang-panel" id="panel-py">
+
+      <!-- Installation -->
+      <section class="api-section" id="py-install">
+        <div class="section-label">Python API</div>
+        <h2 class="section-title">Installation</h2>
+        <pre><span class="cm"># Install from PyPI</span>
+pip install snkv
+
+<span class="cm"># Or build from source</span>
+cd python
+python3 setup.py build_ext --inplace</pre>
+      </section>
+
+      <!-- Quick Start -->
+      <section class="api-section" id="py-quickstart">
+        <h2 class="section-title">Quick Start</h2>
+        <pre><span class="kw">from</span> snkv <span class="kw">import</span> KVStore
+
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"mydb.db"</span>) <span class="kw">as</span> db:
+    db[<span class="str">"hello"</span>] = <span class="str">"world"</span>
+    print(db[<span class="str">"hello"</span>].decode())      <span class="cm"># world</span>
+    print(db.get(<span class="str">"missing"</span>))         <span class="cm"># None</span>
+
+    <span class="kw">for</span> key, value <span class="kw">in</span> db:
+        print(key, value)              <span class="cm"># b'hello' b'world'</span></pre>
+      </section>
+
+      <!-- Constants -->
+      <section class="api-section" id="py-constants">
+        <h2 class="section-title">Constants</h2>
+        <h4 class="subsec">Journal Mode</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Description</th></tr>
+          <tr><td><code>JOURNAL_WAL</code></td><td>Write-Ahead Logging — concurrent readers (default).</td></tr>
+          <tr><td><code>JOURNAL_DELETE</code></td><td>Rollback journal mode.</td></tr>
+        </table></div>
+        <h4 class="subsec">Sync Level</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Description</th></tr>
+          <tr><td><code>SYNC_OFF</code></td><td>No fsync — fastest, not crash-safe.</td></tr>
+          <tr><td><code>SYNC_NORMAL</code></td><td>Survives process crash (default).</td></tr>
+          <tr><td><code>SYNC_FULL</code></td><td>fsync on every commit — strongest durability.</td></tr>
+        </table></div>
+        <h4 class="subsec">Checkpoint Mode</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Description</th></tr>
+          <tr><td><code>CHECKPOINT_PASSIVE</code></td><td>Non-blocking copy (default).</td></tr>
+          <tr><td><code>CHECKPOINT_FULL</code></td><td>Wait for all readers, then copy all frames.</td></tr>
+          <tr><td><code>CHECKPOINT_RESTART</code></td><td>Like FULL, then reset WAL write position.</td></tr>
+          <tr><td><code>CHECKPOINT_TRUNCATE</code></td><td>Like RESTART, then truncate WAL to zero bytes.</td></tr>
+        </table></div>
+        <h4 class="subsec">TTL</h4>
+        <div class="table-wrap"><table>
+          <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
+          <tr><td><code>NO_TTL</code></td><td>-1</td><td>Returned by <code>ttl()</code> when key has no expiry.</td></tr>
+        </table></div>
+      </section>
+
+      <!-- Exceptions -->
+      <section class="api-section" id="py-exceptions">
+        <h2 class="section-title">Exceptions</h2>
+        <pre><span class="nm">snkv.Error</span>           <span class="cm">← base class for all SNKV errors</span>
+├── <span class="nm">snkv.NotFoundError</span>  <span class="cm">(also subclass of KeyError)</span>
+├── <span class="nm">snkv.BusyError</span>
+├── <span class="nm">snkv.LockedError</span>
+├── <span class="nm">snkv.ReadOnlyError</span>
+└── <span class="nm">snkv.CorruptError</span></pre>
+        <div class="table-wrap"><table>
+          <tr><th>Exception</th><th>Raised when</th></tr>
+          <tr><td><code>Error</code></td><td>Generic SNKV error (base class).</td></tr>
+          <tr><td><code>NotFoundError</code></td><td>Key does not exist; also a <code>KeyError</code>.</td></tr>
+          <tr><td><code>BusyError</code></td><td>Database locked and <code>busy_timeout</code> expired.</td></tr>
+          <tr><td><code>LockedError</code></td><td>Write lock conflict with a concurrent transaction.</td></tr>
+          <tr><td><code>ReadOnlyError</code></td><td>Write attempted on a read-only store.</td></tr>
+          <tr><td><code>CorruptError</code></td><td>Integrity check detected corruption.</td></tr>
+        </table></div>
+      </section>
+
+      <!-- KVStore -->
+      <section class="api-section" id="py-kvstore">
+        <h2 class="section-title">KVStore</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">The main entry point. Opens or creates a key-value store at a given path. Always use as a context manager to ensure proper cleanup.</p>
+      </section>
+
+      <!-- Opening -->
+      <section class="api-section" id="py-open">
+        <h4 class="subsec">Opening a Store — <code>KVStore(path, *, **config)</code></h4>
+        <div class="fn-entry">
+          <div class="fn-sig">KVStore(
+  path          = <span class="kw">None</span>,    <span class="cm"># str path or None for in-memory</span>
+  journal_mode  = JOURNAL_WAL,
+  sync_level    = SYNC_NORMAL,
+  cache_size    = <span class="nm">2000</span>,     <span class="cm"># pages (~8 MB default)</span>
+  page_size     = <span class="nm">4096</span>,     <span class="cm"># bytes; new databases only</span>
+  busy_timeout  = <span class="nm">0</span>,        <span class="cm"># ms; 0 = fail immediately</span>
+  wal_size_limit= <span class="nm">0</span>,        <span class="cm"># auto-checkpoint every N commits; 0 = off</span>
+  read_only     = <span class="nm">0</span>         <span class="cm"># 1 = read-only</span>
+)</div>
+          <pre><span class="cm"># Minimal</span>
+db = <span class="fn">KVStore</span>(<span class="str">"mydb.db"</span>)
+
+<span class="cm"># In-memory</span>
+db = <span class="fn">KVStore</span>()    <span class="cm"># or KVStore(None)</span>
+
+<span class="cm"># Fully configured</span>
+db = <span class="fn">KVStore</span>(
+    <span class="str">"mydb.db"</span>,
+    journal_mode=JOURNAL_WAL,
+    sync_level=SYNC_NORMAL,
+    cache_size=<span class="nm">4000</span>,
+    busy_timeout=<span class="nm">5000</span>,
+    wal_size_limit=<span class="nm">200</span>,
+)
+
+<span class="cm"># Context manager (recommended)</span>
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"mydb.db"</span>) <span class="kw">as</span> db:
+    db[<span class="str">"key"</span>] = <span class="str">"value"</span></pre>
+        </div>
+      </section>
+
+      <!-- Core -->
+      <section class="api-section" id="py-core">
+        <h4 class="subsec">Core Operations</h4>
+        <div class="fn-entry">
+          <h3 class="fn-name">put(key, value, ttl=None) → None</h3>
+          <p class="fn-desc">Insert or overwrite a key-value pair. <code>ttl</code> is seconds until expiry (<code>int</code> or <code>float</code>); <code>None</code> means no expiry. Both key and value accept <code>str</code>, <code>bytes</code>, <code>bytearray</code>, or <code>memoryview</code>.</p>
+          <pre>db.put(<span class="str">"user:1"</span>, <span class="str">b"\x01\x02\x03"</span>)
+db.put(<span class="str">"session"</span>, <span class="str">"tok"</span>, ttl=<span class="nm">3600</span>)  <span class="cm"># expires in 1 hour</span>
+db.put(<span class="str">"cache"</span>,   data,   ttl=<span class="nm">0.5</span>)  <span class="cm"># half a second</span></pre>
+        </div>
+        <div class="fn-entry">
+          <h3 class="fn-name">get(key, default=None) → bytes | None</h3>
+          <p class="fn-desc">Return the stored value as <code>bytes</code>, or <code>default</code> if the key does not exist or has expired. Never raises <code>NotFoundError</code> — use <code>db[key]</code> for that.</p>
+          <pre>val = db.get(<span class="str">"user:1"</span>)         <span class="cm"># bytes or None</span>
+val = db.get(<span class="str">"missing"</span>, <span class="str">b""</span>) <span class="cm"># b'' if not found</span></pre>
+        </div>
+        <div class="fn-entry">
+          <h3 class="fn-name">delete(key) → None</h3>
+          <p class="fn-desc">Delete a key. Raises <code>NotFoundError</code> (<code>KeyError</code>) if the key does not exist.</p>
+        </div>
+        <div class="fn-entry">
+          <h3 class="fn-name">exists(key) → bool</h3>
+          <p class="fn-desc">Return <code>True</code> if the key exists, without fetching the value.</p>
+        </div>
+      </section>
+
+      <!-- TTL -->
+      <section class="api-section" id="py-ttl">
+        <h4 class="subsec">TTL / Key Expiry</h4>
+        <div class="fn-entry">
+          <h3 class="fn-name">ttl(key) → float | None</h3>
+          <div class="table-wrap"><table>
+            <tr><th>Return value</th><th>Meaning</th></tr>
+            <tr><td>Positive float</td><td>Seconds remaining.</td></tr>
+            <tr><td><code>0.0</code></td><td>Key just expired (lazy delete performed).</td></tr>
+            <tr><td><code>None</code></td><td>Key exists but has no expiry.</td></tr>
+            <tr><td>raises <code>NotFoundError</code></td><td>Key does not exist.</td></tr>
+          </table></div>
+          <pre>db.put(<span class="str">"session"</span>, <span class="str">"tok"</span>, ttl=<span class="nm">3600</span>)
+print(db.ttl(<span class="str">"session"</span>))   <span class="cm"># e.g. 3599.97</span>
+print(db.ttl(<span class="str">"perm"</span>))      <span class="cm"># None (no TTL)</span></pre>
+        </div>
+        <div class="fn-entry">
+          <h3 class="fn-name">purge_expired() → int</h3>
+          <p class="fn-desc">Scan the TTL index and delete all expired keys in a single transaction. Returns the count of keys deleted. O(expired keys).</p>
+          <pre>n = db.purge_expired()
+print(<span class="str">f"Removed {n} expired keys"</span>)</pre>
+        </div>
+      </section>
+
+      <!-- Dict interface -->
+      <section class="api-section" id="py-dict">
+        <h4 class="subsec">Dict-like Interface</h4>
+        <div class="fn-entry">
+          <div class="table-wrap"><table>
+            <tr><th>Syntax</th><th>Equivalent</th><th>Notes</th></tr>
+            <tr><td><code>db["key"]</code></td><td><code>get</code></td><td>Raises <code>NotFoundError</code> on miss/expiry.</td></tr>
+            <tr><td><code>db["key"] = "val"</code></td><td><code>put</code></td><td>No TTL.</td></tr>
+            <tr><td><code>db["key", ttl] = "val"</code></td><td><code>put(ttl=...)</code></td><td>TTL in seconds.</td></tr>
+            <tr><td><code>del db["key"]</code></td><td><code>delete</code></td><td>Raises <code>NotFoundError</code> on miss.</td></tr>
+            <tr><td><code>"key" in db</code></td><td><code>exists</code></td><td></td></tr>
+            <tr><td><code>for k, v in db</code></td><td><code>iterator()</code></td><td>Yields <code>(bytes, bytes)</code>.</td></tr>
+          </table></div>
+          <pre>db[<span class="str">"session:abc"</span>] = <span class="str">"active"</span>
+db[<span class="str">"token:xyz"</span>, <span class="nm">60</span>] = <span class="str">"bearer-abc"</span>   <span class="cm"># expires in 60 s</span>
+print(db[<span class="str">"session:abc"</span>])               <span class="cm"># b'active'</span>
+<span class="kw">del</span> db[<span class="str">"session:abc"</span>]</pre>
+        </div>
+      </section>
+
+      <!-- Transactions -->
+      <section class="api-section" id="py-txn">
+        <h4 class="subsec">Transactions</h4>
+        <div class="fn-entry">
+          <h3 class="fn-name">begin(write=False) / commit() / rollback()</h3>
+          <p class="fn-desc">ACID transactions for batching operations atomically. Without an explicit transaction, each individual put/delete auto-commits.</p>
+          <pre>db.begin(write=<span class="kw">True</span>)
+<span class="kw">try</span>:
+    db[<span class="str">"a"</span>] = <span class="str">"1"</span>
+    db[<span class="str">"b"</span>] = <span class="str">"2"</span>
+    db.commit()
+<span class="kw">except</span> Exception:
+    db.rollback()
+    <span class="kw">raise</span></pre>
+        </div>
+      </section>
+
+      <!-- Column Families -->
+      <section class="api-section" id="py-cf-mgmt">
+        <h4 class="subsec">Column Families</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">db.<span class="fn">create_column_family</span>(name) → ColumnFamily
+db.<span class="fn">open_column_family</span>(name)   → ColumnFamily
+db.<span class="fn">default_column_family</span>()    → ColumnFamily
+db.<span class="fn">list_column_families</span>()     → list[str]
+db.<span class="fn">drop_column_family</span>(name)</div>
+          <pre><span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> users:
+    users[<span class="str">"alice"</span>] = <span class="str">b"admin"</span>
+
+<span class="kw">with</span> db.<span class="fn">open_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> users:
+    print(users[<span class="str">"alice"</span>])  <span class="cm"># b'admin'</span>
+
+names = db.<span class="fn">list_column_families</span>()  <span class="cm"># ["users", ...]</span>
+db.<span class="fn">drop_column_family</span>(<span class="str">"users"</span>)</pre>
+        </div>
+      </section>
+
+      <!-- Iterators -->
+      <section class="api-section" id="py-iter">
+        <h4 class="subsec">Iterators</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">db.<span class="fn">iterator</span>(*, reverse=<span class="kw">False</span>, prefix=<span class="kw">None</span>) → Iterator
+db.<span class="fn">prefix_iterator</span>(prefix)           → Iterator
+db.<span class="fn">reverse_iterator</span>()                → Iterator
+db.<span class="fn">reverse_prefix_iterator</span>(prefix)   → Iterator</div>
+          <pre><span class="cm"># Forward scan</span>
+<span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>():
+    print(key.decode(), value.decode())
+
+<span class="cm"># Reverse scan</span>
+<span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>):
+    print(key.decode(), value.decode())
+
+<span class="cm"># Prefix, ascending</span>
+<span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>(prefix=<span class="str">"user:"</span>):
+    print(key, value)
+
+<span class="cm"># Prefix, descending</span>
+<span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>(prefix=<span class="str">"user:"</span>, reverse=<span class="kw">True</span>):
+    print(key, value)</pre>
+        </div>
+      </section>
+
+      <!-- Maintenance -->
+      <section class="api-section" id="py-maintenance">
+        <h4 class="subsec">Maintenance</h4>
+        <div class="fn-entry">
+          <h3 class="fn-name">sync() / vacuum(n_pages=0) / integrity_check() / checkpoint(mode) / stats()</h3>
+          <div class="fn-sig">db.<span class="fn">sync</span>()                         <span class="cm"># flush pending writes to disk</span>
+db.<span class="fn">vacuum</span>(n_pages=<span class="nm">0</span>)              <span class="cm"># reclaim unused pages (0 = all)</span>
+db.<span class="fn">integrity_check</span>()              <span class="cm"># raises CorruptError on failure</span>
+nlog, nckpt = db.<span class="fn">checkpoint</span>(mode) <span class="cm"># returns (nLog, nCkpt) tuple</span>
+s = db.<span class="fn">stats</span>()                     <span class="cm"># dict: puts/gets/deletes/iterations/errors</span>
+print(db.errmsg)                    <span class="cm"># last error message string (property)</span></div>
+          <pre><span class="kw">import</span> snkv
+<span class="kw">from</span> snkv <span class="kw">import</span> CHECKPOINT_TRUNCATE, CorruptError
+
+<span class="cm"># Vacuum after bulk deletes</span>
+db.<span class="fn">vacuum</span>()
+
+<span class="cm"># Checkpoint and reclaim WAL space</span>
+nlog, nckpt = db.<span class="fn">checkpoint</span>(CHECKPOINT_TRUNCATE)
+print(<span class="str">f"WAL: {nlog} frames, {nckpt} checkpointed"</span>)
+
+<span class="kw">try</span>:
+    db.<span class="fn">integrity_check</span>()
+<span class="kw">except</span> CorruptError <span class="kw">as</span> e:
+    print(<span class="str">f"Corruption: {e}"</span>)
+
+print(db.<span class="fn">stats</span>())
+<span class="cm"># {'puts': 42, 'gets': 100, 'deletes': 5, 'iterations': 3, 'errors': 0}</span></pre>
+        </div>
+      </section>
+
+      <!-- Lifecycle -->
+      <section class="api-section" id="py-lifecycle">
+        <h4 class="subsec">Lifecycle</h4>
+        <div class="fn-entry">
+          <h3 class="fn-name">close() / context manager</h3>
+          <p class="fn-desc">Close the store and release all resources. All column family and iterator handles must be closed first. Always prefer the context manager form.</p>
+          <pre><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"mydb.db"</span>) <span class="kw">as</span> db:
+    ...
+<span class="cm"># db.close() called automatically</span></pre>
+        </div>
+      </section>
+
+      <!-- ColumnFamily -->
+      <section class="api-section" id="py-cf">
+        <h2 class="section-title">ColumnFamily</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">A logical namespace within a <code>KVStore</code>. Obtained via <code>db.create_column_family()</code>, <code>db.open_column_family()</code>, or <code>db.default_column_family()</code>. Always use as a context manager.</p>
+      </section>
+
+      <section class="api-section" id="py-cf-core">
+        <h4 class="subsec">Core Operations</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">cf.<span class="fn">put</span>(key, value, ttl=<span class="kw">None</span>)      <span class="cm"># insert/overwrite; ttl in seconds</span>
+cf.<span class="fn">get</span>(key, default=<span class="kw">None</span>)        <span class="cm"># returns bytes or default</span>
+cf.<span class="fn">delete</span>(key)                    <span class="cm"># raises NotFoundError on miss</span>
+cf.<span class="fn">exists</span>(key) → bool</div>
+          <pre><span class="kw">with</span> db.<span class="fn">open_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> cf:
+    cf.put(<span class="str">"alice"</span>, <span class="str">b"admin"</span>)
+    cf.put(<span class="str">"token"</span>, <span class="str">b"xyz"</span>, ttl=<span class="nm">300</span>)   <span class="cm"># 5 minutes</span>
+    role = cf.get(<span class="str">"alice"</span>)            <span class="cm"># b'admin'</span>
+    cf.delete(<span class="str">"alice"</span>)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-cf-ttl">
+        <h4 class="subsec">CF TTL</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">cf.<span class="fn">ttl</span>(key) → float | None    <span class="cm"># remaining seconds or None (no expiry)</span>
+cf.<span class="fn">purge_expired</span>() → int     <span class="cm"># delete expired keys in this CF only</span></div>
+          <pre>remaining = cf.ttl(<span class="str">"token"</span>)   <span class="cm"># e.g. 284.3</span>
+n = cf.<span class="fn">purge_expired</span>()
+print(<span class="str">f"Cleaned {n} entries"</span>)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-cf-dict">
+        <h4 class="subsec">CF Dict Interface</h4>
+        <div class="fn-entry">
+          <div class="table-wrap"><table>
+            <tr><th>Syntax</th><th>Notes</th></tr>
+            <tr><td><code>cf["key"]</code></td><td>Raises <code>NotFoundError</code> on miss/expiry.</td></tr>
+            <tr><td><code>cf["key"] = "val"</code></td><td>No TTL.</td></tr>
+            <tr><td><code>cf["key", ttl] = "val"</code></td><td>TTL in seconds.</td></tr>
+            <tr><td><code>del cf["key"]</code></td><td>Raises <code>NotFoundError</code> on miss.</td></tr>
+            <tr><td><code>"key" in cf</code></td><td>Existence check.</td></tr>
+          </table></div>
+          <pre>cf[<span class="str">"alice"</span>] = <span class="str">"admin"</span>
+cf[<span class="str">"session:u42"</span>, <span class="nm">300</span>] = <span class="str">"logged-in"</span>
+print(cf[<span class="str">"alice"</span>])           <span class="cm"># b'admin'</span>
+<span class="kw">del</span> cf[<span class="str">"alice"</span>]</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-cf-iter">
+        <h4 class="subsec">CF Iterators</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">cf.<span class="fn">iterator</span>(*, reverse=<span class="kw">False</span>, prefix=<span class="kw">None</span>) → Iterator
+cf.<span class="fn">prefix_iterator</span>(prefix)           → Iterator
+cf.<span class="fn">reverse_iterator</span>()                → Iterator
+cf.<span class="fn">reverse_prefix_iterator</span>(prefix)   → Iterator</div>
+          <pre><span class="kw">for</span> key, value <span class="kw">in</span> cf.<span class="fn">iterator</span>(prefix=<span class="str">"user:"</span>, reverse=<span class="kw">True</span>):
+    print(key, value)</pre>
+        </div>
+      </section>
+
+      <!-- Iterator -->
+      <section class="api-section" id="py-iterator">
+        <h2 class="section-title">Iterator</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Ordered cursor over key-value pairs. Forward iterators yield keys ascending; reverse iterators yield keys descending. Each iteration step yields a <code>(bytes, bytes)</code> tuple.</p>
+      </section>
+
+      <section class="api-section" id="py-iter-proto">
+        <h4 class="subsec">Python Iterator Protocol</h4>
+        <div class="fn-entry">
+          <p class="fn-desc">The most common usage — iterate with a <code>for</code> loop or context manager:</p>
+          <pre><span class="cm"># Simple forward</span>
+<span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>():
+    print(key.decode(), <span class="str">"->"</span>, value.decode())
+
+<span class="cm"># Reverse with context manager (auto-closes)</span>
+<span class="kw">with</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>) <span class="kw">as</span> it:
+    <span class="kw">for</span> key, value <span class="kw">in</span> it:
+        print(key, value)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-iter-manual">
+        <h4 class="subsec">Manual Control</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">it.<span class="fn">first</span>()       <span class="cm"># seek to first key (forward iterator)</span>
+it.<span class="fn">last</span>()        <span class="cm"># seek to last key  (reverse iterator)</span>
+it.<span class="fn">next</span>()        <span class="cm"># advance forward</span>
+it.<span class="fn">prev</span>()        <span class="cm"># advance backward</span>
+it.eof            <span class="cm"># True when no more keys</span>
+it.key            <span class="cm"># current key as bytes</span>
+it.value          <span class="cm"># current value as bytes</span>
+it.<span class="fn">item</span>()        <span class="cm"># (key, value) tuple</span>
+it.<span class="fn">close</span>()</div>
+          <pre><span class="cm"># Manual forward</span>
+it = db.<span class="fn">iterator</span>()
+it.<span class="fn">first</span>()
+<span class="kw">while not</span> it.eof:
+    print(it.key.decode(), it.value.decode())
+    it.<span class="fn">next</span>()
+it.<span class="fn">close</span>()
+
+<span class="cm"># Manual reverse</span>
+it = db.<span class="fn">reverse_iterator</span>()
+it.<span class="fn">last</span>()
+<span class="kw">while not</span> it.eof:
+    k, v = it.<span class="fn">item</span>()
+    print(k, v)
+    it.<span class="fn">prev</span>()
+it.<span class="fn">close</span>()</pre>
+        </div>
+      </section>
+
+      <!-- Type Notes -->
+      <section class="api-section" id="py-types">
+        <h2 class="section-title">Type Notes</h2>
+        <div class="table-wrap"><table>
+          <tr><th>Input type</th><th>Behaviour</th></tr>
+          <tr><td><code>str</code></td><td>Encoded to UTF-8 bytes automatically.</td></tr>
+          <tr><td><code>bytes</code></td><td>Passed through as-is.</td></tr>
+          <tr><td><code>bytearray</code></td><td>Converted to <code>bytes</code>.</td></tr>
+          <tr><td><code>memoryview</code></td><td>Converted to <code>bytes</code>.</td></tr>
+        </table></div>
+        <p class="fn-desc" style="margin-top:0.75rem;"><strong>Return values</strong> are always <code>bytes</code>.</p>
+        <div class="note-info note" style="margin-top:0.75rem;"><strong>Thread safety:</strong> The underlying C store is mutex-protected. Each Python method acquires a mutex and releases the GIL for blocking I/O — safe to share a <code>KVStore</code> across threads. Column family and iterator handles are not independently thread-safe.</div>
+      </section>
+
+    </div><!-- /panel-py -->
+
+  </main>
+</div><!-- /content-wrap -->
+
+<script>
+function switchLang(lang) {
+  // Update tabs
+  document.querySelectorAll('.lang-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('[data-lang="' + lang + '"]').classList.add('active');
+
+  // Update panels
+  document.querySelectorAll('.lang-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + lang).classList.add('active');
+
+  // Update TOC sidebars
+  document.getElementById('toc-c').style.display  = lang === 'c'  ? '' : 'none';
+  document.getElementById('toc-py').style.display = lang === 'py' ? '' : 'none';
+
+  // Update URL hash without scroll
+  history.replaceState(null, '', '#lang=' + lang);
+}
+
+// Restore tab from URL hash on load
+(function() {
+  const m = location.hash.match(/lang=(c|py)/);
+  if (m) switchLang(m[1]);
+})();
+
+// Active TOC link highlighting on scroll
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const id = e.target.id;
+      document.querySelectorAll('.toc a').forEach(a => {
+        a.classList.toggle('active', a.getAttribute('href') === '#' + id);
+      });
+    }
+  });
+}, { rootMargin: '-20% 0px -70% 0px' });
+
+document.querySelectorAll('.api-section[id]').forEach(s => observer.observe(s));
+</script>
+</body>
+</html>
