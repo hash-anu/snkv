@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNKV Benchmarks — SNKV vs SQLite KV Workloads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #0f0f0f;
+    --ink-2:     #2a2a2a;
+    --ink-3:     #4a4a4a;
+    --ink-4:     #767676;
+    --paper:     #f9f7f4;
+    --paper-2:   #f1ede8;
+    --paper-3:   #e6e0d8;
+    --accent:    #c8401a;
+    --accent-2:  #e85d35;
+    --code-bg:   #13100e;
+    --code-fg:   #e8ddd0;
+    --code-com:  #7a6a58;
+    --divider:   #d4cdc4;
+    --rule:      1px solid var(--divider);
+    --snkv-bar:  #c8401a;
+    --sql-bar:   #4a6fa5;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 17px; scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Lora', Georgia, serif;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── SITE HEADER ─────────────────────────────── */
+  .site-header {
+    border-bottom: var(--rule);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+  .site-header .logo {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .site-header .logo span { color: var(--accent); }
+  .site-header nav {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  .site-header nav a {
+    color: inherit;
+    text-decoration: none;
+    letter-spacing: 0.04em;
+    transition: color 0.15s;
+  }
+  .site-header nav a:hover { color: var(--accent); }
+  .site-header nav a.active { color: var(--accent); font-weight: 500; }
+  .github-star {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--ink);
+    color: var(--paper) !important;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: none !important;
+    transition: background 0.15s;
+  }
+  .github-star:hover { background: var(--accent) !important; }
+
+  /* ── HERO ────────────────────────────────────── */
+  .hero {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 4rem 2rem 2.5rem;
+    border-bottom: var(--rule);
+  }
+  .hero .category {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .hero .category::before {
+    content: '';
+    display: block;
+    width: 20px;
+    height: 1px;
+    background: var(--accent);
+  }
+  .hero h1 {
+    font-family: 'Lora', serif;
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 1rem;
+  }
+  .hero .subtitle {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1.05rem;
+    color: var(--ink-3);
+    font-weight: 300;
+    line-height: 1.6;
+    max-width: 640px;
+    margin-bottom: 2rem;
+  }
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    color: var(--ink-4);
+    flex-wrap: wrap;
+  }
+  .meta-row .sep { color: var(--divider); }
+  .meta-row .tag {
+    display: inline-flex;
+    align-items: center;
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 2px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ── MAIN CONTENT ────────────────────────────── */
+  .content {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 3rem 2rem 6rem;
+  }
+
+  /* ── SUMMARY CARDS ───────────────────────────── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 3.5rem;
+  }
+  .summary-card {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 6px;
+    padding: 1.3rem 1.4rem;
+    text-align: center;
+  }
+  .summary-card .sc-value {
+    font-family: 'Lora', serif;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.1;
+    margin-bottom: 0.3rem;
+  }
+  .summary-card .sc-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.78rem;
+    color: var(--ink-4);
+    line-height: 1.4;
+  }
+  .summary-card .sc-sub {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    color: var(--ink-4);
+    margin-top: 0.2rem;
+  }
+
+  /* ── SECTION HEADINGS ────────────────────────── */
+  .section-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+  h2 {
+    font-family: 'Lora', serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 1rem;
+    letter-spacing: -0.01em;
+  }
+  h3 {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin: 2rem 0 0.6rem;
+  }
+  p {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.92rem;
+    color: var(--ink-3);
+    line-height: 1.7;
+    margin-bottom: 1rem;
+  }
+
+  /* ── BENCHMARK TABLE ─────────────────────────── */
+  .bench-section {
+    margin-bottom: 3.5rem;
+  }
+  .bench-legend {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    align-items: center;
+  }
+  .bench-legend .dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 0.35rem;
+    vertical-align: middle;
+  }
+  .dot-snkv { background: var(--snkv-bar); }
+  .dot-sql  { background: var(--sql-bar); }
+
+  .bench-rows { border-top: var(--rule); }
+  .bench-row {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 1.5rem;
+    align-items: center;
+    padding: 1rem 0;
+    border-bottom: var(--rule);
+  }
+  .bench-row:last-child { border-bottom: none; }
+  .bench-name {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--ink-2);
+    line-height: 1.3;
+  }
+  .bench-bars { display: flex; flex-direction: column; gap: 0.45rem; }
+  .bar-wrap {
+    display: grid;
+    grid-template-columns: 90px 1fr 80px 60px;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+  }
+  .bar-who {
+    color: var(--ink-4);
+    text-align: right;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+  }
+  .bar-track {
+    background: var(--paper-3);
+    border-radius: 2px;
+    height: 14px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.6s ease;
+  }
+  .bar-fill-snkv { background: var(--snkv-bar); }
+  .bar-fill-sql  { background: var(--sql-bar); opacity: 0.75; }
+  .bar-ops {
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+  .bar-speedup {
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .bar-spacer { /* empty cell to align speedup only on SNKV row */ }
+
+  /* ── METHODOLOGY BOX ──────────────────────────── */
+  .method-box {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 6px;
+    padding: 1.4rem 1.6rem;
+    margin-bottom: 3rem;
+  }
+  .method-box h3 { margin-top: 0; margin-bottom: 0.75rem; font-size: 0.92rem; }
+  .method-box ul {
+    list-style: none;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-3);
+    line-height: 1.9;
+  }
+  .method-box ul li::before {
+    content: '—';
+    margin-right: 0.5rem;
+    color: var(--accent);
+  }
+  .method-box code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78em;
+    background: var(--paper-3);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+
+  /* ── WHY SECTION ──────────────────────────────── */
+  .why-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .why-card {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 5px;
+    padding: 1.1rem 1.2rem;
+  }
+  .why-card .wc-head {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--ink);
+    margin-bottom: 0.4rem;
+  }
+  .why-card .wc-body {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.81rem;
+    color: var(--ink-3);
+    line-height: 1.55;
+  }
+  .why-card code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78em;
+    background: var(--paper-3);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+
+  /* ── RUN IT YOURSELF ──────────────────────────── */
+  .run-box {
+    border: var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 1.5rem;
+  }
+  .run-box pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1rem 1.3rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+  .run-box pre .cm { color: var(--code-com); font-style: italic; }
+  .run-box pre .kw { color: #e0845a; }
+
+  /* ── DIVIDER ─────────────────────────────────── */
+  .divider {
+    border: none;
+    border-top: var(--rule);
+    margin: 3rem 0;
+  }
+
+  /* ── RESPONSIVE ───────────────────────────────── */
+  @media (max-width: 700px) {
+    .bench-row { grid-template-columns: 1fr; gap: 0.75rem; }
+    .bar-wrap { grid-template-columns: 60px 1fr 70px 50px; }
+    .site-header nav { gap: 1rem; font-size: 0.78rem; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 480px) {
+    .site-header nav a:not(.github-star):not(:nth-last-child(-n+2)) { display: none; }
+    .summary-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SITE HEADER ──────────────────────────────────────────────── -->
+<header class="site-header">
+  <a href="index.html" class="logo">SNKV <span>/</span> Docs</a>
+  <nav>
+    <a href="index.html">Internals</a>
+    <a href="ttl.html">TTL</a>
+    <a href="api.html">API</a>
+    <a href="benchmark.html" class="active">Benchmarks</a>
+    <a href="https://github.com/hash-anu/snkv" target="_blank" rel="noopener" class="github-star">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </nav>
+</header>
+
+<!-- ── HERO ─────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="category">Performance</div>
+  <h1>SNKV vs SQLite<br>on KV Workloads</h1>
+  <p class="subtitle">Both engines use the same B-tree storage core, WAL journal, and page cache. The gap is the SQL layer — parsing, planning, and the VDBE interpreter that SNKV eliminates entirely.</p>
+  <div class="meta-row">
+    <span class="tag">1M records</span>
+    <span class="sep">·</span>
+    <span class="tag">Linux x86-64</span>
+    <span class="sep">·</span>
+    <span class="tag">3 runs averaged</span>
+    <span class="sep">·</span>
+    <span class="tag">WAL · SYNC_NORMAL</span>
+  </div>
+</section>
+
+<!-- ── CONTENT ───────────────────────────────────────────────────── -->
+<div class="content">
+
+  <!-- Summary cards -->
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="sc-value">1.64×</div>
+      <div class="sc-label">faster sequential writes</div>
+      <div class="sc-sub">232K vs 142K ops/s</div>
+    </div>
+    <div class="summary-card">
+      <div class="sc-value">1.85×</div>
+      <div class="sc-label">faster sequential scan</div>
+      <div class="sc-sub">2.89M vs 1.56M ops/s</div>
+    </div>
+    <div class="summary-card">
+      <div class="sc-value">~2×</div>
+      <div class="sc-label">faster updates &amp; deletes</div>
+      <div class="sc-sub">31K vs 16K ops/s</div>
+    </div>
+    <div class="summary-card">
+      <div class="sc-value">1.77×</div>
+      <div class="sc-label">faster random reads</div>
+      <div class="sc-sub">160K vs 90K ops/s</div>
+    </div>
+  </div>
+
+  <!-- Main benchmark chart -->
+  <div class="bench-section">
+    <div class="section-label">SNKV vs SQLite</div>
+    <h2>Operation-by-Operation</h2>
+    <p>SQLite uses a <code>WITHOUT ROWID</code> table with a BLOB primary key — the fairest possible comparison. Both share identical page cache, WAL, and sync settings. All differences are purely the SQL layer cost.</p>
+
+    <div class="bench-legend">
+      <span><span class="dot dot-snkv"></span>SNKV</span>
+      <span><span class="dot dot-sql"></span>SQLite (WITHOUT ROWID)</span>
+    </div>
+
+    <div class="bench-rows">
+
+      <!-- Sequential writes: SNKV 232K, SQLite 142K, max=232K -->
+      <div class="bench-row">
+        <div class="bench-name">Sequential Writes</div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">232K ops/s</div>
+            <div class="bar-speedup">1.64×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:61%"></div></div>
+            <div class="bar-ops">142K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Random reads: SNKV 160K, SQLite 90K, max=160K -->
+      <div class="bench-row">
+        <div class="bench-name">Random Reads</div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">160K ops/s</div>
+            <div class="bar-speedup">1.77×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:56%"></div></div>
+            <div class="bar-ops">90K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sequential scan: SNKV 2.89M, SQLite 1.56M, max=2.89M -->
+      <div class="bench-row">
+        <div class="bench-name">Sequential Scan</div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">2.89M ops/s</div>
+            <div class="bar-speedup">1.85×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:54%"></div></div>
+            <div class="bar-ops">1.56M ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Exists checks: SNKV 173K, SQLite 93K, max=173K -->
+      <div class="bench-row">
+        <div class="bench-name">Exists Checks</div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">173K ops/s</div>
+            <div class="bar-speedup">1.85×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:54%"></div></div>
+            <div class="bar-ops">93K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mixed workload: SNKV 62K, SQLite 34K, max=62K -->
+      <div class="bench-row">
+        <div class="bench-name">Mixed Workload<br><span style="font-weight:400;font-size:0.78rem;color:var(--ink-4);">80% read / 20% write</span></div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">62K ops/s</div>
+            <div class="bar-speedup">1.79×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:55%"></div></div>
+            <div class="bar-ops">34K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Random updates: SNKV 31K, SQLite 16K, max=31K -->
+      <div class="bench-row">
+        <div class="bench-name">Random Updates</div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">31K ops/s</div>
+            <div class="bar-speedup">1.9×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:52%"></div></div>
+            <div class="bar-ops">16K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Random deletes: SNKV 31K, SQLite 16K, max=31K -->
+      <div class="bench-row">
+        <div class="bench-name">Random Deletes</div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">31K ops/s</div>
+            <div class="bar-speedup">~2×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:52%"></div></div>
+            <div class="bar-ops">16K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bulk insert: SNKV 248K, SQLite 211K, max=248K -->
+      <div class="bench-row">
+        <div class="bench-name">Bulk Insert<br><span style="font-weight:400;font-size:0.78rem;color:var(--ink-4);">1K rows per transaction</span></div>
+        <div class="bench-bars">
+          <div class="bar-wrap">
+            <div class="bar-who">SNKV</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-snkv" style="width:100%"></div></div>
+            <div class="bar-ops">248K ops/s</div>
+            <div class="bar-speedup">1.17×</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-who">SQLite</div>
+            <div class="bar-track"><div class="bar-fill bar-fill-sql" style="width:85%"></div></div>
+            <div class="bar-ops">211K ops/s</div>
+            <div class="bar-spacer"></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /bench-rows -->
+  </div><!-- /bench-section -->
+
+  <hr class="divider">
+
+  <!-- Methodology -->
+  <div class="method-box">
+    <h3>Methodology</h3>
+    <ul>
+      <li><strong>Dataset:</strong> 1,000,000 records, 16-byte random keys, 100-byte values</li>
+      <li><strong>Runs:</strong> 3 independent runs on a fresh database file; best time reported</li>
+      <li><strong>Config:</strong> WAL journal mode, <code>synchronous=NORMAL</code>, 2000-page (8 MB) page cache, 4096-byte pages — <em>identical for both engines</em></li>
+      <li><strong>SQLite schema:</strong> <code>CREATE TABLE kv (k BLOB PRIMARY KEY, v BLOB) WITHOUT ROWID</code> — single B-tree keyed on the same field, prepared statements for all DML</li>
+      <li><strong>Peak memory:</strong> Both SNKV and SQLite use ~10.8 MB RSS — they share the same pager and page cache infrastructure</li>
+      <li><strong>Platform:</strong> Linux x86-64, NVMe storage</li>
+    </ul>
+  </div>
+
+  <!-- Why faster -->
+  <div class="section-label">Analysis</div>
+  <h2>Why SNKV Is Faster</h2>
+  <p>SNKV and SQLite use the same B-tree storage engine at the bottom. Every performance difference comes from what each layer adds on top of it.</p>
+
+  <div class="why-grid">
+    <div class="why-card">
+      <div class="wc-head">No SQL parsing</div>
+      <div class="wc-body">Each SQLite operation tokenises, parses, and validates a SQL string before execution. SNKV calls the B-tree API directly — zero parsing overhead per operation.</div>
+    </div>
+    <div class="why-card">
+      <div class="wc-head">No query planner</div>
+      <div class="wc-body">SQLite chooses an execution plan for every statement. For KV access the plan is always "seek the primary key" — SNKV does exactly that without the planning step.</div>
+    </div>
+    <div class="why-card">
+      <div class="wc-head">No VDBE interpreter</div>
+      <div class="wc-body">SQLite compiles queries to bytecode run by a virtual machine. SNKV calls compiled C functions. No bytecode dispatch loop on the critical path.</div>
+    </div>
+    <div class="why-card">
+      <div class="wc-head">Cached read cursor</div>
+      <div class="wc-body">SNKV keeps a persistent read cursor open per column family. SQLite opens and closes a new cursor for each statement. Cursor open/close touches the pager — SNKV skips it on every read.</div>
+    </div>
+    <div class="why-card">
+      <div class="wc-head">Updates &amp; deletes: ~2× gain</div>
+      <div class="wc-body">These show the largest gap because each SQLite call parses, plans, and executes a full <code>UPDATE</code> or <code>DELETE</code> statement. SNKV is a direct B-tree seek + in-place write.</div>
+    </div>
+    <div class="why-card">
+      <div class="wc-head">Bulk insert: 1.17× gain</div>
+      <div class="wc-body">The smallest gap — both commit a single large B-tree transaction, so per-row overhead dominates. Prepared statements close the gap; the storage cost is nearly equal.</div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- Run it yourself -->
+  <div class="section-label">Source</div>
+  <h2>Run It Yourself</h2>
+  <p>Both benchmarks are open source. Clone and build to reproduce results on your hardware.</p>
+
+  <h3>C benchmark — SNKV</h3>
+  <div class="run-box">
+    <pre><span class="cm"># From the SNKV repo root</span>
+make test
+./tests/test_benchmark</pre>
+  </div>
+
+  <h3>C benchmark — SQLite comparison</h3>
+  <div class="run-box">
+    <pre><span class="cm"># https://github.com/hash-anu/sqllite-benchmark-kv</span>
+git clone https://github.com/hash-anu/sqllite-benchmark-kv
+cd sqllite-benchmark-kv
+make
+./sqlite_benchmark</pre>
+  </div>
+
+  <h3>Python benchmark — SNKV vs diskcache</h3>
+  <div class="run-box">
+    <pre><span class="cm"># From the SNKV repo root</span>
+pip install diskcache snkv
+python python/examples/benchmark_diskcache.py</pre>
+  </div>
+
+  <p style="margin-top:1.5rem;">
+    Additional comparisons against LMDB and RocksDB:<br>
+    LMDB — <a href="https://github.com/hash-anu/lmdb-benchmark" style="color:var(--accent);">github.com/hash-anu/lmdb-benchmark</a><br>
+    RocksDB — <a href="https://github.com/hash-anu/rocksdb-benchmark" style="color:var(--accent);">github.com/hash-anu/rocksdb-benchmark</a>
+  </p>
+
+</div><!-- /content -->
+
+</body>
+</html>
