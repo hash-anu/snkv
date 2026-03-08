@@ -42,6 +42,7 @@ int main(void) {
     kvstore_close(db);
 }
 ```
+**C/C++ API Reference:** [hash-anu.github.io/snkv/api.html](https://hash-anu.github.io/snkv/api.html#lang=c)
 
 ---
 
@@ -170,8 +171,6 @@ with KVStore("mydb.db") as db:
 
 Full documentation — installation, API reference, examples, and thread-safety notes — is in
 **[python/README.md](python/README.md)**.
-
-**C/C++ API Reference:** [hash-anu.github.io/snkv/api.html](https://hash-anu.github.io/snkv/api.html#lang=c)
 
 ![SNKV Python API Demo](demo.gif)
 
