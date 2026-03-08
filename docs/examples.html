@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNKV Examples — C/C++ and Python</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #0f0f0f;
+    --ink-2:     #2a2a2a;
+    --ink-3:     #4a4a4a;
+    --ink-4:     #767676;
+    --paper:     #f9f7f4;
+    --paper-2:   #f1ede8;
+    --paper-3:   #e6e0d8;
+    --accent:    #c8401a;
+    --accent-2:  #e85d35;
+    --code-bg:   #13100e;
+    --code-fg:   #e8ddd0;
+    --code-com:  #7a6a58;
+    --code-key:  #e0845a;
+    --code-str:  #8ab87a;
+    --code-num:  #7aabd4;
+    --divider:   #d4cdc4;
+    --rule:      1px solid var(--divider);
+    --py-accent: #3572A5;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 17px; scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Lora', Georgia, serif;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── SITE HEADER ─────────────────────────────────────────── */
+  .site-header {
+    border-bottom: var(--rule);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+  .site-header .logo {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .site-header .logo span { color: var(--accent); }
+  .site-header nav {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  .site-header nav a {
+    color: inherit;
+    text-decoration: none;
+    letter-spacing: 0.04em;
+    transition: color 0.15s;
+  }
+  .site-header nav a:hover { color: var(--accent); }
+  .site-header nav a.active { color: var(--accent); font-weight: 500; }
+  .github-star {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--ink);
+    color: var(--paper) !important;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: none !important;
+    transition: background 0.15s;
+  }
+  .github-star:hover { background: var(--accent) !important; }
+
+  /* ── HERO ─────────────────────────────────────────────────── */
+  .hero {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 4rem 2rem 2rem;
+    border-bottom: var(--rule);
+  }
+  .hero .category {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .hero .category::before {
+    content: '';
+    display: block;
+    width: 20px;
+    height: 1px;
+    background: var(--accent);
+  }
+  .hero h1 {
+    font-family: 'Lora', serif;
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 1rem;
+  }
+  .hero .subtitle {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1.05rem;
+    color: var(--ink-3);
+    font-weight: 300;
+    line-height: 1.6;
+    max-width: 620px;
+    margin-bottom: 2rem;
+  }
+
+  /* ── LANG TABS ─────────────────────────────────────────────── */
+  .lang-tabs {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    display: flex;
+    gap: 0;
+    border-bottom: var(--rule);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.84rem;
+  }
+  .lang-tab {
+    padding: 0.85rem 1.6rem;
+    cursor: pointer;
+    color: var(--ink-4);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 400;
+    letter-spacing: 0.03em;
+    user-select: none;
+  }
+  .lang-tab:hover { color: var(--ink-2); }
+  .lang-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+  .lang-tab .lang-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    background: var(--paper-2);
+    color: var(--ink-3);
+    border: var(--rule);
+  }
+  .lang-tab.active .lang-badge { background: #fde8e0; border-color: #e0a090; color: var(--accent); }
+
+  /* ── LAYOUT ──────────────────────────────────────────────── */
+  .content-wrap {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── SIDEBAR TOC ─────────────────────────────────────────── */
+  .toc {
+    position: sticky;
+    top: 56px;
+    height: calc(100vh - 56px);
+    overflow-y: auto;
+    padding: 2rem 1.5rem 2rem 2rem;
+    border-right: var(--rule);
+    font-family: 'DM Sans', sans-serif;
+  }
+  .toc::-webkit-scrollbar { width: 4px; }
+  .toc::-webkit-scrollbar-track { background: transparent; }
+  .toc::-webkit-scrollbar-thumb { background: var(--paper-3); border-radius: 2px; }
+  .toc-title {
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 1rem;
+  }
+  .toc ul { list-style: none; }
+  .toc li { margin-bottom: 0.1rem; }
+  .toc a {
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    text-decoration: none;
+    display: block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    line-height: 1.4;
+    transition: color 0.12s, background 0.12s;
+  }
+  .toc a:hover { color: var(--ink); background: var(--paper-2); }
+  .toc a.active { color: var(--accent); background: #fde8e0; }
+  .toc .toc-section { margin-top: 1rem; }
+  .toc .toc-section > a { font-weight: 500; font-size: 0.8rem; color: var(--ink-2); }
+
+  /* ── MAIN CONTENT ──────────────────────────────────────── */
+  .main-content { padding: 3rem 3rem 5rem 3.5rem; min-width: 0; }
+
+  .lang-panel { display: none; }
+  .lang-panel.active { display: block; }
+
+  /* ── EXAMPLE SECTIONS ─────────────────────────────────── */
+  .ex-section {
+    margin-bottom: 4rem;
+    padding-top: 1rem;
+  }
+  .section-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+  }
+  h2.section-title {
+    font-family: 'Lora', serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.01em;
+  }
+  .section-desc {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.92rem;
+    color: var(--ink-3);
+    line-height: 1.6;
+    margin-bottom: 1.5rem;
+    max-width: 640px;
+  }
+
+  /* ── EXAMPLE CARD ────────────────────────────────────── */
+  .ex-card {
+    border: var(--rule);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+  }
+  .ex-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.7rem 1.2rem;
+    background: var(--paper-2);
+    border-bottom: var(--rule);
+  }
+  .ex-card-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--ink-2);
+    letter-spacing: 0.01em;
+  }
+  .ex-card-file {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--ink-4);
+  }
+  .ex-card pre {
+    margin: 0;
+    border-radius: 0;
+    border: none;
+    font-size: 0.78rem;
+  }
+
+  /* ── CODE ──────────────────────────────────────────── */
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1.1rem 1.3rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    margin: 0.75rem 0;
+    tab-size: 2;
+  }
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82em;
+    background: var(--paper-3);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; border-radius: 0; }
+
+  .kw  { color: var(--code-key); }
+  .str { color: var(--code-str); }
+  .cm  { color: var(--code-com); font-style: italic; }
+  .nm  { color: var(--code-num); }
+  .fn  { color: #c9a96e; }
+  .pp  { color: #b07ab8; }  /* preprocessor */
+
+  .note {
+    border-left: 3px solid var(--accent);
+    background: #fde8e0;
+    padding: 0.7rem 1rem;
+    border-radius: 0 4px 4px 0;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-2);
+    margin: 1rem 0;
+  }
+  .note-info {
+    border-left-color: #3572A5;
+    background: #e8f0fa;
+  }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="logo" href="index.html">SNK<span>V</span></a>
+  <nav>
+    <a href="index.html">Overview</a>
+    <a href="api.html">API Reference</a>
+    <a href="examples.html" class="active">Examples</a>
+    <a href="benchmark.html">Benchmark</a>
+    <a href="https://github.com/hash-anu/snkv" class="github-star">★ Star</a>
+  </nav>
+</header>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="category">Code Examples</div>
+  <h1>SNKV Examples</h1>
+  <p class="subtitle">Runnable examples for every major feature — CRUD, transactions, column families, iterators, TTL, seek, conditional insert, bulk clear, and more. Switch tabs to see the C or Python version side by side.</p>
+</div>
+
+<!-- Language tabs -->
+<div class="lang-tabs">
+  <div class="lang-tab active" onclick="switchLang('c')">
+    C / C++ <span class="lang-badge">C99</span>
+  </div>
+  <div class="lang-tab" onclick="switchLang('py')">
+    Python <span class="lang-badge">3.8+</span>
+  </div>
+</div>
+
+<div class="content-wrap">
+
+  <!-- ── C sidebar ─────────────────────────────────────────── -->
+  <nav class="toc" id="toc-c">
+    <div class="toc-title">C Examples</div>
+    <ul>
+      <li class="toc-section"><a href="#c-basic">Basic CRUD</a></li>
+      <li class="toc-section"><a href="#c-transactions">Transactions</a></li>
+      <li class="toc-section"><a href="#c-cf">Column Families</a></li>
+      <li class="toc-section"><a href="#c-iterators">Iterators</a></li>
+      <li class="toc-section"><a href="#c-reverse">Reverse Iterators</a></li>
+      <li class="toc-section"><a href="#c-ttl">TTL / Expiry</a></li>
+      <li class="toc-section"><a href="#c-new-apis">New APIs</a></li>
+      <li class="toc-section"><a href="#c-session">Session Store</a></li>
+      <li class="toc-section"><a href="#c-checkpoint">Checkpoint</a></li>
+    </ul>
+  </nav>
+
+  <!-- ── Python sidebar ────────────────────────────────────── -->
+  <nav class="toc" id="toc-py" style="display:none;">
+    <div class="toc-title">Python Examples</div>
+    <ul>
+      <li class="toc-section"><a href="#py-basic">Basic CRUD</a></li>
+      <li class="toc-section"><a href="#py-transactions">Transactions</a></li>
+      <li class="toc-section"><a href="#py-cf">Column Families</a></li>
+      <li class="toc-section"><a href="#py-iterators">Iterators</a></li>
+      <li class="toc-section"><a href="#py-reverse">Reverse Iterators</a></li>
+      <li class="toc-section"><a href="#py-ttl">TTL / Expiry</a></li>
+      <li class="toc-section"><a href="#py-new-apis">New APIs</a></li>
+      <li class="toc-section"><a href="#py-session">Session Store</a></li>
+      <li class="toc-section"><a href="#py-multiprocess">Multiprocess</a></li>
+    </ul>
+  </nav>
+
+  <main class="main-content">
+
+    <!-- ════════════════════════════════════════════════ C PANEL -->
+    <div class="lang-panel active" id="panel-c">
+
+      <!-- Basic CRUD -->
+      <section class="ex-section" id="c-basic">
+        <div class="section-label">Getting Started</div>
+        <h2 class="section-title">Basic CRUD</h2>
+        <p class="section-desc">Open a store, write and read key-value pairs, check existence, and delete entries.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Hello World</span>
+            <span class="ex-card-file">examples/basic.c</span>
+          </div>
+<pre><span class="pp">#define SNKV_IMPLEMENTATION</span>
+<span class="pp">#include</span> <span class="str">"snkv.h"</span>
+
+KVStore *pKV = <span class="kw">NULL</span>;
+<span class="fn">kvstore_open</span>(<span class="str">"hello.db"</span>, &amp;pKV, KVSTORE_JOURNAL_WAL);
+
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"greeting"</span>, <span class="nm">8</span>, <span class="str">"Hello, World!"</span>, <span class="nm">13</span>);
+
+<span class="kw">void</span> *pValue = <span class="kw">NULL</span>; <span class="kw">int</span> nValue = <span class="nm">0</span>;
+<span class="fn">kvstore_get</span>(pKV, <span class="str">"greeting"</span>, <span class="nm">8</span>, &amp;pValue, &amp;nValue);
+<span class="fn">printf</span>(<span class="str">"Retrieved: %.*s\n"</span>, nValue, (<span class="kw">char</span>*)pValue);
+<span class="fn">snkv_free</span>(pValue);
+
+<span class="fn">kvstore_close</span>(pKV);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">CRUD + Existence Check</span>
+            <span class="ex-card-file">examples/basic.c</span>
+          </div>
+<pre><span class="cm">/* Create */</span>
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"user:1"</span>, <span class="nm">6</span>, <span class="str">"Alice Smith"</span>, <span class="nm">11</span>);
+
+<span class="cm">/* Update */</span>
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"user:1"</span>, <span class="nm">6</span>, <span class="str">"Alice Johnson"</span>, <span class="nm">13</span>);
+
+<span class="cm">/* Delete */</span>
+<span class="fn">kvstore_delete</span>(pKV, <span class="str">"user:1"</span>, <span class="nm">6</span>);
+
+<span class="cm">/* Existence check */</span>
+<span class="kw">int</span> exists = <span class="nm">0</span>;
+<span class="fn">kvstore_exists</span>(pKV, <span class="str">"item:laptop"</span>, <span class="nm">11</span>, &amp;exists);
+<span class="fn">printf</span>(<span class="str">"%s\n"</span>, exists ? <span class="str">"EXISTS"</span> : <span class="str">"NOT FOUND"</span>);</pre>
+        </div>
+      </section>
+
+      <!-- Transactions -->
+      <section class="ex-section" id="c-transactions">
+        <div class="section-label">ACID</div>
+        <h2 class="section-title">Transactions</h2>
+        <p class="section-desc">Batch multiple writes into a single atomic commit, or roll back on error.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Atomic Batch + Rollback</span>
+            <span class="ex-card-file">examples/transactions.c</span>
+          </div>
+<pre><span class="kw">int</span> rc = <span class="fn">kvstore_begin</span>(pKV, <span class="nm">1</span>);   <span class="cm">/* 1 = write */</span>
+
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"account:alice"</span>, <span class="nm">13</span>, <span class="str">"800"</span>, <span class="nm">3</span>);
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"account:bob"</span>,   <span class="nm">11</span>, <span class="str">"700"</span>, <span class="nm">3</span>);
+
+<span class="kw">if</span> (rc == KVSTORE_OK) {
+    <span class="fn">kvstore_commit</span>(pKV);
+    <span class="fn">printf</span>(<span class="str">"Transfer committed\n"</span>);
+} <span class="kw">else</span> {
+    <span class="fn">kvstore_rollback</span>(pKV);   <span class="cm">/* both writes discarded */</span>
+}</pre>
+        </div>
+      </section>
+
+      <!-- Column Families -->
+      <section class="ex-section" id="c-cf">
+        <div class="section-label">Namespaces</div>
+        <h2 class="section-title">Column Families</h2>
+        <p class="section-desc">Logical namespaces within a single file. Each CF is a separate B-tree — keys never bleed across CFs.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Create, Use, and List</span>
+            <span class="ex-card-file">examples/column_families.c</span>
+          </div>
+<pre>KVColumnFamily *pUsersCF = <span class="kw">NULL</span>, *pProductsCF = <span class="kw">NULL</span>;
+
+<span class="fn">kvstore_cf_create</span>(pKV, <span class="str">"users"</span>,    &amp;pUsersCF);
+<span class="fn">kvstore_cf_create</span>(pKV, <span class="str">"products"</span>, &amp;pProductsCF);
+
+<span class="fn">kvstore_cf_put</span>(pUsersCF,    <span class="str">"user:1"</span>,  <span class="nm">6</span>, <span class="str">"alice@example.com"</span>, <span class="nm">17</span>);
+<span class="fn">kvstore_cf_put</span>(pProductsCF, <span class="str">"prod:100"</span>,<span class="nm">8</span>, <span class="str">"Laptop:$999"</span>,       <span class="nm">11</span>);
+
+<span class="cm">/* List all CFs */</span>
+<span class="kw">char</span> **azNames; <span class="kw">int</span> nCount;
+<span class="fn">kvstore_cf_list</span>(pKV, &amp;azNames, &amp;nCount);
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; nCount; i++) {
+    <span class="fn">printf</span>(<span class="str">"  CF: %s\n"</span>, azNames[i]);
+    <span class="fn">snkv_free</span>(azNames[i]);
+}
+<span class="fn">snkv_free</span>(azNames);
+
+<span class="fn">kvstore_cf_close</span>(pUsersCF);
+<span class="fn">kvstore_cf_close</span>(pProductsCF);</pre>
+        </div>
+      </section>
+
+      <!-- Iterators -->
+      <section class="ex-section" id="c-iterators">
+        <div class="section-label">Ordered Scan</div>
+        <h2 class="section-title">Iterators</h2>
+        <p class="section-desc">Walk all keys in ascending order or scan only keys matching a prefix using the B-tree directly.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Full Scan</span>
+            <span class="ex-card-file">examples/iterators.c</span>
+          </div>
+<pre>KVIterator *pIter = <span class="kw">NULL</span>;
+<span class="fn">kvstore_iterator_create</span>(pKV, &amp;pIter);
+
+<span class="kw">for</span> (<span class="fn">kvstore_iterator_first</span>(pIter);
+     !<span class="fn">kvstore_iterator_eof</span>(pIter);
+     <span class="fn">kvstore_iterator_next</span>(pIter)) {
+
+    <span class="kw">void</span> *pKey, *pValue; <span class="kw">int</span> nKey, nValue;
+    <span class="fn">kvstore_iterator_key</span>(pIter, &amp;pKey, &amp;nKey);
+    <span class="fn">kvstore_iterator_value</span>(pIter, &amp;pValue, &amp;nValue);
+    <span class="fn">printf</span>(<span class="str">"%.*s -> %.*s\n"</span>, nKey, (<span class="kw">char</span>*)pKey, nValue, (<span class="kw">char</span>*)pValue);
+}
+
+<span class="fn">kvstore_iterator_close</span>(pIter);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Prefix Scan</span>
+            <span class="ex-card-file">examples/iterators.c</span>
+          </div>
+<pre>KVIterator *pIter = <span class="kw">NULL</span>;
+<span class="fn">kvstore_prefix_iterator_create</span>(pKV, <span class="str">"user:"</span>, <span class="nm">5</span>, &amp;pIter);
+
+<span class="kw">for</span> (<span class="fn">kvstore_iterator_first</span>(pIter);
+     !<span class="fn">kvstore_iterator_eof</span>(pIter);
+     <span class="fn">kvstore_iterator_next</span>(pIter)) {
+
+    <span class="kw">void</span> *pKey; <span class="kw">int</span> nKey;
+    <span class="fn">kvstore_iterator_key</span>(pIter, &amp;pKey, &amp;nKey);
+    <span class="fn">printf</span>(<span class="str">"  %.*s\n"</span>, nKey, (<span class="kw">char</span>*)pKey);
+}
+
+<span class="fn">kvstore_iterator_close</span>(pIter);</pre>
+        </div>
+      </section>
+
+      <!-- Reverse Iterators -->
+      <section class="ex-section" id="c-reverse">
+        <div class="section-label">Descending Scan</div>
+        <h2 class="section-title">Reverse Iterators</h2>
+        <p class="section-desc">Walk keys in descending order — pure B-tree traversal, no sort, no full scan.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Reverse Full + Reverse Prefix Scan</span>
+            <span class="ex-card-file">examples/iterator_reverse.c</span>
+          </div>
+<pre><span class="cm">/* Reverse full scan — largest key first */</span>
+KVIterator *pIter = <span class="kw">NULL</span>;
+<span class="fn">kvstore_reverse_iterator_create</span>(pKV, &amp;pIter);
+
+<span class="kw">for</span> (<span class="fn">kvstore_iterator_last</span>(pIter);
+     !<span class="fn">kvstore_iterator_eof</span>(pIter);
+     <span class="fn">kvstore_iterator_prev</span>(pIter)) {
+
+    <span class="kw">void</span> *pKey; <span class="kw">int</span> nKey;
+    <span class="fn">kvstore_iterator_key</span>(pIter, &amp;pKey, &amp;nKey);
+    <span class="fn">printf</span>(<span class="str">"%.*s\n"</span>, nKey, (<span class="kw">char</span>*)pKey);
+}
+<span class="fn">kvstore_iterator_close</span>(pIter);
+
+<span class="cm">/* Reverse prefix scan — largest matching key first */</span>
+<span class="fn">kvstore_reverse_prefix_iterator_create</span>(pKV, <span class="str">"score:"</span>, <span class="nm">6</span>, &amp;pIter);
+<span class="kw">for</span> (<span class="fn">kvstore_iterator_last</span>(pIter);
+     !<span class="fn">kvstore_iterator_eof</span>(pIter);
+     <span class="fn">kvstore_iterator_prev</span>(pIter)) {
+    <span class="cm">/* ... */</span>
+}
+<span class="fn">kvstore_iterator_close</span>(pIter);</pre>
+        </div>
+      </section>
+
+      <!-- TTL -->
+      <section class="ex-section" id="c-ttl">
+        <div class="section-label">Key Expiry</div>
+        <h2 class="section-title">TTL — Time-To-Live</h2>
+        <p class="section-desc">Per-key expiry stored in a dedicated index. Expired keys are lazily deleted on access; bulk cleanup via <code>kvstore_purge_expired</code>.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Put with TTL, Lazy Expiry, Purge</span>
+            <span class="ex-card-file">examples/ttl.c</span>
+          </div>
+<pre><span class="cm">/* Put with TTL — expire_ms is an absolute Unix timestamp in ms */</span>
+<span class="kw">int64_t</span> expire_ms = <span class="fn">kvstore_now_ms</span>() + <span class="nm">5000</span>;   <span class="cm">/* 5 seconds */</span>
+<span class="fn">kvstore_put_ttl</span>(pKV, <span class="str">"session"</span>, <span class="nm">7</span>, <span class="str">"tok123"</span>, <span class="nm">6</span>, expire_ms);
+
+<span class="cm">/* Inspect remaining lifetime */</span>
+<span class="kw">int64_t</span> remaining = <span class="nm">0</span>;
+<span class="fn">kvstore_ttl_remaining</span>(pKV, <span class="str">"session"</span>, <span class="nm">7</span>, &amp;remaining);
+<span class="fn">printf</span>(<span class="str">"TTL: %lld ms remaining\n"</span>, (<span class="kw">long long</span>)remaining);
+
+<span class="cm">/* Lazy expiry — expired key returns KVSTORE_NOTFOUND */</span>
+<span class="kw">void</span> *pVal = <span class="kw">NULL</span>; <span class="kw">int</span> nVal = <span class="nm">0</span>; <span class="kw">int64_t</span> rem = <span class="nm">0</span>;
+<span class="kw">int</span> rc = <span class="fn">kvstore_get_ttl</span>(pKV, <span class="str">"session"</span>, <span class="nm">7</span>, &amp;pVal, &amp;nVal, &amp;rem);
+
+<span class="cm">/* Bulk purge all expired keys */</span>
+<span class="kw">int</span> n = <span class="nm">0</span>;
+<span class="fn">kvstore_purge_expired</span>(pKV, &amp;n);
+<span class="fn">printf</span>(<span class="str">"Removed %d expired keys\n"</span>, n);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">CF-level TTL</span>
+            <span class="ex-card-file">examples/ttl.c</span>
+          </div>
+<pre>KVColumnFamily *pCF = <span class="kw">NULL</span>;
+<span class="fn">kvstore_cf_create</span>(pKV, <span class="str">"rate_limits"</span>, &amp;pCF);
+
+<span class="kw">int64_t</span> expire_ms = <span class="fn">kvstore_now_ms</span>() + <span class="nm">1000</span>;   <span class="cm">/* 1 second */</span>
+<span class="fn">kvstore_cf_put_ttl</span>(pCF, <span class="str">"user:42"</span>, <span class="nm">7</span>, <span class="str">"5"</span>, <span class="nm">1</span>, expire_ms);
+
+<span class="kw">int64_t</span> rem = <span class="nm">0</span>;
+<span class="fn">kvstore_cf_ttl_remaining</span>(pCF, <span class="str">"user:42"</span>, <span class="nm">7</span>, &amp;rem);
+<span class="fn">printf</span>(<span class="str">"Remaining: %lld ms\n"</span>, (<span class="kw">long long</span>)rem);
+
+<span class="kw">int</span> n = <span class="nm">0</span>;
+<span class="fn">kvstore_cf_purge_expired</span>(pCF, &amp;n);
+<span class="fn">kvstore_cf_close</span>(pCF);</pre>
+        </div>
+      </section>
+
+      <!-- New APIs -->
+      <section class="ex-section" id="c-new-apis">
+        <div class="section-label">New APIs</div>
+        <h2 class="section-title">Seek · put_if_absent · clear · count · stats</h2>
+        <p class="section-desc">O(log N) positional seek, atomic conditional insert, bulk truncation, page-level entry count, and extended diagnostics.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Iterator Seek — forward and reverse</span>
+            <span class="ex-card-file">examples/new_apis.c</span>
+          </div>
+<pre>KVIterator *pIter = <span class="kw">NULL</span>;
+
+<span class="cm">/* Forward seek — positions at first key >= target */</span>
+<span class="fn">kvstore_iterator_create</span>(pKV, &amp;pIter);
+<span class="fn">kvstore_iterator_seek</span>(pIter, <span class="str">"cherry"</span>, <span class="nm">6</span>);
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(pIter)) {
+    <span class="kw">void</span> *pKey; <span class="kw">int</span> nKey;
+    <span class="fn">kvstore_iterator_key</span>(pIter, &amp;pKey, &amp;nKey);
+    <span class="fn">printf</span>(<span class="str">"%.*s\n"</span>, nKey, (<span class="kw">char</span>*)pKey);
+    <span class="fn">kvstore_iterator_next</span>(pIter);
+}
+<span class="fn">kvstore_iterator_close</span>(pIter);
+
+<span class="cm">/* Reverse seek — positions at last key <= target */</span>
+<span class="fn">kvstore_reverse_iterator_create</span>(pKV, &amp;pIter);
+<span class="fn">kvstore_iterator_last</span>(pIter);
+<span class="fn">kvstore_iterator_seek</span>(pIter, <span class="str">"bbc"</span>, <span class="nm">3</span>);   <span class="cm">/* lands on "bbb" */</span>
+<span class="fn">kvstore_iterator_close</span>(pIter);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">put_if_absent — atomic conditional insert</span>
+            <span class="ex-card-file">examples/new_apis.c</span>
+          </div>
+<pre"><span class="kw">int</span> inserted = <span class="nm">0</span>;
+
+<span class="cm">/* Key absent → inserted=1 */</span>
+<span class="fn">kvstore_put_if_absent</span>(pKV, <span class="str">"lock"</span>, <span class="nm">4</span>, <span class="str">"owner:alice"</span>, <span class="nm">11</span>, <span class="nm">0</span>, &amp;inserted);
+<span class="fn">printf</span>(<span class="str">"inserted=%d\n"</span>, inserted);   <span class="cm">/* 1 */</span>
+
+<span class="cm">/* Key present → inserted=0, original value unchanged */</span>
+<span class="fn">kvstore_put_if_absent</span>(pKV, <span class="str">"lock"</span>, <span class="nm">4</span>, <span class="str">"owner:bob"</span>,   <span class="nm">9</span>,  <span class="nm">0</span>, &amp;inserted);
+<span class="fn">printf</span>(<span class="str">"inserted=%d\n"</span>, inserted);   <span class="cm">/* 0 */</span>
+
+<span class="cm">/* With TTL — auto-releasing distributed lock */</span>
+<span class="kw">int64_t</span> exp = <span class="fn">kvstore_now_ms</span>() + <span class="nm">30000</span>;
+<span class="fn">kvstore_put_if_absent</span>(pKV, <span class="str">"job:1"</span>, <span class="nm">5</span>, <span class="str">"worker-A"</span>, <span class="nm">8</span>, exp, <span class="kw">NULL</span>);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">clear · count · stats</span>
+            <span class="ex-card-file">examples/new_apis.c</span>
+          </div>
+<pre"><span class="cm">/* count — O(pages) via sqlite3BtreeCount */</span>
+<span class="kw">int64_t</span> n = <span class="nm">0</span>;
+<span class="fn">kvstore_count</span>(pKV, &amp;n);
+<span class="fn">printf</span>(<span class="str">"entries: %lld\n"</span>, (<span class="kw">long long</span>)n);
+
+<span class="cm">/* clear — O(pages) bulk truncation; TTL index cleared atomically */</span>
+<span class="fn">kvstore_clear</span>(pKV);
+<span class="fn">kvstore_count</span>(pKV, &amp;n);
+<span class="fn">printf</span>(<span class="str">"after clear: %lld\n"</span>, (<span class="kw">long long</span>)n);   <span class="cm">/* 0 */</span>
+
+<span class="cm">/* Extended stats — 12 counters */</span>
+KVStoreStats st = {<span class="nm">0</span>};
+<span class="fn">kvstore_stats</span>(pKV, &amp;st);
+<span class="fn">printf</span>(<span class="str">"puts=%llu gets=%llu bytes_written=%llu db_pages=%llu\n"</span>,
+       st.nPuts, st.nGets, st.nBytesWritten, st.nDbPages);
+
+<span class="fn">kvstore_stats_reset</span>(pKV);   <span class="cm">/* zero cumulative counters */</span></pre>
+        </div>
+      </section>
+
+      <!-- Session Store -->
+      <section class="ex-section" id="c-session">
+        <div class="section-label">Real-World Pattern</div>
+        <h2 class="section-title">Session Store</h2>
+        <p class="section-desc">A practical in-process session store using a dedicated column family with TTL.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Session store with TTL + column family</span>
+            <span class="ex-card-file">examples/session_store.c</span>
+          </div>
+<pre">KVColumnFamily *pSessions = <span class="kw">NULL</span>;
+<span class="fn">kvstore_cf_create</span>(pKV, <span class="str">"sessions"</span>, &amp;pSessions);
+
+<span class="cm">/* Create session — expires in 30 minutes */</span>
+<span class="kw">int64_t</span> exp = <span class="fn">kvstore_now_ms</span>() + <span class="nm">1800000</span>;
+<span class="fn">kvstore_cf_put_ttl</span>(pSessions, <span class="str">"sess:abc123"</span>, <span class="nm">11</span>,
+                   <span class="str">"user_id=42"</span>, <span class="nm">10</span>, exp);
+
+<span class="cm">/* Validate — KVSTORE_NOTFOUND means expired or never existed */</span>
+<span class="kw">void</span> *pVal = <span class="kw">NULL</span>; <span class="kw">int</span> nVal = <span class="nm">0</span>; <span class="kw">int64_t</span> rem = <span class="nm">0</span>;
+<span class="kw">int</span> rc = <span class="fn">kvstore_cf_get_ttl</span>(pSessions, <span class="str">"sess:abc123"</span>, <span class="nm">11</span>,
+                             &amp;pVal, &amp;nVal, &amp;rem);
+<span class="kw">if</span> (rc == KVSTORE_OK) {
+    <span class="fn">printf</span>(<span class="str">"Valid session: %.*s (%lld ms left)\n"</span>,
+           nVal, (<span class="kw">char</span>*)pVal, (<span class="kw">long long</span>)rem);
+    <span class="fn">snkv_free</span>(pVal);
+} <span class="kw">else</span> {
+    <span class="fn">printf</span>(<span class="str">"Session expired or not found\n"</span>);
+}
+
+<span class="fn">kvstore_cf_close</span>(pSessions);</pre>
+        </div>
+      </section>
+
+      <!-- Checkpoint -->
+      <section class="ex-section" id="c-checkpoint">
+        <div class="section-label">WAL Management</div>
+        <h2 class="section-title">Checkpoint</h2>
+        <p class="section-desc">Flush WAL frames back to the main database file to control file size.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Manual and auto-checkpoint</span>
+            <span class="ex-card-file">examples/checkpoint_demo.c</span>
+          </div>
+<pre"><span class="cm">/* Manual checkpoint — TRUNCATE mode resets WAL to zero bytes */</span>
+<span class="kw">int</span> nLog = <span class="nm">0</span>, nCkpt = <span class="nm">0</span>;
+<span class="fn">kvstore_checkpoint</span>(pKV, KVSTORE_CHECKPOINT_TRUNCATE, &amp;nLog, &amp;nCkpt);
+<span class="fn">printf</span>(<span class="str">"WAL frames: %d total, %d checkpointed\n"</span>, nLog, nCkpt);
+
+<span class="cm">/* Auto-checkpoint: open with wal_size_limit
+   (available via kvstore_open_ex / config struct) */</span></pre>
+        </div>
+      </section>
+
+    </div><!-- /panel-c -->
+
+    <!-- ════════════════════════════════════════════════ PYTHON PANEL -->
+    <div class="lang-panel" id="panel-py">
+
+      <!-- Basic CRUD -->
+      <section class="ex-section" id="py-basic">
+        <div class="section-label">Getting Started</div>
+        <h2 class="section-title">Basic CRUD</h2>
+        <p class="section-desc">Open a store with a context manager, write and read with a dict-like API, handle errors, and use in-memory databases.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Hello World + CRUD</span>
+            <span class="ex-card-file">python/examples/basic.py</span>
+          </div>
+<pre><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, NotFoundError
+
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"mydb.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Write</span>
+    db[<span class="str">"user:1"</span>] = <span class="str">"Alice"</span>
+    db.put(<span class="str">b"user:2"</span>, <span class="str">b"Bob"</span>)
+
+    <span class="cm"># Read</span>
+    print(db[<span class="str">"user:1"</span>].decode())       <span class="cm"># Alice</span>
+    print(db.get(<span class="str">"user:2"</span>).decode())   <span class="cm"># Bob</span>
+    print(db.get(<span class="str">"missing"</span>, <span class="str">b"n/a"</span>))   <span class="cm"># b'n/a'</span>
+
+    <span class="cm"># Update</span>
+    db[<span class="str">"user:1"</span>] = <span class="str">"Alice Smith"</span>
+
+    <span class="cm"># Delete</span>
+    <span class="kw">del</span> db[<span class="str">"user:1"</span>]
+
+    <span class="cm"># Existence</span>
+    print(<span class="str">"user:2"</span> <span class="kw">in</span> db)   <span class="cm"># True</span>
+    print(db.exists(<span class="str">"user:1"</span>))  <span class="cm"># False</span></pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Binary data + In-memory store</span>
+            <span class="ex-card-file">python/examples/basic.py</span>
+          </div>
+<pre"><span class="cm"># Arbitrary binary keys and values</span>
+db.put(bytes([<span class="nm">0x00</span>, <span class="nm">0x01</span>, <span class="nm">0xFF</span>]), bytes(range(<span class="nm">256</span>)))
+
+<span class="cm"># In-memory store — no file created, data gone after close</span>
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="kw">None</span>) <span class="kw">as</span> db:
+    db[<span class="str">"temp"</span>] = <span class="str">"ephemeral"</span>
+    print(db[<span class="str">"temp"</span>])   <span class="cm"># b'ephemeral'</span></pre>
+        </div>
+      </section>
+
+      <!-- Transactions -->
+      <section class="ex-section" id="py-transactions">
+        <div class="section-label">ACID</div>
+        <h2 class="section-title">Transactions</h2>
+        <p class="section-desc">Batch writes into a single atomic commit. Without an explicit transaction each <code>put</code> auto-commits.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Batch write + rollback on error</span>
+            <span class="ex-card-file">python/examples/transactions.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"bank.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Atomic batch — all writes commit together</span>
+    db.begin(write=<span class="kw">True</span>)
+    <span class="kw">try</span>:
+        db[<span class="str">"account:alice"</span>] = <span class="str">"800"</span>
+        db[<span class="str">"account:bob"</span>]   = <span class="str">"700"</span>
+        db.commit()
+    <span class="kw">except</span> Exception:
+        db.rollback()   <span class="cm"># both writes discarded</span>
+        <span class="kw">raise</span>
+
+    <span class="cm"># Large batch — 1000 writes in one transaction</span>
+    db.begin(write=<span class="kw">True</span>)
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nm">1000</span>):
+        db[<span class="str">f"item:{i:05d}"</span>] = <span class="str">f"value_{i}"</span>
+    db.commit()</pre>
+        </div>
+      </section>
+
+      <!-- Column Families -->
+      <section class="ex-section" id="py-cf">
+        <div class="section-label">Namespaces</div>
+        <h2 class="section-title">Column Families</h2>
+        <p class="section-desc">Logical namespaces inside one file. Each CF is a separate B-tree — the same key in two CFs holds independent values.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Create, isolate, list, drop</span>
+            <span class="ex-card-file">python/examples/column_families.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Create namespaces</span>
+    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> users:
+        users[<span class="str">"alice"</span>] = <span class="str">"alice@example.com"</span>
+        users[<span class="str">"bob"</span>]   = <span class="str">"bob@example.com"</span>
+
+    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"products"</span>) <span class="kw">as</span> products:
+        products[<span class="str">"prod:100"</span>] = <span class="str">"Laptop:$999"</span>
+
+    <span class="cm"># Same key, different values per CF</span>
+    ns_a = db.<span class="fn">create_column_family</span>(<span class="str">"ns_a"</span>)
+    ns_b = db.<span class="fn">create_column_family</span>(<span class="str">"ns_b"</span>)
+    ns_a[<span class="str">"key"</span>] = <span class="str">"from_a"</span>
+    ns_b[<span class="str">"key"</span>] = <span class="str">"from_b"</span>
+    ns_a.close(); ns_b.close()
+
+    <span class="cm"># List and drop</span>
+    print(db.<span class="fn">list_column_families</span>())   <span class="cm"># ['users', 'products', 'ns_a', 'ns_b']</span>
+    db.<span class="fn">drop_column_family</span>(<span class="str">"ns_a"</span>)
+    db.<span class="fn">drop_column_family</span>(<span class="str">"ns_b"</span>)</pre>
+        </div>
+      </section>
+
+      <!-- Iterators -->
+      <section class="ex-section" id="py-iterators">
+        <div class="section-label">Ordered Scan</div>
+        <h2 class="section-title">Iterators</h2>
+        <p class="section-desc">Iterate all keys in B-tree order, scan a prefix, or drive the cursor manually.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Full scan + prefix scan</span>
+            <span class="ex-card-file">python/examples/iterators.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Full scan — for loop uses iterator() under the hood</span>
+    <span class="kw">for</span> key, value <span class="kw">in</span> db:
+        print(key.decode(), <span class="str">"->"</span>, value.decode())
+
+    <span class="cm"># Prefix scan — only keys starting with "user:"</span>
+    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">prefix_iterator</span>(<span class="str">b"user:"</span>):
+        print(key, value)
+
+    <span class="cm"># Manual control</span>
+    it = db.<span class="fn">iterator</span>()
+    it.<span class="fn">first</span>()
+    <span class="kw">while not</span> it.eof:
+        print(it.key, it.value)
+        it.<span class="fn">next</span>()
+    it.<span class="fn">close</span>()</pre>
+        </div>
+      </section>
+
+      <!-- Reverse Iterators -->
+      <section class="ex-section" id="py-reverse">
+        <div class="section-label">Descending Scan</div>
+        <h2 class="section-title">Reverse Iterators</h2>
+        <p class="section-desc">Walk keys in descending order — pure B-tree traversal, no sort step.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Reverse full + reverse prefix + seek</span>
+            <span class="ex-card-file">python/examples/iterator_reverse.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Reverse full scan — largest key first</span>
+    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">reverse_iterator</span>():
+        print(key, value)
+
+    <span class="cm"># Reverse prefix scan — only "score:" keys, descending</span>
+    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">reverse_prefix_iterator</span>(<span class="str">b"score:"</span>):
+        print(key, value)
+
+    <span class="cm"># Unified API — reverse=True on iterator()</span>
+    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>, prefix=<span class="str">b"user:"</span>):
+        print(key, value)
+
+    <span class="cm"># Seek in reverse — positions at last key <= target</span>
+    <span class="kw">with</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>) <span class="kw">as</span> it:
+        it.<span class="fn">last</span>()
+        it.<span class="fn">seek</span>(<span class="str">b"user:m"</span>)   <span class="cm"># jump to last key <= "user:m"</span>
+        <span class="kw">while not</span> it.eof:
+            print(it.key)
+            it.<span class="fn">prev</span>()</pre>
+        </div>
+      </section>
+
+      <!-- TTL -->
+      <section class="ex-section" id="py-ttl">
+        <div class="section-label">Key Expiry</div>
+        <h2 class="section-title">TTL — Time-To-Live</h2>
+        <p class="section-desc">Per-key expiry via <code>ttl=seconds</code> on <code>put()</code>. Expired keys are lazily deleted on read; bulk cleanup via <code>purge_expired()</code>.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Basic TTL, lazy expiry, purge</span>
+            <span class="ex-card-file">python/examples/ttl.py</span>
+          </div>
+<pre"><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, NotFoundError, NO_TTL
+
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Put with TTL — expires in 60 seconds</span>
+    db.put(<span class="str">b"session"</span>, <span class="str">b"tok123"</span>, ttl=<span class="nm">60</span>)
+    db[<span class="str">b"token"</span>, <span class="nm">30</span>] = <span class="str">b"bearer-xyz"</span>   <span class="cm"># dict-style shorthand</span>
+
+    <span class="cm"># Inspect remaining TTL</span>
+    remaining = db.ttl(<span class="str">b"session"</span>)   <span class="cm"># e.g. 59.98 (float seconds)</span>
+    print(<span class="str">f"{remaining:.2f}s remaining"</span>)
+
+    <span class="cm"># Lazy expiry — get() returns None if expired</span>
+    val = db.get(<span class="str">b"session"</span>)   <span class="cm"># None if expired, bytes if alive</span>
+
+    <span class="cm"># Bulk purge — deletes all expired keys, returns count</span>
+    n = db.<span class="fn">purge_expired</span>()
+    print(<span class="str">f"Removed {n} expired keys"</span>)</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Rate limiter — real-world TTL pattern</span>
+            <span class="ex-card-file">python/examples/ttl.py</span>
+          </div>
+<pre"><span class="kw">class</span> RateLimiter:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, db, limit, window_s):
+        self._cf = db.<span class="fn">create_column_family</span>(<span class="str">"rl"</span>)
+        self._limit = limit; self._window = window_s
+
+    <span class="kw">def</span> <span class="fn">is_allowed</span>(self, user_id):
+        key = user_id.encode()
+        raw = self._cf.<span class="fn">get</span>(key)
+        <span class="kw">if</span> raw <span class="kw">is None</span>:
+            self._cf.<span class="fn">put</span>(key, <span class="str">b"1"</span>, ttl=self._window)
+            <span class="kw">return True</span>
+        count = int(raw)
+        <span class="kw">if</span> count >= self._limit: <span class="kw">return False</span>
+        ttl = self._cf.<span class="fn">ttl</span>(key) <span class="kw">or</span> self._window
+        self._cf.<span class="fn">put</span>(key, str(count+<span class="nm">1</span>).encode(), ttl=ttl)
+        <span class="kw">return True</span>
+
+rl = RateLimiter(db, limit=<span class="nm">5</span>, window_s=<span class="nm">60</span>)
+print(rl.<span class="fn">is_allowed</span>(<span class="str">"alice"</span>))   <span class="cm"># True (1/5)</span></pre>
+        </div>
+      </section>
+
+      <!-- New APIs -->
+      <section class="ex-section" id="py-new-apis">
+        <div class="section-label">New APIs</div>
+        <h2 class="section-title">Seek · put_if_absent · clear · count · stats</h2>
+        <p class="section-desc">O(log N) positional seek, atomic conditional insert, bulk truncation, page-level entry count, and extended diagnostics with reset.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Iterator seek — forward, reverse, prefix, chaining</span>
+            <span class="ex-card-file">python/examples/new_apis.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Forward seek — first key >= target</span>
+    <span class="kw">with</span> db.<span class="fn">iterator</span>() <span class="kw">as</span> it:
+        it.<span class="fn">seek</span>(<span class="str">b"cherry"</span>)
+        <span class="kw">while not</span> it.eof:
+            print(it.key); it.<span class="fn">next</span>()
+
+    <span class="cm"># Reverse seek — last key <= target</span>
+    <span class="kw">with</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>) <span class="kw">as</span> it:
+        it.<span class="fn">last</span>()
+        it.<span class="fn">seek</span>(<span class="str">b"bbc"</span>)   <span class="cm"># lands on b"bbb"</span>
+        print(it.key)
+
+    <span class="cm"># Prefix iterator + seek — boundary enforced</span>
+    <span class="kw">with</span> db.<span class="fn">iterator</span>(prefix=<span class="str">b"user:"</span>) <span class="kw">as</span> it:
+        it.<span class="fn">seek</span>(<span class="str">b"user:m"</span>)   <span class="cm"># skip to "user:m..."</span>
+        <span class="kw">while not</span> it.eof:
+            print(it.key); it.<span class="fn">next</span>()
+
+    <span class="cm"># Chaining — seek() returns self</span>
+    key = db.<span class="fn">iterator</span>().<span class="fn">seek</span>(<span class="str">b"target"</span>).key</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">put_if_absent — distributed lock + deduplication</span>
+            <span class="ex-card-file">python/examples/new_apis.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Absent → inserted=True</span>
+    inserted = db.<span class="fn">put_if_absent</span>(<span class="str">b"lock"</span>, <span class="str">b"owner:alice"</span>)
+    print(inserted)   <span class="cm"># True</span>
+
+    <span class="cm"># Present → inserted=False, value unchanged</span>
+    inserted = db.<span class="fn">put_if_absent</span>(<span class="str">b"lock"</span>, <span class="str">b"owner:bob"</span>)
+    print(inserted)   <span class="cm"># False</span>
+    print(db.get(<span class="str">b"lock"</span>))   <span class="cm"># b'owner:alice'</span>
+
+    <span class="cm"># With TTL — auto-releasing lock</span>
+    db.<span class="fn">put_if_absent</span>(<span class="str">b"job:1"</span>, <span class="str">b"worker-A"</span>, ttl=<span class="nm">30</span>)
+
+    <span class="cm"># CF variant — message deduplication</span>
+    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"dedup"</span>) <span class="kw">as</span> cf:
+        <span class="kw">if</span> cf.<span class="fn">put_if_absent</span>(<span class="str">b"msg:001"</span>, <span class="str">b"hello"</span>):
+            process()   <span class="cm"># only first caller</span></pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">clear · count · stats + stats_reset</span>
+            <span class="ex-card-file">python/examples/new_apis.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="cm"># count — O(pages) via sqlite3BtreeCount</span>
+    print(db.<span class="fn">count</span>())   <span class="cm"># e.g. 10000</span>
+
+    <span class="cm"># clear — O(pages) bulk truncation; TTL index cleared atomically</span>
+    db.<span class="fn">clear</span>()
+    print(db.<span class="fn">count</span>())   <span class="cm"># 0</span>
+
+    <span class="cm"># Extended stats — 12 counters</span>
+    db.put(<span class="str">b"k"</span>, <span class="str">b"v"</span>); db.get(<span class="str">b"k"</span>)
+    st = db.<span class="fn">stats</span>()
+    print(st[<span class="str">"puts"</span>], st[<span class="str">"gets"</span>],
+          st[<span class="str">"bytes_written"</span>], st[<span class="str">"db_pages"</span>])
+
+    <span class="cm"># Reset cumulative counters; db_pages stays live</span>
+    db.<span class="fn">stats_reset</span>()
+    st = db.<span class="fn">stats</span>()
+    print(st[<span class="str">"puts"</span>])      <span class="cm"># 0</span>
+    print(st[<span class="str">"db_pages"</span>])  <span class="cm"># still > 0</span></pre>
+        </div>
+      </section>
+
+      <!-- Session Store -->
+      <section class="ex-section" id="py-session">
+        <div class="section-label">Real-World Pattern</div>
+        <h2 class="section-title">Session Store</h2>
+        <p class="section-desc">A practical session store using a column family with TTL and <code>put_if_absent</code> for idempotent job scheduling.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Session store + job scheduler</span>
+            <span class="ex-card-file">python/examples/session_store.py · new_apis.py</span>
+          </div>
+<pre"><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
+    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"sessions"</span>) <span class="kw">as</span> cf:
+        <span class="cm"># Create — expires in 30 minutes</span>
+        cf.put(<span class="str">b"sess:abc"</span>, <span class="str">b"user_id=42"</span>, ttl=<span class="nm">1800</span>)
+
+        <span class="cm"># Validate</span>
+        data = cf.get(<span class="str">b"sess:abc"</span>)   <span class="cm"># None if expired</span>
+
+        <span class="cm"># Idempotent job scheduler via put_if_absent + TTL</span>
+        claimed = cf.<span class="fn">put_if_absent</span>(<span class="str">b"job:001"</span>, <span class="str">b"worker-A"</span>, ttl=<span class="nm">30</span>)
+        <span class="kw">if</span> claimed:
+            run_job()   <span class="cm"># only one worker proceeds</span></pre>
+        </div>
+      </section>
+
+      <!-- Multiprocess -->
+      <section class="ex-section" id="py-multiprocess">
+        <div class="section-label">Concurrency</div>
+        <h2 class="section-title">Multiprocess</h2>
+        <p class="section-desc">Multiple processes sharing one WAL-mode database. Each process opens its own <code>KVStore</code>; WAL serialises writers and <code>busy_timeout</code> retries on contention.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">5 concurrent worker processes</span>
+            <span class="ex-card-file">python/examples/multiprocess.py</span>
+          </div>
+<pre"><span class="kw">import</span> multiprocessing
+<span class="kw">from</span> snkv <span class="kw">import</span> KVStore, JOURNAL_WAL
+
+<span class="kw">def</span> <span class="fn">worker</span>(db_path, worker_id):
+    <span class="cm"># Each process opens its own connection</span>
+    <span class="kw">with</span> <span class="fn">KVStore</span>(db_path, journal_mode=JOURNAL_WAL,
+                busy_timeout=<span class="nm">5000</span>) <span class="kw">as</span> db:
+        <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nm">100</span>):
+            db.put(<span class="str">f"w{worker_id}:key:{i}"</span>.encode(), <span class="str">b"value"</span>)
+
+procs = [multiprocessing.<span class="fn">Process</span>(
+             target=worker, args=(<span class="str">"shared.db"</span>, i))
+         <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nm">5</span>)]
+<span class="kw">for</span> p <span class="kw">in</span> procs: p.<span class="fn">start</span>()
+<span class="kw">for</span> p <span class="kw">in</span> procs: p.<span class="fn">join</span>()
+<span class="cm"># All 500 keys durable on disk</span></pre>
+        </div>
+      </section>
+
+    </div><!-- /panel-py -->
+
+  </main>
+</div>
+
+<script>
+function switchLang(lang) {
+  document.querySelectorAll('.lang-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.lang-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('toc-c').style.display  = lang === 'c'  ? '' : 'none';
+  document.getElementById('toc-py').style.display = lang === 'py' ? '' : 'none';
+  document.getElementById('panel-c').classList.toggle('active',  lang === 'c');
+  document.getElementById('panel-py').classList.toggle('active', lang === 'py');
+  document.querySelectorAll('.lang-tab')[lang === 'c' ? 0 : 1].classList.add('active');
+}
+</script>
+
+</body>
+</html>

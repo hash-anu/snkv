@@ -569,7 +569,11 @@
       </li>
       <li class="toc-section"><a href="#c-prefix">Prefix Iterators</a></li>
       <li class="toc-section"><a href="#c-reverse">Reverse Iterators</a></li>
+      <li class="toc-section"><a href="#c-seek">Iterator Seek</a></li>
       <li class="toc-section"><a href="#c-txn">Transactions</a></li>
+      <li class="toc-section"><a href="#c-pia">Conditional Insert</a></li>
+      <li class="toc-section"><a href="#c-clear">Bulk Clear</a></li>
+      <li class="toc-section"><a href="#c-count">Count</a></li>
       <li class="toc-section"><a href="#c-ttl">TTL / Key Expiry</a>
         <ul class="toc-sub">
           <li><a href="#c-put-ttl">put_ttl / get_ttl</a></li>
@@ -607,6 +611,7 @@
           <li><a href="#py-open">Opening</a></li>
           <li><a href="#py-core">put / get / delete / exists</a></li>
           <li><a href="#py-ttl">TTL</a></li>
+          <li><a href="#py-conditional">put_if_absent / clear / count</a></li>
           <li><a href="#py-dict">Dict Interface</a></li>
           <li><a href="#py-txn">Transactions</a></li>
           <li><a href="#py-cf-mgmt">Column Families</a></li>
@@ -619,6 +624,7 @@
         <ul class="toc-sub">
           <li><a href="#py-cf-core">put / get / delete / exists</a></li>
           <li><a href="#py-cf-ttl">TTL</a></li>
+          <li><a href="#py-cf-conditional">put_if_absent / clear / count</a></li>
           <li><a href="#py-cf-dict">Dict Interface</a></li>
           <li><a href="#py-cf-iter">Iterators</a></li>
         </ul>
@@ -1483,6 +1489,36 @@ print(<span class="str">f"Removed {n} expired keys"</span>)</pre>
         </div>
       </section>
 
+      <!-- Conditional insert / clear / count -->
+      <section class="api-section" id="py-conditional">
+        <h4 class="subsec">Conditional Insert / Bulk Clear / Key Count</h4>
+        <div class="fn-entry">
+          <h3 class="fn-name">put_if_absent(key, value, ttl=None) → bool</h3>
+          <p class="fn-desc">Atomically insert <code>key</code> only when it is absent (or has expired). Returns <code>True</code> if inserted, <code>False</code> if already present. Safe for distributed locks and deduplication.</p>
+          <pre><span class="cm"># Distributed lock with auto-release</span>
+inserted = db.put_if_absent(<span class="str">b"lock:job-1"</span>, <span class="str">b"worker-A"</span>, ttl=<span class="nm">30</span>)
+<span class="kw">if</span> inserted:
+    run_job()   <span class="cm"># only one worker reaches here</span>
+
+<span class="cm"># Deduplication</span>
+<span class="kw">if</span> db.put_if_absent(<span class="str">b"msg:001"</span>, <span class="str">b"payload"</span>):
+    process()   <span class="cm"># first write wins</span></pre>
+        </div>
+        <div class="fn-entry">
+          <h3 class="fn-name">clear() → None</h3>
+          <p class="fn-desc">Remove every key-value pair from the default column family in a single atomic write transaction. TTL index entries are cleared atomically. Runs in O(pages) — much faster than iterating and deleting individually. Close all iterators before calling.</p>
+          <pre>db.clear()   <span class="cm"># truncate default CF; all keys gone</span>
+db.put(<span class="str">b"fresh"</span>, <span class="str">b"start"</span>)   <span class="cm"># normal inserts work immediately after</span></pre>
+        </div>
+        <div class="fn-entry">
+          <h3 class="fn-name">count() → int</h3>
+          <p class="fn-desc">Return the number of entries in the default column family. Reads page-level <code>nCell</code> headers via <code>sqlite3BtreeCount</code> — O(pages), not O(rows). Expired-but-not-yet-purged keys are included; call <code>purge_expired()</code> first for an exact live count.</p>
+          <pre>n = db.count()   <span class="cm"># e.g. 10000</span>
+db.purge_expired()
+n = db.count()   <span class="cm"># exact live count</span></pre>
+        </div>
+      </section>
+
       <!-- Dict interface -->
       <section class="api-section" id="py-dict">
         <h4 class="subsec">Dict-like Interface</h4>
@@ -1570,13 +1606,30 @@ db.<span class="fn">reverse_prefix_iterator</span>(prefix)   → Iterator</div>
       <section class="api-section" id="py-maintenance">
         <h4 class="subsec">Maintenance</h4>
         <div class="fn-entry">
-          <h3 class="fn-name">sync() / vacuum(n_pages=0) / integrity_check() / checkpoint(mode) / stats()</h3>
+          <h3 class="fn-name">sync() / vacuum(n_pages=0) / integrity_check() / checkpoint(mode) / stats() / stats_reset()</h3>
           <div class="fn-sig">db.<span class="fn">sync</span>()                         <span class="cm"># flush pending writes to disk</span>
 db.<span class="fn">vacuum</span>(n_pages=<span class="nm">0</span>)              <span class="cm"># reclaim unused pages (0 = all)</span>
 db.<span class="fn">integrity_check</span>()              <span class="cm"># raises CorruptError on failure</span>
 nlog, nckpt = db.<span class="fn">checkpoint</span>(mode) <span class="cm"># returns (nLog, nCkpt) tuple</span>
-s = db.<span class="fn">stats</span>()                     <span class="cm"># dict: puts/gets/deletes/iterations/errors</span>
+s = db.<span class="fn">stats</span>()                     <span class="cm"># dict with 12 counters (see below)</span>
+db.<span class="fn">stats_reset</span>()                   <span class="cm"># zero all cumulative counters; db_pages is unaffected</span>
 print(db.errmsg)                    <span class="cm"># last error message string (property)</span></div>
+          <p class="fn-desc"><code>stats()</code> returns a dict with these keys:</p>
+          <div class="table-wrap"><table>
+            <tr><th>Key</th><th>Description</th></tr>
+            <tr><td><code>puts</code></td><td>Total put operations (includes TTL puts and put_if_absent).</td></tr>
+            <tr><td><code>gets</code></td><td>Total get operations (includes TTL gets).</td></tr>
+            <tr><td><code>deletes</code></td><td>Total delete operations.</td></tr>
+            <tr><td><code>iterations</code></td><td>Total iterators created (each <code>iterator()</code>, <code>prefix_iterator()</code>, etc. call counts as one).</td></tr>
+            <tr><td><code>errors</code></td><td>Total non-NOTFOUND error returns.</td></tr>
+            <tr><td><code>bytes_read</code></td><td>Total value bytes returned by get operations.</td></tr>
+            <tr><td><code>bytes_written</code></td><td>Total key+value bytes written by put operations.</td></tr>
+            <tr><td><code>wal_commits</code></td><td>Total WAL write transaction commits.</td></tr>
+            <tr><td><code>checkpoints</code></td><td>Total WAL checkpoint operations.</td></tr>
+            <tr><td><code>ttl_expired</code></td><td>Total keys lazily deleted on access due to TTL expiry.</td></tr>
+            <tr><td><code>ttl_purged</code></td><td>Total keys deleted by <code>purge_expired()</code>.</td></tr>
+            <tr><td><code>db_pages</code></td><td>Current live database page count (always up-to-date; not reset by <code>stats_reset()</code>).</td></tr>
+          </table></div>
           <pre><span class="kw">import</span> snkv
 <span class="kw">from</span> snkv <span class="kw">import</span> CHECKPOINT_TRUNCATE, CorruptError
 
@@ -1592,8 +1645,9 @@ print(<span class="str">f"WAL: {nlog} frames, {nckpt} checkpointed"</span>)
 <span class="kw">except</span> CorruptError <span class="kw">as</span> e:
     print(<span class="str">f"Corruption: {e}"</span>)
 
-print(db.<span class="fn">stats</span>())
-<span class="cm"># {'puts': 42, 'gets': 100, 'deletes': 5, 'iterations': 3, 'errors': 0}</span></pre>
+st = db.<span class="fn">stats</span>()
+print(st[<span class="str">"puts"</span>], st[<span class="str">"gets"</span>], st[<span class="str">"bytes_written"</span>], st[<span class="str">"db_pages"</span>])
+db.<span class="fn">stats_reset</span>()   <span class="cm"># counters zeroed; db_pages still live</span></pre>
         </div>
       </section>
 
@@ -1638,6 +1692,23 @@ cf.<span class="fn">purge_expired</span>() → int     <span class="cm"># delete
           <pre>remaining = cf.ttl(<span class="str">"token"</span>)   <span class="cm"># e.g. 284.3</span>
 n = cf.<span class="fn">purge_expired</span>()
 print(<span class="str">f"Cleaned {n} entries"</span>)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-cf-conditional">
+        <h4 class="subsec">CF Conditional Insert / Bulk Clear / Key Count</h4>
+        <div class="fn-entry">
+          <div class="fn-sig">cf.<span class="fn">put_if_absent</span>(key, value, ttl=<span class="kw">None</span>) → bool   <span class="cm"># True if inserted</span>
+cf.<span class="fn">clear</span>()                                       <span class="cm"># truncate this CF only; O(pages)</span>
+cf.<span class="fn">count</span>() → int                                  <span class="cm"># entry count; O(pages)</span></div>
+          <pre><span class="kw">with</span> db.<span class="fn">open_column_family</span>(<span class="str">"dedup"</span>) <span class="kw">as</span> cf:
+    <span class="cm"># First write wins — safe deduplication</span>
+    <span class="kw">if</span> cf.<span class="fn">put_if_absent</span>(<span class="str">b"msg:001"</span>, <span class="str">b"hello"</span>):
+        process()
+
+    print(cf.<span class="fn">count</span>())   <span class="cm"># entry count for this CF only</span>
+    cf.<span class="fn">clear</span>()          <span class="cm"># other CFs unaffected</span>
+    print(cf.<span class="fn">count</span>())   <span class="cm"># 0</span></pre>
         </div>
       </section>
 
@@ -1695,14 +1766,15 @@ cf.<span class="fn">reverse_prefix_iterator</span>(prefix)   → Iterator</div>
       <section class="api-section" id="py-iter-manual">
         <h4 class="subsec">Manual Control</h4>
         <div class="fn-entry">
-          <div class="fn-sig">it.<span class="fn">first</span>()       <span class="cm"># seek to first key (forward iterator)</span>
-it.<span class="fn">last</span>()        <span class="cm"># seek to last key  (reverse iterator)</span>
-it.<span class="fn">next</span>()        <span class="cm"># advance forward</span>
-it.<span class="fn">prev</span>()        <span class="cm"># advance backward</span>
-it.eof            <span class="cm"># True when no more keys</span>
-it.key            <span class="cm"># current key as bytes</span>
-it.value          <span class="cm"># current value as bytes</span>
-it.<span class="fn">item</span>()        <span class="cm"># (key, value) tuple</span>
+          <div class="fn-sig">it.<span class="fn">first</span>()              <span class="cm"># seek to first key (forward iterator)</span>
+it.<span class="fn">last</span>()               <span class="cm"># seek to last key  (reverse iterator)</span>
+it.<span class="fn">seek</span>(key) → self     <span class="cm"># O(log N) positional seek; returns self for chaining</span>
+it.<span class="fn">next</span>()               <span class="cm"># advance forward</span>
+it.<span class="fn">prev</span>()               <span class="cm"># advance backward</span>
+it.eof                   <span class="cm"># True when no more keys</span>
+it.key                   <span class="cm"># current key as bytes</span>
+it.value                 <span class="cm"># current value as bytes</span>
+it.<span class="fn">item</span>()               <span class="cm"># (key, value) tuple</span>
 it.<span class="fn">close</span>()</div>
           <pre><span class="cm"># Manual forward</span>
 it = db.<span class="fn">iterator</span>()
@@ -1719,7 +1791,24 @@ it.<span class="fn">last</span>()
     k, v = it.<span class="fn">item</span>()
     print(k, v)
     it.<span class="fn">prev</span>()
-it.<span class="fn">close</span>()</pre>
+it.<span class="fn">close</span>()
+
+<span class="cm"># seek — jump to any position in O(log N)</span>
+<span class="kw">with</span> db.<span class="fn">iterator</span>() <span class="kw">as</span> it:
+    it.<span class="fn">seek</span>(<span class="str">b"user:carol"</span>)   <span class="cm"># forward: first key >= target</span>
+    <span class="kw">while not</span> it.eof:
+        print(it.key)
+        it.<span class="fn">next</span>()
+
+<span class="cm"># seek on a prefix iterator — boundary still enforced</span>
+<span class="kw">with</span> db.<span class="fn">iterator</span>(prefix=<span class="str">b"user:"</span>) <span class="kw">as</span> it:
+    it.<span class="fn">seek</span>(<span class="str">b"user:m"</span>)   <span class="cm"># skips to "user:m..." within prefix</span>
+    <span class="kw">while not</span> it.eof:
+        print(it.key)
+        it.<span class="fn">next</span>()
+
+<span class="cm"># seek returns self — chainable</span>
+key = db.<span class="fn">iterator</span>().<span class="fn">seek</span>(<span class="str">b"target"</span>).key</pre>
         </div>
       </section>
 
