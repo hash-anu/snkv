@@ -22,7 +22,12 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Typed exceptions** — `NotFoundError`, `BusyError`, `LockedError`, `ReadOnlyError`, `CorruptError` all subclass `snkv.Error`
 - **No Python dependencies** — pure CPython C extension; only requires a C compiler and `python3-dev`
 - **Native TTL** — per-key expiry with `put(ttl=seconds)`, dict-style `db[key, ttl] = value`, lazy expiry on get, and `purge_expired()`
-- **279 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, and more
+- **Seek iterators** — jump to any key in O(log N) with `it.seek(key)`, chainable and works on prefix/reverse iterators
+- **Conditional insert** — atomic `put_if_absent(key, value, ttl=None)` returns `True` if inserted; safe for distributed locks and dedup
+- **Bulk clear** — `db.clear()` / `cf.clear()` truncates all keys in O(pages) without dropping the store
+- **Key count** — `db.count()` / `cf.count()` returns entry count in O(pages); CF counts are fully isolated
+- **Extended stats** — `db.stats()` exposes 12 counters including `bytes_read`, `bytes_written`, `wal_commits`, `ttl_expired`, `db_pages`; reset with `db.stats_reset()`
+- **351 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, and more
 
 ---
 
@@ -274,13 +279,96 @@ nlog, nckpt = db.checkpoint(CHECKPOINT_TRUNCATE)   # like RESTART, truncate WAL 
 Must be called outside an active write transaction. Use `wal_size_limit` to auto-checkpoint
 instead.
 
+### Iterator Seek
+
+Jump to any position in O(log N) without scanning from the start.
+
+```python
+with db.iterator() as it:
+    it.seek(b"user:bob")        # forward: position at first key >= target
+    while not it.eof:
+        print(it.key, it.value)
+        it.next()
+
+with db.iterator(reverse=True) as it:
+    it.last()
+    it.seek(b"user:bob")        # reverse: position at last key <= target
+    while not it.eof:
+        print(it.key, it.value)
+        it.prev()
+
+# Works on prefix iterators too — boundary still enforced
+with db.iterator(prefix=b"user:") as it:
+    it.seek(b"user:carol")      # skip straight to "user:carol"
+    while not it.eof:
+        print(it.key)
+        it.next()
+
+# seek() returns self for chaining
+key = db.iterator().seek(b"target").key
+```
+
+### Conditional Insert
+
+Atomically insert a key only when it is absent — safe for distributed locks and deduplication.
+
+```python
+# Returns True if inserted, False if the key already existed.
+inserted = db.put_if_absent(b"lock", b"owner:alice")
+
+# With TTL — the key auto-releases after the given number of seconds.
+inserted = db.put_if_absent(b"session:42", b"token-xyz", ttl=30)
+
+# Column families support the same method.
+with db.create_column_family("dedup") as cf:
+    if cf.put_if_absent(b"msg:001", b"hello"):
+        process(b"msg:001")     # only the first caller reaches here
+```
+
+### Bulk Clear
+
+Truncate all entries from a store or column family in O(pages) — no iterating, no individual deletes.
+
+```python
+db.clear()      # remove every key from the default CF
+
+with db.create_column_family("cache") as cf:
+    cf.clear()  # only this CF is affected; other CFs are untouched
+```
+
+TTL index entries are cleared atomically alongside data entries. Close all iterators before calling `clear()`.
+
+### Key Count
+
+Count entries without scanning individual keys.
+
+```python
+n = db.count()                           # total entries in the default CF
+
+with db.open_column_family("users") as cf:
+    n = cf.count()                       # only this CF; TTL index not counted
+
+# count() includes expired-but-not-yet-purged keys.
+# Call purge_expired() first for an accurate live count.
+db.purge_expired()
+n = db.count()
+```
+
 ### Maintenance
 
 ```python
 db.sync()                 # flush OS write buffers (fsync)
 db.vacuum(100)            # reclaim up to 100 unused pages incrementally
 db.integrity_check()      # raises CorruptError if database is corrupt
-stats = db.stats()        # dict: {"puts": N, "gets": N, "deletes": N, "iterations": N}
+
+# Extended stats — 12 counters
+stats = db.stats()
+# Keys: puts, gets, deletes, iterations, errors,
+#       bytes_read, bytes_written, wal_commits, checkpoints,
+#       ttl_expired, ttl_purged, db_pages
+
+# Reset all cumulative counters (db_pages is always live)
+db.stats_reset()
 ```
 
 ### TTL — Native Key Expiry
@@ -363,7 +451,7 @@ cd python
 PYTHONPATH=. python3 -m pytest tests/ -v
 ```
 
-All 279 tests should pass.
+All 351 tests should pass.
 
 ---
 
@@ -381,6 +469,7 @@ PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
 PYTHONPATH=. python3 examples/ttl.py             # TTL expiry, rate limiter demo
 PYTHONPATH=. python3 examples/iterator_reverse.py # reverse iterators, descending scans
+PYTHONPATH=. python3 examples/new_apis.py        # seek, put_if_absent, clear, count, stats
 PYTHONPATH=. python3 examples/multiprocess.py    # 5 concurrent processes, busy_timeout
 ```
 
@@ -397,6 +486,7 @@ python examples\checkpoint.py
 python examples\session_store.py
 python examples\ttl.py
 python examples\iterator_reverse.py
+python examples\new_apis.py
 python examples\multiprocess.py
 python examples\all_apis.py
 ```

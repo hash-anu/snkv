@@ -510,6 +510,50 @@ int kvstore_cf_exists(
 );
 
 /*
+** Insert (key, value) into the default column family only if the key does
+** not already exist.
+**
+**   expire_ms > 0  — absolute expiry in ms (use kvstore_now_ms() + delta).
+**                    Applied only when the key is newly inserted.
+**                    Ignored if the key already exists.
+**   expire_ms == 0 — no TTL.
+**
+**   *pInserted (may be NULL):
+**     1 — key was absent; value was written.
+**     0 — key already existed; store is unchanged.
+**
+** Expired keys are treated as absent: a key that exists but has expired is
+** lazily deleted and the new value is inserted.
+**
+** The data write and the TTL entry (if any) are committed atomically in a
+** single write transaction. If the caller already holds an explicit write
+** transaction (kvstore_begin with wrflag=1), the operation joins it without
+** issuing a nested commit.
+**
+** Returns KVSTORE_OK whether or not the key was inserted.
+** Returns an error code only on I/O or locking failure.
+*/
+int kvstore_put_if_absent(
+  KVStore *pKV,
+  const void *pKey,   int nKey,
+  const void *pValue, int nValue,
+  int64_t expire_ms,
+  int *pInserted
+);
+
+/*
+** Insert (key, value) into a specific column family only if absent.
+** Equivalent to kvstore_put_if_absent() but operates on an explicit CF handle.
+*/
+int kvstore_cf_put_if_absent(
+  KVColumnFamily *pCF,
+  const void *pKey,   int nKey,
+  const void *pValue, int nValue,
+  int64_t expire_ms,
+  int *pInserted
+);
+
+/*
 ** Iterator structure for traversing the key-value store
 */
 typedef struct KVIterator KVIterator;
@@ -739,6 +783,36 @@ int kvstore_iterator_value(
 void kvstore_iterator_close(KVIterator *pIter);
 
 /*
+** Position the iterator at a target key.
+**
+** Forward iterator (reverse=0): positions at the first key >= (pKey, nKey).
+** Reverse iterator (reverse=1): positions at the last  key <= (pKey, nKey).
+**
+** Works on any iterator type — plain, prefix, reverse, reverse-prefix.
+** If the iterator has a prefix filter the seeked position is validated
+** against the prefix; if it falls outside the prefix range eof is set.
+**
+** Calling seek resets the iterator started state — it is safe to seek
+** multiple times on the same iterator without closing and recreating it.
+**
+** After seek, call kvstore_iterator_eof to check for emptiness, then
+** kvstore_iterator_next (forward) or kvstore_iterator_prev (reverse)
+** to advance.
+**
+** Thread safety: the iterator handle must be used by a single thread.
+**
+** Parameters:
+**   pIter - Iterator handle (must be open)
+**   pKey  - Target key bytes
+**   nKey  - Length of target key in bytes
+**
+** Returns:
+**   KVSTORE_OK    — positioned successfully (check kvstore_iterator_eof)
+**   KVSTORE_ERROR — iterator not open or internal error
+*/
+int kvstore_iterator_seek(KVIterator *pIter, const void *pKey, int nKey);
+
+/*
 ** Begin a transaction.
 **
 ** Parameters:
@@ -788,11 +862,27 @@ const char *kvstore_errmsg(KVStore *pKV);
 */
 typedef struct KVStoreStats KVStoreStats;
 struct KVStoreStats {
-  uint64_t nPuts;       /* Number of put operations */
-  uint64_t nGets;       /* Number of get operations */
-  uint64_t nDeletes;    /* Number of delete operations */
-  uint64_t nIterations; /* Number of iterations created */
-  uint64_t nErrors;     /* Number of errors encountered */
+  /* --- Existing fields (unchanged, same order) --- */
+  uint64_t nPuts;         /* Total put operations */
+  uint64_t nGets;         /* Total get operations */
+  uint64_t nDeletes;      /* Total delete operations */
+  uint64_t nIterations;   /* Total iterators created */
+  uint64_t nErrors;       /* Total errors encountered */
+
+  /* --- I/O throughput --- */
+  uint64_t nBytesRead;    /* Total value bytes returned by get operations */
+  uint64_t nBytesWritten; /* Total (key+value) bytes written by put operations */
+
+  /* --- WAL & transactions --- */
+  uint64_t nWalCommits;   /* Write transactions successfully committed */
+  uint64_t nCheckpoints;  /* WAL checkpoints performed */
+
+  /* --- TTL activity --- */
+  uint64_t nTtlExpired;   /* Keys lazily expired on get/exists */
+  uint64_t nTtlPurged;    /* Keys removed by kvstore_purge_expired */
+
+  /* --- Storage (read from B-tree at kvstore_stats() call time) --- */
+  uint64_t nDbPages;      /* Total pages in database (sqlite3BtreeLastPage) */
 };
 
 /*
@@ -806,6 +896,22 @@ struct KVStoreStats {
 **   KVSTORE_OK on success, error code otherwise
 */
 int kvstore_stats(KVStore *pKV, KVStoreStats *pStats);
+
+/*
+** Reset all cumulative stat counters to zero.
+**
+** nDbPages is always read live from the B-tree and is unaffected by reset.
+** Useful for measuring rates over a time window:
+**
+**   kvstore_stats_reset(db);
+**   // ... run workload for 1 second ...
+**   kvstore_stats(db, &s);
+**   printf("puts/sec: %llu\n", (unsigned long long)s.nPuts);
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+*/
+int kvstore_stats_reset(KVStore *pKV);
 
 /*
 ** Perform an integrity check on the database.
@@ -872,6 +978,62 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage);
 **       returns KVSTORE_OK with *pnLog = *pnCkpt = 0.
 */
 int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt);
+
+/* ========== BULK OPERATIONS ========== */
+
+/*
+** Remove all key-value pairs from the default column family.
+**
+** Also clears all associated TTL index entries, even if the TTL index CFs
+** were not opened in the current session (hasTtl=1 but handles are NULL).
+** The column family root page and CF metadata remain intact — the CF is
+** empty and ready for new inserts after this call.
+**
+** Precondition: no iterators may be open on the default CF when clear is
+** called. Calling clear with open iterators produces undefined behaviour.
+** Close all iterators before calling clear.
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+*/
+int kvstore_clear(KVStore *pKV);
+
+/*
+** Remove all key-value pairs from the given column family.
+** Equivalent to kvstore_clear() but operates on an explicit CF handle.
+** Same preconditions and guarantees apply.
+*/
+int kvstore_cf_clear(KVColumnFamily *pCF);
+
+/* ========== COUNT OPERATIONS ========== */
+
+/*
+** Count the number of entries in the default column family.
+**
+** Complexity: O(pages) — visits each B-tree page once and reads nCell from
+** the page header without fetching key or value payload. For a warm cache
+** this is fast; for a cold large database it triggers one page read per page.
+**
+** The count includes keys that have expired but not yet been lazily deleted.
+** Call kvstore_purge_expired() first for an accurate live count.
+**
+** Behaviour during an uncommitted write transaction: uses the cached
+** read-only cursor which may not see uncommitted puts from the write cursor.
+** Commit the transaction first for an accurate post-write count.
+**
+** *pnCount must not be NULL.
+**
+** Returns:
+**   KVSTORE_OK on success, error code otherwise.
+*/
+int kvstore_count(KVStore *pKV, int64_t *pnCount);
+
+/*
+** Count entries in the given column family.
+** Counts only the main data B-tree — TTL index CFs are excluded.
+** Same complexity and caveats as kvstore_count.
+*/
+int kvstore_cf_count(KVColumnFamily *pCF, int64_t *pnCount);
 
 /* ========== TTL OPERATIONS ========== */
 

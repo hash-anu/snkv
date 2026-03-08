@@ -133,6 +133,15 @@ class Iterator:
         """Current (key, value) tuple."""
         return self._it.item()
 
+    def seek(self, key: _Encodable) -> "Iterator":
+        """
+        Position the iterator at the first key >= key (forward iterator)
+        or the last key <= key (reverse iterator).
+        Returns self for chaining (e.g. it.seek(b"m").item()).
+        """
+        self._it.seek(_enc(key))
+        return self
+
     # --- Python iterator protocol ---
 
     def __iter__(self) -> TypingIterator[Tuple[bytes, bytes]]:
@@ -234,6 +243,36 @@ class ColumnFamily:
     def purge_expired(self) -> int:
         """Scan and delete all expired keys in this CF. Returns count deleted."""
         return self._cf.purge_expired()
+
+    def put_if_absent(
+        self,
+        key: _Encodable,
+        value: _Encodable,
+        ttl: Optional[float] = None,
+    ) -> bool:
+        """
+        Insert key/value only if the key does not already exist (or has expired).
+
+        ttl -- seconds until the key expires (int or float). None means no expiry.
+        Returns True if the key was inserted, False if it already existed.
+        """
+        if ttl is None:
+            expire_ms = 0
+        else:
+            expire_ms = int((time.time() + float(ttl)) * 1000)
+        return self._cf.put_if_absent(_enc(key), _enc(value), expire_ms)
+
+    def clear(self) -> None:
+        """Remove all key-value pairs from this column family (including TTL entries)."""
+        self._cf.clear()
+
+    def count(self) -> int:
+        """
+        Return the number of key-value pairs in this column family.
+        Includes expired-but-not-yet-purged keys.
+        Call purge_expired() first for an exact live count.
+        """
+        return self._cf.count()
 
     # --- Iterators ---
 
@@ -419,6 +458,36 @@ class KVStore:
         """Scan and delete all expired keys. Returns the number of keys deleted."""
         return self._db.purge_expired()
 
+    def put_if_absent(
+        self,
+        key: _Encodable,
+        value: _Encodable,
+        ttl: Optional[float] = None,
+    ) -> bool:
+        """
+        Insert key/value only if the key does not already exist (or has expired).
+
+        ttl -- seconds until the key expires (int or float). None means no expiry.
+        Returns True if the key was inserted, False if it already existed.
+        """
+        if ttl is None:
+            expire_ms = 0
+        else:
+            expire_ms = int((time.time() + float(ttl)) * 1000)
+        return self._db.put_if_absent(_enc(key), _enc(value), expire_ms)
+
+    def clear(self) -> None:
+        """Remove all key-value pairs from the default column family (including TTL entries)."""
+        self._db.clear()
+
+    def count(self) -> int:
+        """
+        Return the number of key-value pairs in the default column family.
+        Includes expired-but-not-yet-purged keys.
+        Call purge_expired() first for an exact live count.
+        """
+        return self._db.count()
+
     # --- dict-like interface ---
 
     def __getitem__(self, key: _Encodable) -> bytes:
@@ -554,10 +623,17 @@ class KVStore:
 
     def stats(self) -> dict:
         """
-        Return operation statistics as a dict with keys:
-          puts, gets, deletes, iterations, errors.
+        Return operation statistics as a dict.
+
+        Keys: puts, gets, deletes, iterations, errors,
+              bytes_read, bytes_written, wal_commits, checkpoints,
+              ttl_expired, ttl_purged, db_pages.
         """
         return self._db.stats()
+
+    def stats_reset(self) -> None:
+        """Reset all cumulative stat counters (puts, gets, bytes_read, etc.) to zero."""
+        self._db.stats_reset()
 
     @property
     def errmsg(self) -> str:

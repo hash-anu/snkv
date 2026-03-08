@@ -41,13 +41,6 @@ static void check(const char *name, int ok){
 
 #define ASSERT(name, expr)  check(name, (int)(expr))
 
-static void snkv_sleep_ms(int ms){
-  struct timespec ts;
-  ts.tv_sec  = ms / 1000;
-  ts.tv_nsec = (ms % 1000) * 1000000L;
-  nanosleep(&ts, NULL);
-}
-
 static KVStore *openFresh(const char *path){
   remove(path);
   char buf[512];

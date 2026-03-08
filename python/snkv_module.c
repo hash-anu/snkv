@@ -229,6 +229,32 @@ Iterator_close(IteratorObject *self, PyObject *Py_UNUSED(ignored))
     Py_RETURN_NONE;
 }
 
+/* Iterator.seek(key) -> None
+** Position the iterator at the first key >= key (forward) or
+** the last key <= key (reverse).  Raises SnkvError on invalid key.
+*/
+static PyObject *
+Iterator_seek(IteratorObject *self, PyObject *args)
+{
+    Py_buffer key_buf;
+    int rc;
+
+    IT_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*", &key_buf))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_iterator_seek(self->iter, key_buf.buf, (int)key_buf.len);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    /* After seek, mark as started so __next__ does not call first()/last(). */
+    self->started = 1;
+    self->needs_first = 0;
+    Py_RETURN_NONE;
+}
+
 static PyObject *
 Iterator_enter(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
@@ -316,6 +342,7 @@ static PyMethodDef Iterator_methods[] = {
     {"key",    (PyCFunction)Iterator_key,           METH_NOARGS, "Return current key bytes."},
     {"value",  (PyCFunction)Iterator_value,         METH_NOARGS, "Return current value bytes."},
     {"item",   (PyCFunction)Iterator_item,          METH_NOARGS, "Return (key, value) tuple."},
+    {"seek",   (PyCFunction)Iterator_seek,           METH_VARARGS, "seek(key) -> None. Position at first key >= key (forward) or last key <= key (reverse)."},
     {"close",  (PyCFunction)Iterator_close,         METH_NOARGS, "Close the iterator."},
     {"__enter__", (PyCFunction)Iterator_enter,      METH_NOARGS, NULL},
     {"__exit__",  (PyCFunction)Iterator_exit,       METH_VARARGS, NULL},
@@ -666,6 +693,71 @@ ColumnFamily_purge_expired(ColumnFamilyObject *self, PyObject *Py_UNUSED(ignored
     return PyLong_FromLong(n_deleted);
 }
 
+/* ColumnFamily.put_if_absent(key, value, expire_ms=0) -> bool
+** Insert key/value only if the key does not exist (accounting for TTL expiry).
+** expire_ms > 0: new entry has TTL (absolute ms since epoch).
+** Returns True if inserted, False if key already existed.
+*/
+static PyObject *
+ColumnFamily_put_if_absent(ColumnFamilyObject *self, PyObject *args)
+{
+    Py_buffer key_buf, val_buf;
+    long long expire_ms = 0;
+    int inserted = 0, rc;
+
+    CF_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*y*|L", &key_buf, &val_buf, &expire_ms))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_put_if_absent(self->cf,
+                                  key_buf.buf, (int)key_buf.len,
+                                  val_buf.buf, (int)val_buf.len,
+                                  (int64_t)expire_ms, &inserted);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+    PyBuffer_Release(&val_buf);
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyBool_FromLong(inserted);
+}
+
+/* ColumnFamily.clear() -> None
+** Remove all key-value pairs from this column family (including TTL entries).
+*/
+static PyObject *
+ColumnFamily_clear(ColumnFamilyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int rc;
+
+    CF_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_clear(self->cf);
+    Py_END_ALLOW_THREADS
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    Py_RETURN_NONE;
+}
+
+/* ColumnFamily.count() -> int
+** Return the number of key-value pairs in this column family.
+** Includes expired-but-not-yet-purged keys.
+*/
+static PyObject *
+ColumnFamily_count(ColumnFamilyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int64_t n = 0;
+    int rc;
+
+    CF_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_cf_count(self->cf, &n);
+    Py_END_ALLOW_THREADS
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyLong_FromLongLong((long long)n);
+}
+
 static PyMethodDef ColumnFamily_methods[] = {
     {"put",              (PyCFunction)ColumnFamily_put,              METH_VARARGS, "put(key, value) -> None"},
     {"get",              (PyCFunction)ColumnFamily_get,              METH_VARARGS, "get(key) -> bytes"},
@@ -680,6 +772,10 @@ static PyMethodDef ColumnFamily_methods[] = {
     {"get_ttl",          (PyCFunction)ColumnFamily_get_ttl,          METH_VARARGS, "get_ttl(key) -> (bytes, int)"},
     {"ttl_remaining",    (PyCFunction)ColumnFamily_ttl_remaining,    METH_VARARGS, "ttl_remaining(key) -> int"},
     {"purge_expired",    (PyCFunction)ColumnFamily_purge_expired,    METH_NOARGS,  "purge_expired() -> int"},
+    /* Conditional / Bulk */
+    {"put_if_absent",    (PyCFunction)ColumnFamily_put_if_absent,    METH_VARARGS, "put_if_absent(key, value[, expire_ms]) -> bool"},
+    {"clear",            (PyCFunction)ColumnFamily_clear,            METH_NOARGS,  "clear() -> None"},
+    {"count",            (PyCFunction)ColumnFamily_count,            METH_NOARGS,  "count() -> int"},
     /* Lifecycle */
     {"close",            (PyCFunction)ColumnFamily_close,            METH_NOARGS,  "close() -> None"},
     {"__enter__",        (PyCFunction)ColumnFamily_enter,            METH_NOARGS,  NULL},
@@ -1022,12 +1118,19 @@ KVStore_stats(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
     rc = kvstore_stats(self->db, &stats);
     Py_END_ALLOW_THREADS
     if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
-    return Py_BuildValue("{sKsKsKsKsK}",
-        "puts",       (unsigned long long)stats.nPuts,
-        "gets",       (unsigned long long)stats.nGets,
-        "deletes",    (unsigned long long)stats.nDeletes,
-        "iterations", (unsigned long long)stats.nIterations,
-        "errors",     (unsigned long long)stats.nErrors);
+    return Py_BuildValue("{sKsKsKsKsKsKsKsKsKsKsKsK}",
+        "puts",           (unsigned long long)stats.nPuts,
+        "gets",           (unsigned long long)stats.nGets,
+        "deletes",        (unsigned long long)stats.nDeletes,
+        "iterations",     (unsigned long long)stats.nIterations,
+        "errors",         (unsigned long long)stats.nErrors,
+        "bytes_read",     (unsigned long long)stats.nBytesRead,
+        "bytes_written",  (unsigned long long)stats.nBytesWritten,
+        "wal_commits",    (unsigned long long)stats.nWalCommits,
+        "checkpoints",    (unsigned long long)stats.nCheckpoints,
+        "ttl_expired",    (unsigned long long)stats.nTtlExpired,
+        "ttl_purged",     (unsigned long long)stats.nTtlPurged,
+        "db_pages",       (unsigned long long)stats.nDbPages);
 }
 
 /* KVStore.sync() */
@@ -1410,6 +1513,84 @@ KVStore_ttl_remaining(KVStoreObject *self, PyObject *args)
     return PyLong_FromLongLong((long long)remaining);
 }
 
+/* KVStore.stats_reset() -> None
+**   Reset all cumulative stat counters to zero.
+*/
+static PyObject *
+KVStore_stats_reset(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int rc;
+    KV_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_stats_reset(self->db);
+    Py_END_ALLOW_THREADS
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    Py_RETURN_NONE;
+}
+
+/* KVStore.put_if_absent(key, value, expire_ms=0) -> bool
+** Insert key/value only if the key does not exist (TTL-aware).
+** expire_ms > 0: new entry has TTL (absolute ms since epoch).
+** Returns True if inserted, False if key already existed.
+*/
+static PyObject *
+KVStore_put_if_absent(KVStoreObject *self, PyObject *args)
+{
+    Py_buffer key_buf, val_buf;
+    long long expire_ms = 0;
+    int inserted = 0, rc;
+
+    KV_CHECK_OPEN(self);
+    if (!PyArg_ParseTuple(args, "y*y*|L", &key_buf, &val_buf, &expire_ms))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_put_if_absent(self->db,
+                               key_buf.buf, (int)key_buf.len,
+                               val_buf.buf, (int)val_buf.len,
+                               (int64_t)expire_ms, &inserted);
+    Py_END_ALLOW_THREADS
+
+    PyBuffer_Release(&key_buf);
+    PyBuffer_Release(&val_buf);
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyBool_FromLong(inserted);
+}
+
+/* KVStore.clear() -> None
+** Remove all key-value pairs from the default column family (including TTL entries).
+*/
+static PyObject *
+KVStore_clear(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int rc;
+    KV_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_clear(self->db);
+    Py_END_ALLOW_THREADS
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    Py_RETURN_NONE;
+}
+
+/* KVStore.count() -> int
+** Return the number of key-value pairs in the default column family.
+** Includes expired-but-not-yet-purged keys.
+*/
+static PyObject *
+KVStore_count(KVStoreObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int64_t n = 0;
+    int rc;
+
+    KV_CHECK_OPEN(self);
+    Py_BEGIN_ALLOW_THREADS
+    rc = kvstore_count(self->db, &n);
+    Py_END_ALLOW_THREADS
+
+    if (rc != KVSTORE_OK) return snkv_raise_from(self->db, rc);
+    return PyLong_FromLongLong((long long)n);
+}
+
 /* KVStore.purge_expired() -> int
 **   Deletes all expired keys. Returns count of deleted keys.
 */
@@ -1459,10 +1640,16 @@ static PyMethodDef KVStore_methods[] = {
     /* Maintenance */
     {"errmsg",           (PyCFunction)KVStore_errmsg,            METH_NOARGS,   "errmsg() -> str"},
     {"stats",            (PyCFunction)KVStore_stats,             METH_NOARGS,   "stats() -> dict"},
+    {"stats_reset",      (PyCFunction)KVStore_stats_reset,       METH_NOARGS,   "stats_reset() -> None"},
     {"sync",             (PyCFunction)KVStore_sync,              METH_NOARGS,   "sync() -> None"},
     {"vacuum",           (PyCFunction)KVStore_vacuum,            METH_VARARGS|METH_KEYWORDS, "vacuum(n_pages=0) -> None"},
     {"integrity_check",  (PyCFunction)KVStore_integrity_check,   METH_NOARGS,   "integrity_check() -> None"},
     {"checkpoint",       (PyCFunction)KVStore_checkpoint,        METH_VARARGS|METH_KEYWORDS, "checkpoint(mode=CHECKPOINT_PASSIVE) -> (nLog, nCkpt)"},
+
+    /* Conditional / Bulk */
+    {"put_if_absent",    (PyCFunction)KVStore_put_if_absent,     METH_VARARGS,  "put_if_absent(key, value[, expire_ms]) -> bool"},
+    {"clear",            (PyCFunction)KVStore_clear,             METH_NOARGS,   "clear() -> None"},
+    {"count",            (PyCFunction)KVStore_count,             METH_NOARGS,   "count() -> int"},
 
     /* TTL */
     {"put_ttl",          (PyCFunction)KVStore_put_ttl,           METH_VARARGS,  "put_ttl(key, value, expire_ms) -> None"},

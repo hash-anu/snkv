@@ -19,6 +19,7 @@ tests/test_crash_10gb
 tests/test_checkpoint
 tests/test_ttl
 tests/test_iterator_reverse
+tests/test_new_apis
 examples/basic
 examples/benchmark
 examples/config
@@ -30,3 +31,4 @@ examples/ttl
 examples/checkpoint_demo
 examples/iterator_reverse
 examples/snkv.h
+examples/new_apis

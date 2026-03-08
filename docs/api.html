@@ -999,6 +999,45 @@ KVIterator *it = <span class="kw">NULL</span>;
         </div>
       </section>
 
+      <!-- Seek Iterator -->
+      <section class="api-section" id="c-seek">
+        <h2 class="section-title">Iterator Seek</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Jump an open iterator to an arbitrary key in O(log N) time. Works on forward and reverse iterators, including prefix iterators.</p>
+        <div class="fn-entry" id="c-iterator-seek">
+          <h3 class="fn-name">kvstore_iterator_seek</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_iterator_seek</span>(KVIterator *pIter, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);</div>
+          <p class="fn-desc">Reposition the iterator without closing and reopening it.</p>
+          <ul class="fn-desc" style="margin-left:1.4rem;margin-bottom:.8rem;">
+            <li><strong>Forward iterator</strong> — seek to the first key <code>&gt;= (pKey, nKey)</code>.</li>
+            <li><strong>Reverse iterator</strong> — seek to the last key <code>&lt;= (pKey, nKey)</code>.</li>
+          </ul>
+          <p class="fn-desc">If the seek lands outside a prefix iterator&rsquo;s prefix, the iterator immediately enters the <code>eof</code> state. Call <code>kvstore_iterator_key</code> / <code>kvstore_iterator_next</code> as usual after a successful seek.</p>
+          <div class="table-wrap"><table>
+            <tr><th>Return</th><th>Meaning</th></tr>
+            <tr><td><code>KVSTORE_OK</code></td><td>Seek succeeded (check <code>eof</code> to know if a key was found).</td></tr>
+            <tr><td><code>KVSTORE_ERROR</code></td><td>Invalid arguments.</td></tr>
+          </table></div>
+          <pre><span class="cm">/* forward: scan from "m" onwards */</span>
+KVIterator *it = <span class="kw">NULL</span>;
+<span class="fn">kvstore_iterator_create</span>(kv, &amp;it);
+<span class="fn">kvstore_iterator_seek</span>(it, <span class="str">"m"</span>, <span class="nm">1</span>);
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(it)) {
+    <span class="kw">void</span> *key; <span class="kw">int</span> klen;
+    <span class="fn">kvstore_iterator_key</span>(it, &amp;key, &amp;klen);
+    <span class="fn">kvstore_iterator_next</span>(it);
+}
+<span class="fn">kvstore_iterator_close</span>(it);
+
+<span class="cm">/* reverse: scan from "m" backwards */</span>
+<span class="fn">kvstore_reverse_iterator_create</span>(kv, &amp;it);
+<span class="fn">kvstore_iterator_seek</span>(it, <span class="str">"m"</span>, <span class="nm">1</span>);
+<span class="kw">while</span> (!<span class="fn">kvstore_iterator_eof</span>(it)) {
+    <span class="fn">kvstore_iterator_prev</span>(it);
+}
+<span class="fn">kvstore_iterator_close</span>(it);</pre>
+        </div>
+      </section>
+
       <!-- Transactions -->
       <section class="api-section" id="c-txn">
         <h2 class="section-title">Transactions</h2>
@@ -1104,6 +1143,78 @@ KVIterator *it = <span class="kw">NULL</span>;
         </div>
       </section>
 
+      <!-- Put-If-Absent -->
+      <section class="api-section" id="c-pia">
+        <h2 class="section-title">Conditional Insert (Put-If-Absent)</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Atomically insert a key-value pair only when the key does not already exist. Expired keys (lazy TTL) are treated as absent. Supports an optional TTL on the new entry.</p>
+        <div class="fn-entry" id="c-put-if-absent">
+          <h3 class="fn-name">kvstore_put_if_absent / kvstore_cf_put_if_absent</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_put_if_absent</span>(
+  KVStore       *pKV,
+  <span class="kw">const void</span>   *pKey,    <span class="kw">int</span>     nKey,
+  <span class="kw">const void</span>   *pValue,  <span class="kw">int</span>     nValue,
+  <span class="kw">int64_t</span>       expire_ms,   <span class="cm">/* 0 = no TTL */</span>
+  <span class="kw">int</span>          *pInserted    <span class="cm">/* 1=inserted, 0=already existed; may be NULL */</span>
+);
+<span class="kw">int</span> <span class="fn">kvstore_cf_put_if_absent</span>(KVColumnFamily *pCF, <span class="cm">/* ... same params ... */</span>);</div>
+          <div class="table-wrap"><table>
+            <tr><th><code>expire_ms</code></th><th>Behaviour</th></tr>
+            <tr><td><code>0</code></td><td>No TTL — new entry is permanent.</td></tr>
+            <tr><td><code>&gt; 0</code></td><td>Absolute expiry in ms since Unix epoch (<code>kvstore_now_ms() + delta_ms</code>).</td></tr>
+          </table></div>
+          <p class="fn-desc">The existence check and the write are performed inside a single write transaction, so no other writer can insert the same key concurrently.</p>
+          <pre><span class="kw">int</span> inserted = <span class="nm">0</span>;
+<span class="fn">kvstore_put_if_absent</span>(kv, <span class="str">"lock"</span>, <span class="nm">4</span>, <span class="str">"owner"</span>, <span class="nm">5</span>, <span class="nm">0</span>, &amp;inserted);
+<span class="kw">if</span> (inserted) {
+    puts(<span class="str">"acquired lock"</span>);
+} <span class="kw">else</span> {
+    puts(<span class="str">"lock already held"</span>);
+}
+
+<span class="cm">/* with TTL: session token that expires in 1 hour */</span>
+<span class="kw">int64_t</span> exp = <span class="fn">kvstore_now_ms</span>() + <span class="nm">3600</span> * <span class="nm">1000</span>;
+<span class="fn">kvstore_put_if_absent</span>(kv, session_id, sid_len, token, tok_len, exp, <span class="kw">NULL</span>);</pre>
+        </div>
+      </section>
+
+      <!-- Bulk Clear -->
+      <section class="api-section" id="c-clear">
+        <h2 class="section-title">Bulk Clear</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Remove every key-value pair from a column family in a single atomic write transaction. TTL index entries are also cleared. Much faster than iterating and deleting individually.</p>
+        <div class="fn-entry" id="c-kvstore-clear">
+          <h3 class="fn-name">kvstore_clear / kvstore_cf_clear</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_clear</span>(KVStore *pKV);
+<span class="kw">int</span> <span class="fn">kvstore_cf_clear</span>(KVColumnFamily *pCF);</div>
+          <p class="fn-desc">Truncates the column family&rsquo;s B-tree in O(pages) time using SQLite&rsquo;s <code>BtreeClearTable</code> — the B-tree structure (root page) is preserved so future inserts work immediately without re-opening.</p>
+          <div class="note"><strong>Precondition:</strong> No open iterators pointing at the column family may exist when <code>clear</code> is called. <code>BtreeClearTable</code> invalidates all cursors on the cleared table; accessing a stale cursor is undefined behaviour.</div>
+          <pre><span class="cm">/* flush a rate-limit namespace at midnight */</span>
+<span class="fn">kvstore_cf_clear</span>(rate_limit_cf);
+
+<span class="cm">/* wipe everything in the default CF */</span>
+<span class="fn">kvstore_clear</span>(kv);</pre>
+        </div>
+      </section>
+
+      <!-- Count -->
+      <section class="api-section" id="c-count">
+        <h2 class="section-title">Key Count</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Count keys in a column family without iterating over them. Uses SQLite&rsquo;s <code>sqlite3BtreeCount</code> which reads only page headers &mdash; O(pages) &asymp; O(N/100).</p>
+        <div class="fn-entry" id="c-kvstore-count">
+          <h3 class="fn-name">kvstore_count / kvstore_cf_count</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_count</span>(KVStore *pKV, <span class="kw">int64_t</span> *pnCount);
+<span class="kw">int</span> <span class="fn">kvstore_cf_count</span>(KVColumnFamily *pCF, <span class="kw">int64_t</span> *pnCount);</div>
+          <p class="fn-desc">Counts only the main data B-tree of the column family. TTL index CFs are separate B-trees and are not included. Expired-but-not-yet-purged keys are included in the count — call <code>kvstore_purge_expired</code> first for an exact live count.</p>
+          <div class="note"><strong>Uncommitted writes:</strong> If a write transaction is active, the count reflects committed data only. Commit first for an accurate count that includes pending writes.</div>
+          <pre><span class="kw">int64_t</span> n;
+<span class="fn">kvstore_count</span>(kv, &amp;n);
+printf(<span class="str">"default CF has %lld entries\n"</span>, (<span class="kw">long long</span>)n);
+
+<span class="fn">kvstore_purge_expired</span>(kv, <span class="kw">NULL</span>);
+<span class="fn">kvstore_count</span>(kv, &amp;n);
+printf(<span class="str">"live entries after purge: %lld\n"</span>, (<span class="kw">long long</span>)n);</pre>
+        </div>
+      </section>
+
       <!-- Diagnostics -->
       <section class="api-section" id="c-diag">
         <h2 class="section-title">Diagnostics &amp; Maintenance</h2>
@@ -1115,15 +1226,24 @@ KVIterator *it = <span class="kw">NULL</span>;
         </div>
 
         <div class="fn-entry" id="c-stats">
-          <h3 class="fn-name">kvstore_stats</h3>
-          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_stats</span>(KVStore *pKV, KVStoreStats *pStats);</div>
+          <h3 class="fn-name">kvstore_stats / kvstore_stats_reset</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_stats</span>(KVStore *pKV, KVStoreStats *pStats);
+<span class="kw">int</span> <span class="fn">kvstore_stats_reset</span>(KVStore *pKV);   <span class="cm">/* zero all cumulative counters */</span></div>
+          <p class="fn-desc"><code>kvstore_stats</code> fills the <code>KVStoreStats</code> struct. All counters are cumulative from open (or last reset). <code>kvstore_stats_reset</code> zeros them; <code>nDbPages</code> is a live gauge and is never zeroed.</p>
           <div class="table-wrap"><table>
             <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-            <tr><td><code>nPuts</code></td><td>u64</td><td>Total put operations.</td></tr>
-            <tr><td><code>nGets</code></td><td>u64</td><td>Total get operations.</td></tr>
-            <tr><td><code>nDeletes</code></td><td>u64</td><td>Total delete operations.</td></tr>
-            <tr><td><code>nIterations</code></td><td>u64</td><td>Total iterators created.</td></tr>
-            <tr><td><code>nErrors</code></td><td>u64</td><td>Total errors encountered.</td></tr>
+            <tr><td><code>nPuts</code></td><td>uint64_t</td><td>Total put operations (includes put_ttl, put_if_absent).</td></tr>
+            <tr><td><code>nGets</code></td><td>uint64_t</td><td>Total get operations (includes get_ttl).</td></tr>
+            <tr><td><code>nDeletes</code></td><td>uint64_t</td><td>Total delete operations.</td></tr>
+            <tr><td><code>nIterations</code></td><td>uint64_t</td><td>Total iterators created.</td></tr>
+            <tr><td><code>nErrors</code></td><td>uint64_t</td><td>Total errors encountered.</td></tr>
+            <tr><td><code>nBytesRead</code></td><td>uint64_t</td><td>Total value bytes returned by get operations.</td></tr>
+            <tr><td><code>nBytesWritten</code></td><td>uint64_t</td><td>Total (key + value) bytes written by put operations.</td></tr>
+            <tr><td><code>nWalCommits</code></td><td>uint64_t</td><td>Write transactions successfully committed.</td></tr>
+            <tr><td><code>nCheckpoints</code></td><td>uint64_t</td><td>WAL checkpoints performed (auto + explicit).</td></tr>
+            <tr><td><code>nTtlExpired</code></td><td>uint64_t</td><td>Keys lazily expired on get / exists calls.</td></tr>
+            <tr><td><code>nTtlPurged</code></td><td>uint64_t</td><td>Keys removed by <code>kvstore_purge_expired</code>.</td></tr>
+            <tr><td><code>nDbPages</code></td><td>uint64_t</td><td>Current total pages in the database file (gauge, not zeroed by reset).</td></tr>
           </table></div>
         </div>
 
