@@ -24,22 +24,20 @@
 ** Platform RNG
 ** ------------------------------------------------------------------------- */
 #ifdef _WIN32
-/* Load BCryptGenRandom from bcrypt.dll at runtime via LoadLibraryA/GetProcAddress.
-** LoadLibraryA is in kernel32.dll which is always linked — no extra -l flag needed.
-** bcrypt.dll ships with Windows Vista and later. */
+/* CryptGenRandom lives in advapi32.dll, which MinGW links by default.
+** No extra -l flag or pragma needed. Works on Windows XP and later. */
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#  include <wincrypt.h>
 static int platformRandBytes(uint8_t *buf, size_t len){
-  typedef LONG (WINAPI *PFN)(void *, unsigned char *, unsigned long, unsigned long);
-  static PFN pfn = NULL;
-  if( !pfn ){
-    HMODULE h = LoadLibraryA("bcrypt.dll");
-    if( h ) pfn = (PFN)(void*)GetProcAddress(h, "BCryptGenRandom");
-    /* Intentionally do not FreeLibrary — keep dll loaded for subsequent calls. */
+  HCRYPTPROV hProv = 0;
+  if( !CryptAcquireContextA(&hProv, NULL, NULL, PROV_RSA_FULL,
+                             CRYPT_VERIFYCONTEXT | CRYPT_SILENT) ){
+    return -1;
   }
-  if( !pfn ) return -1;
-  /* 2 == BCRYPT_USE_SYSTEM_PREFERRED_RNG */
-  return pfn(NULL, (unsigned char *)buf, (unsigned long)len, 2) == 0 ? 0 : -1;
+  BOOL ok = CryptGenRandom(hProv, (DWORD)len, (BYTE *)buf);
+  CryptReleaseContext(hProv, 0);
+  return ok ? 0 : -1;
 }
 #elif defined(__linux__)
 #  include <sys/random.h>
