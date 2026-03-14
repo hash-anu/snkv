@@ -566,6 +566,21 @@ for t in threads: t.join()
 
 ---
 
+## Third-Party Licenses
+
+The `snkv` Python package embeds the following third-party libraries compiled into its native extension:
+
+| Library | Version | License | Notes |
+|---------|---------|---------|-------|
+| [SQLite](https://www.sqlite.org/) | 3.x (amalgamation subset) | [Public Domain](https://www.sqlite.org/copyright.html) | B-tree, pager, WAL, OS layer |
+| [Monocypher](https://monocypher.org/) | 4.x | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) (Public Domain) | XChaCha20-Poly1305 + Argon2id |
+
+No separate installation of these libraries is required — they are statically linked into the extension module.
+
+Both SQLite and Monocypher are public domain — no attribution is legally required, but credit is given here in the spirit of good practice.
+
+---
+
 ## License
 
 Apache License 2.0 © 2025 Hash Anu
