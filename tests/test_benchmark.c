@@ -22,13 +22,6 @@
 #define NUM_UPDATES  10000
 #define NUM_DELETES  5000
 
-/* Encrypted benchmark settings — smaller counts since crypto overhead is per-op */
-#define ENC_DB_FILE     "benchmark_enc_kv.db"
-#define ENC_PASSWORD    "benchmark-password"
-#define ENC_PASS_LEN    18
-#define NUM_ENC_RECORDS 100000
-#define NUM_ENC_READS   10000
-
 #define COLOR_BLUE   "\x1b[34m"
 #define COLOR_GREEN  "\x1b[32m"
 #define COLOR_YELLOW "\x1b[33m"
@@ -309,95 +302,11 @@ static void bench_bulk_insert(void) {
     print_result("Bulk insert", end - start, NUM_RECORDS);
 }
 
-/* ==================== BENCHMARK 9: Encrypted Sequential Writes ==================== */
-static double bench_enc_sequential_writes(KVStore *kv) {
-    print_header("BENCHMARK 9: Encrypted Sequential Writes");
-    printf("  Writing %d records (XChaCha20-Poly1305 per value)...\n\n",
-           NUM_ENC_RECORDS);
-
-    char key[32], value[128];
-    int i;
-    double start, end;
-
-    start = get_time();
-
-    for (i = 0; i < NUM_ENC_RECORDS; i++) {
-        if (i % BATCH_SIZE == 0) {
-            if (i > 0) kvstore_commit(kv);
-            kvstore_begin(kv, 1);
-        }
-        snprintf(key, sizeof(key), "key_%08d", i);
-        snprintf(value, sizeof(value),
-                 "value_%08d_with_some_additional_data_to_make_it_realistic", i);
-        kvstore_put(kv, key, strlen(key), value, strlen(value));
-    }
-    kvstore_commit(kv);
-
-    end = get_time();
-    print_result("Enc sequential writes", end - start, NUM_ENC_RECORDS);
-    return NUM_ENC_RECORDS / (end - start);
-}
-
-/* ==================== BENCHMARK 10: Encrypted Random Reads ==================== */
-static double bench_enc_random_reads(KVStore *kv) {
-    print_header("BENCHMARK 10: Encrypted Random Reads");
-    printf("  Reading %d random records (decrypt on each get)...\n\n", NUM_ENC_READS);
-
-    char key[32];
-    void *value;
-    int vlen, i;
-    double start, end;
-
-    start = get_time();
-
-    for (i = 0; i < NUM_ENC_READS; i++) {
-        int idx = rand() % NUM_ENC_RECORDS;
-        snprintf(key, sizeof(key), "key_%08d", idx);
-        if (kvstore_get(kv, key, strlen(key), &value, &vlen) == KVSTORE_OK) {
-            snkv_free(value);
-        }
-    }
-
-    end = get_time();
-    print_result("Enc random reads", end - start, NUM_ENC_READS);
-    return NUM_ENC_READS / (end - start);
-}
-
-/* ==================== BENCHMARK 11: Encrypted Sequential Scan ==================== */
-static double bench_enc_sequential_scan(KVStore *kv) {
-    print_header("BENCHMARK 11: Encrypted Sequential Scan");
-    printf("  Scanning all %d records (decrypt on each value read)...\n\n",
-           NUM_ENC_RECORDS);
-
-    KVIterator *it = NULL;
-    void *key, *value;
-    int klen, vlen, count = 0;
-    double start, end;
-
-    kvstore_iterator_create(kv, &it);
-
-    start = get_time();
-
-    kvstore_iterator_first(it);
-    while (!kvstore_iterator_eof(it)) {
-        kvstore_iterator_key(it, &key, &klen);
-        kvstore_iterator_value(it, &value, &vlen);
-        count++;
-        kvstore_iterator_next(it);
-    }
-
-    end = get_time();
-
-    kvstore_iterator_close(it);
-    print_result("Enc sequential scan", end - start, count);
-    return count / (end - start);
-}
-
 /* ==================== Main ==================== */
 int main(void) {
     KVStore *kv = NULL;
     double total_start, total_end;
-
+    
     printf("\n");
     printf(COLOR_BLUE "+==============================================================+\n");
     printf("|                  KVStore Performance Benchmark               |\n");
@@ -406,21 +315,21 @@ int main(void) {
     printf("|  Records:  %-50d|\n", NUM_RECORDS);
     printf("+==============================================================+\n");
     printf(COLOR_RESET);
-
+    
     srand(time(NULL));
-
+    
     /* Initialize database */
     printf("\n" COLOR_YELLOW "Initializing database..." COLOR_RESET "\n");
     remove(DB_FILE);
-
+    
     if (kvstore_open(DB_FILE, &kv, KVSTORE_JOURNAL_WAL) != KVSTORE_OK) {
         fprintf(stderr, "Failed to open KVStore\n");
         return 1;
     }
-
+    
     total_start = get_time();
-
-    /* Run plain benchmarks */
+    
+    /* Run benchmarks */
     bench_sequential_writes(kv);
     bench_random_reads(kv);
     bench_sequential_scan(kv);
@@ -428,7 +337,7 @@ int main(void) {
     bench_random_deletes(kv);
     bench_exists_checks(kv);
     bench_mixed_workload(kv);
-
+    
     KVStoreStats stats;
     kvstore_stats(kv, &stats);
     printf("  Total operations:\n");
@@ -436,75 +345,26 @@ int main(void) {
     printf("    - Gets:    %" PRIu64 "\n", stats.nGets);
     printf("    - Deletes: %" PRIu64 "\n", stats.nDeletes);
 
+
     kvstore_close(kv);
-
+    
     bench_bulk_insert();
-
-    /* ---- Encryption benchmarks ---- */
-    printf("\n" COLOR_BLUE "+==============================================================+\n");
-    printf("|              KVStore Encryption Overhead Benchmark           |\n");
-    printf("|                                                              |\n");
-    printf("|  Cipher:    XChaCha20-Poly1305 (40-byte overhead/value)     |\n");
-    printf("|  KDF:       Argon2id  (64 MB, 3 iter) — run once on open    |\n");
-    printf("|  Records:   %-50d|\n", NUM_ENC_RECORDS);
-    printf("+==============================================================+\n");
-    printf(COLOR_RESET);
-
-    KVStore *ekv = NULL;
-    remove(ENC_DB_FILE);
-    remove(ENC_DB_FILE "-wal");
-    remove(ENC_DB_FILE "-shm");
-
-    printf("\n" COLOR_YELLOW "Deriving encryption key (Argon2id — ~1-2s)..." COLOR_RESET "\n");
-    double kdf_start = get_time();
-    if (kvstore_open_encrypted(ENC_DB_FILE, ENC_PASSWORD, ENC_PASS_LEN,
-                               &ekv, NULL) != KVSTORE_OK) {
-        fprintf(stderr, "Failed to open encrypted KVStore\n");
-        return 1;
-    }
-    double kdf_time = get_time() - kdf_start;
-    printf("  Key derivation: " COLOR_GREEN "%.2f s" COLOR_RESET
-           " (one-time cost, not included in op timings)\n", kdf_time);
-
-    double enc_writes = bench_enc_sequential_writes(ekv);
-    double enc_reads  = bench_enc_random_reads(ekv);
-    double enc_scan   = bench_enc_sequential_scan(ekv);
-
-    kvstore_close(ekv);
-    remove(ENC_DB_FILE);
-    remove(ENC_DB_FILE "-wal");
-    remove(ENC_DB_FILE "-shm");
-
+    
     total_end = get_time();
-
+    
     /* Summary */
     printf("\n" COLOR_CYAN);
     printf("========================================================\n");
     printf("  SUMMARY\n");
     printf("========================================================\n");
     printf(COLOR_RESET);
-    printf("  Total benchmark time: " COLOR_GREEN "%.2f seconds" COLOR_RESET "\n",
+    printf("  Total benchmark time: " COLOR_GREEN "%.2f seconds" COLOR_RESET "\n", 
            total_end - total_start);
-
-    /* Encryption overhead table */
-    printf("\n" COLOR_CYAN);
-    printf("  Encryption overhead (XChaCha20-Poly1305, 100K records):\n");
-    printf(COLOR_RESET);
-
-    char wbuf[32], rbuf[32], sbuf[32];
-    format_number((long long)enc_writes, wbuf, sizeof(wbuf));
-    format_number((long long)enc_reads,  rbuf, sizeof(rbuf));
-    format_number((long long)enc_scan,   sbuf, sizeof(sbuf));
-    printf("  %-30s: %s ops/sec\n", "Enc sequential writes", wbuf);
-    printf("  %-30s: %s ops/sec\n", "Enc random reads",      rbuf);
-    printf("  %-30s: %s ops/sec\n", "Enc sequential scan",   sbuf);
-    printf("\n  Note: KDF (Argon2id) adds ~1-2s one-time cost on store open.\n");
-    printf("        Per-op overhead is encryption/decryption only.\n");
-
+        
     printf("\n" COLOR_GREEN "[OK] Benchmark complete!" COLOR_RESET "\n\n");
-
+    
     /* Cleanup */
     remove(DB_FILE);
-
+    
     return 0;
 }
