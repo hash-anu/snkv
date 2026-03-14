@@ -22,6 +22,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Typed exceptions** — `NotFoundError`, `BusyError`, `LockedError`, `ReadOnlyError`, `CorruptError` all subclass `snkv.Error`
 - **No Python dependencies** — pure CPython C extension; only requires a C compiler and `python3-dev`
 - **Native TTL** — per-key expiry with `put(ttl=seconds)`, dict-style `db[key, ttl] = value`, lazy expiry on get, and `purge_expired()`
+- **Encryption** — per-value XChaCha20-Poly1305 encryption with Argon2id key derivation; transparent to all existing APIs
 - **Seek iterators** — jump to any key in O(log N) with `it.seek(key)`, chainable and works on prefix/reverse iterators
 - **Conditional insert** — atomic `put_if_absent(key, value, ttl=None)` returns `True` if inserted; safe for distributed locks and dedup
 - **Bulk clear** — `db.clear()` / `cf.clear()` truncates all keys in O(pages) without dropping the store
@@ -400,6 +401,45 @@ with db.create_column_family("cache") as cf:
     n = cf.purge_expired()
 ```
 
+### Encryption
+
+Transparent per-value encryption. All existing APIs work without modification.
+
+```python
+from snkv import KVStore, AuthError
+
+# Create / open encrypted store
+with KVStore.open_encrypted("mydb.db", b"hunter2") as db:
+    db[b"secret"] = b"classified"
+    print(db.is_encrypted())      # True
+    print(db[b"secret"])          # b"classified" — transparent decrypt
+
+# Wrong password raises AuthError
+try:
+    KVStore.open_encrypted("mydb.db", b"wrong")
+except AuthError:
+    print("bad password")
+
+# Change password in-place (re-encrypts all values atomically)
+with KVStore.open_encrypted("mydb.db", b"hunter2") as db:
+    db.reencrypt(b"new-strong-pass")
+
+# Remove encryption permanently
+with KVStore.open_encrypted("mydb.db", b"new-strong-pass") as db:
+    db.remove_encryption()
+with KVStore("mydb.db") as db:    # plain open works now
+    print(db[b"secret"])
+```
+
+| Method | Description |
+|---|---|
+| `KVStore.open_encrypted(path, password, **kwargs)` | Class method — open or create encrypted store |
+| `db.is_encrypted()` | Returns `True` if store is encrypted |
+| `db.reencrypt(new_password)` | Change password; re-encrypts all values atomically |
+| `db.remove_encryption()` | Decrypt in-place; store becomes plain |
+
+**Cryptographic details:** XChaCha20-Poly1305 per value · Argon2id KDF (64 MB, 3 iterations) · 40-byte overhead per value (nonce + MAC) · key wiped from memory on close.
+
 ---
 
 ## Error Hierarchy
@@ -411,6 +451,7 @@ snkv.Error (base)
 ├── snkv.LockedError     (SQLITE_LOCKED)
 ├── snkv.ReadOnlyError   (write attempted on read-only store)
 └── snkv.CorruptError    (database file is corrupt)
+└── snkv.AuthError      (KVSTORE_AUTH_FAILED — wrong password or not an encrypted store)
 ```
 
 ```python
@@ -468,6 +509,7 @@ PYTHONPATH=. python3 examples/config.py          # journal mode, sync, cache, WA
 PYTHONPATH=. python3 examples/checkpoint.py      # manual + auto WAL checkpoint
 PYTHONPATH=. python3 examples/session_store.py   # real-world session store pattern
 PYTHONPATH=. python3 examples/ttl.py             # TTL expiry, rate limiter demo
+PYTHONPATH=. python3 examples/encryption.py  # encrypted store, wrong-password, reencrypt
 PYTHONPATH=. python3 examples/iterator_reverse.py # reverse iterators, descending scans
 PYTHONPATH=. python3 examples/new_apis.py        # seek, put_if_absent, clear, count, stats
 PYTHONPATH=. python3 examples/multiprocess.py    # 5 concurrent processes, busy_timeout
@@ -485,6 +527,7 @@ python examples\config.py
 python examples\checkpoint.py
 python examples\session_store.py
 python examples\ttl.py
+python examples\encryption.py
 python examples\iterator_reverse.py
 python examples\new_apis.py
 python examples\multiprocess.py

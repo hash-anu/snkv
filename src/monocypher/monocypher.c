@@ -66,7 +66,9 @@ namespace MONOCYPHER_CPP_NAMESPACE {
 #define ZERO(buf, size)            FOR(_i_, 0, size) (buf)[_i_] = 0
 #define WIPE_CTX(ctx)              crypto_wipe(ctx   , sizeof(*(ctx)))
 #define WIPE_BUFFER(buffer)        crypto_wipe(buffer, sizeof(buffer))
+#undef  MIN
 #define MIN(a, b)                  ((a) <= (b) ? (a) : (b))
+#undef  MAX
 #define MAX(a, b)                  ((a) >= (b) ? (a) : (b))
 
 typedef int8_t   i8;

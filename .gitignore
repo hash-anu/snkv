@@ -33,3 +33,4 @@ examples/checkpoint_demo
 examples/iterator_reverse
 examples/snkv.h
 examples/new_apis
+examples/encryption

@@ -596,6 +596,7 @@
         </ul>
       </li>
       <li class="toc-section"><a href="#c-memory">Memory</a></li>
+      <li class="toc-section"><a href="#c-enc">Encryption</a></li>
       <li class="toc-section"><a href="#c-threads">Thread Safety</a></li>
     </ul>
   </aside>
@@ -637,6 +638,7 @@
         </ul>
       </li>
       <li class="toc-section"><a href="#py-types">Type Notes</a></li>
+      <li class="toc-section"><a href="#py-enc">Encryption</a></li>
     </ul>
   </aside>
 
@@ -675,6 +677,7 @@
           <tr><td><code class="errcode-err">KVSTORE_READONLY</code></td><td>8</td><td>Database is read-only.</td></tr>
           <tr><td><code class="errcode-err">KVSTORE_CORRUPT</code></td><td>11</td><td>Database file is corrupted.</td></tr>
           <tr><td><code class="errcode-err">KVSTORE_NOTFOUND</code></td><td>12</td><td>Key or column family not found.</td></tr>
+          <tr><td><code class="errcode-err">KVSTORE_AUTH_FAILED</code></td><td>13</td><td>Wrong password or encrypted store opened without a key.</td></tr>
           <tr><td><code class="errcode-err">KVSTORE_PROTOCOL</code></td><td>15</td><td>Database lock protocol error.</td></tr>
         </table></div>
         <p class="fn-desc" style="margin-top:0.5rem;">All codes are aliases for the corresponding <code>SQLITE_*</code> values.</p>
@@ -1314,6 +1317,74 @@ printf(<span class="str">"%d frames total, %d checkpointed\n"</span>, nLog, nCkp
         </ul>
       </section>
 
+      <!-- Encryption -->
+      <section class="api-section" id="c-enc">
+        <h2 class="section-title">Encryption</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Per-value AES-grade encryption using XChaCha20-Poly1305 (via Monocypher). Passwords are stretched with Argon2id. All existing APIs — put, get, delete, iterate, TTL, column families — work transparently on encrypted stores. Keys are stored in plaintext; only values are encrypted.</p>
+
+        <div class="fn-entry" id="c-enc-open">
+          <h3 class="fn-name">kvstore_open_encrypted</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_open_encrypted</span>(
+  <span class="kw">const char</span>          *zFilename,
+  <span class="kw">const void</span>          *pPassword,  <span class="kw">int</span> nPassword,
+  KVStore            **ppKV,
+  <span class="kw">const</span> KVStoreConfig *pConfig      <span class="cm">/* may be NULL for defaults */</span>
+);</div>
+          <p class="fn-desc">Open or create an encrypted store. On a fresh file a new Argon2id-derived key is generated from the password. On an existing encrypted file the password is verified before access is granted. Returns <code>KVSTORE_AUTH_FAILED</code> if the password is wrong or if the file is a plain (non-encrypted) store with existing data. <code>*ppKV</code> is set to <code>NULL</code> on any error — no resource leak.</p>
+          <pre><span class="cm">/* Create / open encrypted */</span>
+KVStore *kv = <span class="kw">NULL</span>;
+<span class="kw">int</span> rc = <span class="fn">kvstore_open_encrypted</span>(<span class="str">"mydb.db"</span>, <span class="str">"hunter2"</span>, <span class="nm">7</span>, &amp;kv, <span class="kw">NULL</span>);
+<span class="kw">if</span> (rc == KVSTORE_AUTH_FAILED) { puts(<span class="str">"wrong password"</span>); }
+
+<span class="cm">/* All standard operations work transparently */</span>
+<span class="fn">kvstore_put</span>(kv, <span class="str">"key"</span>, <span class="nm">3</span>, <span class="str">"secret"</span>, <span class="nm">6</span>);
+<span class="fn">kvstore_close</span>(kv);</pre>
+        </div>
+
+        <div class="fn-entry" id="c-enc-is">
+          <h3 class="fn-name">kvstore_is_encrypted</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_is_encrypted</span>(KVStore *pKV);</div>
+          <p class="fn-desc">Returns <code>1</code> if the store was opened with <code>kvstore_open_encrypted</code>, <code>0</code> otherwise.</p>
+        </div>
+
+        <div class="fn-entry" id="c-enc-reencrypt">
+          <h3 class="fn-name">kvstore_reencrypt</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_reencrypt</span>(KVStore *pKV, <span class="kw">const void</span> *pNewPassword, <span class="kw">int</span> nNewPassword);</div>
+          <p class="fn-desc">Change the encryption password in-place. Derives a new key from the new password, re-encrypts every value in every column family, and updates the authentication metadata — all in a single atomic transaction. The old password is invalid immediately after this call returns.</p>
+          <pre><span class="fn">kvstore_reencrypt</span>(kv, <span class="str">"new-pass"</span>, <span class="nm">8</span>);
+<span class="cm">/* kv is still open and usable with the new password */</span></pre>
+        </div>
+
+        <div class="fn-entry" id="c-enc-remove">
+          <h3 class="fn-name">kvstore_remove_encryption</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_remove_encryption</span>(KVStore *pKV);</div>
+          <p class="fn-desc">Decrypt all values in-place and remove the authentication metadata. After this call the store is a plain (non-encrypted) SNKV database and can be opened with <code>kvstore_open</code> or <code>kvstore_open_v2</code>.</p>
+          <pre><span class="fn">kvstore_remove_encryption</span>(kv);
+<span class="fn">kvstore_close</span>(kv);
+
+<span class="cm">/* Now opens without a password */</span>
+KVStore *plain = <span class="kw">NULL</span>;
+<span class="fn">kvstore_open</span>(<span class="str">"mydb.db"</span>, &amp;plain, KVSTORE_JOURNAL_WAL);</pre>
+        </div>
+
+        <div class="fn-entry" id="c-enc-now">
+          <h3 class="fn-name">kvstore_now_ms</h3>
+          <div class="fn-sig"><span class="kw">int64_t</span> <span class="fn">kvstore_now_ms</span>(void);</div>
+          <p class="fn-desc">Current time in milliseconds since the Unix epoch. Useful for computing absolute TTL expiry timestamps: <code>kvstore_now_ms() + delta_ms</code>.</p>
+        </div>
+
+        <div class="note" style="margin-top:1rem;">
+          <strong>Cryptographic details:</strong>
+          <ul style="margin:0.4rem 0 0 1.2rem;line-height:1.8;">
+            <li><strong>KDF:</strong> Argon2id (m=64 MB, t=3 iterations) — password → 256-bit key</li>
+            <li><strong>Cipher:</strong> XChaCha20-Poly1305 — 24-byte random nonce + 16-byte MAC per value</li>
+            <li><strong>Overhead:</strong> 40 bytes per stored value (nonce + MAC)</li>
+            <li><strong>Key scope:</strong> wiped from memory on <code>kvstore_close</code></li>
+            <li><strong>Column families:</strong> all CFs share one key; re-encryption covers all CFs atomically</li>
+          </ul>
+        </div>
+      </section>
+
     </div><!-- /panel-c -->
 
     <!-- ════════════════════════════════════════════════════════════ -->
@@ -1825,6 +1896,44 @@ key = db.<span class="fn">iterator</span>().<span class="fn">seek</span>(<span c
         </table></div>
         <p class="fn-desc" style="margin-top:0.75rem;"><strong>Return values</strong> are always <code>bytes</code>.</p>
         <div class="note-info note" style="margin-top:0.75rem;"><strong>Thread safety:</strong> The underlying C store is mutex-protected. Each Python method acquires a mutex and releases the GIL for blocking I/O — safe to share a <code>KVStore</code> across threads. Column family and iterator handles are not independently thread-safe.</div>
+      </section>
+
+      <!-- Encryption -->
+      <section class="api-section" id="py-enc">
+        <h2 class="section-title">Encryption</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Transparent per-value encryption using XChaCha20-Poly1305 with Argon2id key derivation. All existing methods — <code>put</code>, <code>get</code>, <code>delete</code>, iterators, TTL, column families — work without modification on an encrypted store.</p>
+        <div class="fn-entry">
+          <h3 class="fn-name">KVStore.open_encrypted / is_encrypted / reencrypt / remove_encryption</h3>
+          <div class="fn-sig">KVStore.<span class="fn">open_encrypted</span>(path, password, **kwargs) → KVStore
+db.<span class="fn">is_encrypted</span>() → bool
+db.<span class="fn">reencrypt</span>(new_password)
+db.<span class="fn">remove_encryption</span>()</div>
+          <p class="fn-desc"><code>open_encrypted</code> is a class method that opens or creates an encrypted store. <code>password</code> may be <code>bytes</code> or <code>str</code> (UTF-8 encoded). Accepts the same keyword arguments as the <code>KVStore</code> constructor. Raises <code>AuthError</code> on wrong password.</p>
+          <pre><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, AuthError
+
+<span class="cm"># Create / open encrypted store</span>
+<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"mydb.db"</span>, <span class="str">b"hunter2"</span>) <span class="kw">as</span> db:
+    db[<span class="str">b"secret"</span>] = <span class="str">b"classified"</span>
+    print(db.<span class="fn">is_encrypted</span>())   <span class="cm"># True</span>
+    print(db[<span class="str">b"secret"</span>])        <span class="cm"># b"classified" — transparent decrypt</span>
+
+<span class="cm"># Wrong password raises AuthError</span>
+<span class="kw">try</span>:
+    KVStore.<span class="fn">open_encrypted</span>(<span class="str">"mydb.db"</span>, <span class="str">b"wrong"</span>)
+<span class="kw">except</span> AuthError:
+    print(<span class="str">"bad password"</span>)
+
+<span class="cm"># Change password in-place (re-encrypts all values atomically)</span>
+<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"mydb.db"</span>, <span class="str">b"hunter2"</span>) <span class="kw">as</span> db:
+    db.<span class="fn">reencrypt</span>(<span class="str">b"new-strong-pass"</span>)
+
+<span class="cm"># Remove encryption — store becomes plain</span>
+<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"mydb.db"</span>, <span class="str">b"new-strong-pass"</span>) <span class="kw">as</span> db:
+    db.<span class="fn">remove_encryption</span>()
+<span class="kw">with</span> KVStore(<span class="str">"mydb.db"</span>) <span class="kw">as</span> db:   <span class="cm"># plain open works now</span>
+    print(db[<span class="str">b"secret"</span>])</pre>
+        </div>
+        <div class="note" style="margin-top:0.75rem;"><strong>AuthError</strong> is a subclass of <code>snkv.Error</code> raised when a wrong password is supplied or when <code>open_encrypted</code> is called on a non-encrypted file that already contains data.</div>
       </section>
 
     </div><!-- /panel-py -->
