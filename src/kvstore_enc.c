@@ -24,12 +24,15 @@
 ** Platform RNG
 ** ------------------------------------------------------------------------- */
 #ifdef _WIN32
+/* RtlGenRandom (aka SystemFunction036) lives in advapi32.dll which is
+** linked by default on all Windows toolchains (MSVC and GCC/MinGW).
+** No extra -l flag is required. */
+#  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
-#  include <bcrypt.h>
-#  pragma comment(lib, "bcrypt.lib")
+BOOLEAN NTAPI SystemFunction036(PVOID RandomBuffer, ULONG RandomBufferLength);
+#  pragma comment(lib, "advapi32.lib")
 static int platformRandBytes(uint8_t *buf, size_t len){
-  return BCryptGenRandom(NULL, buf, (ULONG)len,
-                         BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+  return SystemFunction036(buf, (ULONG)len) ? 0 : -1;
 }
 #elif defined(__linux__)
 #  include <sys/random.h>

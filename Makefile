@@ -24,7 +24,7 @@ ifeq ($(UNAME_S),Darwin)
 endif
 ifeq ($(UNAME_S),Windows)
   # Native Windows / MSYS2 / MinGW
-  LDFLAGS = 
+  LDFLAGS =
   TARGET_EXT = .exe
 endif
 # Fallback for MSYS/Cygwin reporting MINGW/MSYS
