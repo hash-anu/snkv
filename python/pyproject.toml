@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snkv"
-version = "0.5.0"
+version = "0.6.0"
 requires-python = ">=3.8"
-description = "Crash-safe embedded key-value store — TTL, reverse iterators, iterator seek, put_if_absent, column families, ACID transactions"
+description = "Crash-safe embedded key-value store — encryption (XChaCha20-Poly1305), TTL, reverse iterators, iterator seek, put_if_absent, column families, ACID transactions"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 classifiers = [
