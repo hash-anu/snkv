@@ -4467,6 +4467,57 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
 }
 
 /*
+** After sqlite3BtreeDropTable frees root page iDropped and reports iMoved,
+** scan the metadata table for the entry whose stored root equals iMoved and
+** update it to iDropped.  This keeps the metadata consistent when SQLite
+** shuffles root pages to fill the gap left by the dropped table.
+** Caller must hold pKV->pMutex and be in a write transaction.
+*/
+static void kvstoreFixMovedTableRoot(KVStore *pKV, int iDropped, int iMoved){
+  if( iMoved == 0 ) return;
+  BtCursor *pCur = kvstoreAllocCursor();
+  if( !pCur ) return;
+  int rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
+  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return; }
+  int res = 0;
+  rc = sqlite3BtreeFirst(pCur, &res);
+  while( rc == SQLITE_OK && res == 0 ){
+    u32 sz = sqlite3BtreePayloadSize(pCur);
+    if( (int)sz >= 4 + 1 + 4 ){   /* at least 4-byte len + 1-char name + 4-byte root */
+      unsigned char rootBytes[4];
+      rc = sqlite3BtreePayload(pCur, sz - 4, 4, rootBytes);
+      if( rc != SQLITE_OK ) break;
+      int storedRoot = (rootBytes[0]<<24)|(rootBytes[1]<<16)|
+                       (rootBytes[2]<<8)|rootBytes[3];
+      if( storedRoot == iMoved ){
+        unsigned char *pBuf = sqlite3Malloc(sz);
+        if( pBuf ){
+          rc = sqlite3BtreePayload(pCur, 0, sz, pBuf);
+          if( rc == SQLITE_OK ){
+            pBuf[sz-4] = (iDropped>>24)&0xFF;
+            pBuf[sz-3] = (iDropped>>16)&0xFF;
+            pBuf[sz-2] = (iDropped>> 8)&0xFF;
+            pBuf[sz-1] =  iDropped     &0xFF;
+            i64 rowid = sqlite3BtreeIntegerKey(pCur);
+            BtreePayload payload;
+            memset(&payload, 0, sizeof(payload));
+            payload.nKey  = rowid;
+            payload.pData = pBuf;
+            payload.nData = (int)sz;
+            sqlite3BtreeInsert(pCur, &payload, 0, 0);
+          }
+          sqlite3_free(pBuf);
+        }
+        break;
+      }
+    }
+    rc = sqlite3BtreeNext(pCur, 0);
+    if( rc == SQLITE_DONE ) break;
+  }
+  kvstoreFreeCursor(pCur);
+}
+
+/*
 ** Drop a single hidden CF by name within an existing write transaction.
 ** Caller must hold pKV->pMutex and be in a write transaction (inTrans==2).
 ** Silently ignores KVSTORE_NOTFOUND.
@@ -4503,6 +4554,7 @@ static void kvstoreDropHiddenCFNoLock(KVStore *pKV, const char *zName){
 
   int iMoved = 0;
   sqlite3BtreeDropTable(pKV->pBt, iTable, &iMoved);
+  kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
 
   u32 cfCount = 0;
   sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
@@ -4647,6 +4699,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     sqlite3_mutex_leave(pKV->pMutex);
     return rc;
   }
+  kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
 
   /* Drop hidden TTL index CFs if they exist (best-effort). */
   {
