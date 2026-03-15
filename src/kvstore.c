@@ -64,7 +64,7 @@ static int platformRandBytes(uint8_t *buf, size_t len){
   CryptReleaseContext(hProv, 0);
   return ok ? 0 : -1;
 }
-#elif defined(__linux__)
+#elif defined(__linux__) && defined(__has_include) && __has_include(<sys/random.h>)
 #  include <sys/random.h>
 static int platformRandBytes(uint8_t *buf, size_t len){
   size_t done = 0;
