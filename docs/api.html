@@ -639,6 +639,22 @@
       </li>
       <li class="toc-section"><a href="#py-types">Type Notes</a></li>
       <li class="toc-section"><a href="#py-enc">Encryption</a></li>
+      <li class="toc-section"><a href="#py-vector">VectorStore</a>
+        <ul class="toc-sub">
+          <li><a href="#py-vec-install">Installation</a></li>
+          <li><a href="#py-vec-open">Opening</a></li>
+          <li><a href="#py-vec-write">vector_put / vector_put_batch</a></li>
+          <li><a href="#py-vec-read">vector_get / get / get_metadata</a></li>
+          <li><a href="#py-vec-search">search / search_keys</a></li>
+          <li><a href="#py-vec-delete">delete</a></li>
+          <li><a href="#py-vec-ttl">TTL</a></li>
+          <li><a href="#py-vec-stats">Stats &amp; Info</a></li>
+          <li><a href="#py-vec-maintenance">Maintenance</a></li>
+          <li><a href="#py-vec-drop">drop_vector_index</a></li>
+          <li><a href="#py-vec-dict">Dict Interface</a></li>
+          <li><a href="#py-vec-lifecycle">Lifecycle</a></li>
+        </ul>
+      </li>
     </ul>
   </aside>
 
@@ -1942,6 +1958,248 @@ db.<span class="fn">remove_encryption</span>()</div>
     print(db[<span class="str">b"secret"</span>])        <span class="cm"># b"classified" — data preserved</span></pre>
         </div>
         <div class="note" style="margin-top:0.75rem;"><strong>AuthError</strong> is a subclass of <code>snkv.Error</code> raised when a wrong password is supplied to an already-encrypted store. Calling <code>open_encrypted</code> on a plain store encrypts it in-place instead of raising <code>AuthError</code>.</div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <!-- VectorStore                                             -->
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <section class="api-section" id="py-vector">
+        <div class="section-label">Python API</div>
+        <h2 class="section-title">VectorStore</h2>
+        <p class="fn-desc">SNKV key-value store with an integrated <a href="https://github.com/unum-cloud/usearch">usearch</a> HNSW vector index. All vector data lives inside the same <code>.db</code> file using dedicated column families. The in-memory index is rebuilt from disk on every open — no separate index file.</p>
+        <div class="note">Requires the <code>vector</code> extra: <code>pip install snkv[vector]</code></div>
+      </section>
+
+      <section class="api-section" id="py-vec-install">
+        <h2 class="section-title">Installation</h2>
+        <pre><span class="cm"># installs snkv + usearch>=2.9 + numpy>=1.21</span>
+pip install snkv[vector]</pre>
+      </section>
+
+      <section class="api-section" id="py-vec-open">
+        <h2 class="section-title">Opening a VectorStore</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">VectorStore(path, dim, *, space, connectivity, expansion_add, expansion_search, dtype, password, **kv_kwargs)</h3>
+          <div class="fn-sig"><span class="kw">from</span> snkv.vector <span class="kw">import</span> VectorStore
+
+VectorStore(path, dim, *, space=<span class="str">"l2"</span>, connectivity=<span class="num">16</span>, expansion_add=<span class="num">128</span>,
+            expansion_search=<span class="kw">None</span>, dtype=<span class="str">"f32"</span>, password=<span class="kw">None</span>, **kv_kwargs)</div>
+          <div class="table-wrap"><table>
+            <tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
+            <tr><td><code>path</code></td><td>—</td><td>Path to <code>.db</code> file. <code>None</code> for in-memory.</td></tr>
+            <tr><td><code>dim</code></td><td>—</td><td>Vector dimension. Fixed for the lifetime of the store.</td></tr>
+            <tr><td><code>space</code></td><td><code>"l2"</code></td><td>Distance metric: <code>"l2"</code> (squared L2), <code>"cosine"</code>, or <code>"ip"</code> (inner product).</td></tr>
+            <tr><td><code>connectivity</code></td><td><code>16</code></td><td>HNSW M parameter. Must be ≥ 1.</td></tr>
+            <tr><td><code>expansion_add</code></td><td><code>128</code></td><td>HNSW expansion during index build. Must be ≥ 1.</td></tr>
+            <tr><td><code>expansion_search</code></td><td><code>None</code></td><td><code>None</code> restores the stored value (falls back to 64 for new stores). Explicit value overrides stored.</td></tr>
+            <tr><td><code>dtype</code></td><td><code>"f32"</code></td><td>In-memory index precision: <code>"f32"</code>, <code>"f16"</code>, or <code>"i8"</code>. On-disk storage is always float32.</td></tr>
+            <tr><td><code>password</code></td><td><code>None</code></td><td><code>bytes</code> or <code>str</code>. Opens/creates an encrypted store.</td></tr>
+          </table></div>
+          <pre><span class="kw">from</span> snkv.vector <span class="kw">import</span> VectorStore
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="cm"># Plain store</span>
+<span class="kw">with</span> VectorStore(<span class="str">"store.db"</span>, dim=<span class="num">128</span>, space=<span class="str">"cosine"</span>) <span class="kw">as</span> vs:
+    vs.<span class="fn">vector_put</span>(<span class="str">b"doc:1"</span>, <span class="str">b"hello world"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>))
+
+<span class="cm"># Encrypted store</span>
+<span class="kw">with</span> VectorStore(<span class="str">"store.db"</span>, dim=<span class="num">128</span>, password=<span class="str">b"secret"</span>) <span class="kw">as</span> vs:
+    vs.<span class="fn">vector_put</span>(<span class="str">b"doc:1"</span>, <span class="str">b"hello world"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>))</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-write">
+        <h2 class="section-title">Writing Vectors</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">vector_put(key, value, vector, *, ttl=None, metadata=None) → None</h3>
+          <p class="fn-desc">Store a key/value pair and add its vector to the HNSW index atomically. The SNKV write (all column families) is one transaction; the in-memory usearch update happens after commit. On overwrite the old usearch entry is removed and replaced.</p>
+          <div class="table-wrap"><table>
+            <tr><th>Parameter</th><th>Description</th></tr>
+            <tr><td><code>key</code></td><td><code>bytes</code> or <code>str</code></td></tr>
+            <tr><td><code>value</code></td><td><code>bytes</code> or <code>str</code> — arbitrary payload stored in the default CF</td></tr>
+            <tr><td><code>vector</code></td><td>array-like, shape <code>(dim,)</code> — stored as float32 on disk</td></tr>
+            <tr><td><code>ttl</code></td><td>Finite positive <code>float</code> — seconds until expiry. <code>None</code> = no expiry.</td></tr>
+            <tr><td><code>metadata</code></td><td><code>dict</code> or <code>None</code>. <code>None</code> = preserve existing. <code>{}</code> = clear. <code>{...}</code> = write new. Must be JSON-serializable.</td></tr>
+          </table></div>
+          <pre>vs.<span class="fn">vector_put</span>(<span class="str">b"doc:1"</span>, <span class="str">b"hello"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>))
+vs.<span class="fn">vector_put</span>(<span class="str">b"doc:2"</span>, <span class="str">b"world"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>),
+              ttl=<span class="num">3600</span>, metadata={<span class="str">"category"</span>: <span class="str">"news"</span>, <span class="str">"score"</span>: <span class="num">0.9</span>})</pre>
+        </div>
+        <div class="fn-entry" style="margin-top:1.5rem;">
+          <h3 class="fn-name">vector_put_batch(items, *, ttl=None) → None</h3>
+          <p class="fn-desc">Insert or update multiple items in a single SNKV transaction with one bulk <code>index.add</code> call. 5–20× faster than N individual <code>vector_put</code> calls for bulk loads. Duplicate keys in the batch are deduplicated — last occurrence wins. If any item has an invalid vector shape the entire batch rolls back.</p>
+          <div class="table-wrap"><table>
+            <tr><th>Parameter</th><th>Description</th></tr>
+            <tr><td><code>items</code></td><td>Iterable of <code>(key, value, vector)</code> or <code>(key, value, vector, metadata)</code></td></tr>
+            <tr><td><code>ttl</code></td><td>Finite positive <code>float</code> — uniform expiry applied to all items.</td></tr>
+          </table></div>
+          <pre>vs.<span class="fn">vector_put_batch</span>([
+    (<span class="str">b"a"</span>, <span class="str">b"val-a"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>)),
+    (<span class="str">b"b"</span>, <span class="str">b"val-b"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>), {<span class="str">"tag"</span>: <span class="str">"x"</span>}),
+])</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-read">
+        <h2 class="section-title">Reading Vectors &amp; Values</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">vector_get(key) → np.ndarray</h3>
+          <p class="fn-desc">Return the stored vector as <code>np.ndarray(dim,)</code> float32. Raises <code>NotFoundError</code> if no vector is stored for the key. Raises <code>VectorIndexError</code> if the index has been dropped.</p>
+        </div>
+        <div class="fn-entry" style="margin-top:1rem;">
+          <h3 class="fn-name">get(key, default=None) → bytes | None</h3>
+          <p class="fn-desc">Return value bytes from the default CF, or <code>default</code> if missing or expired. Identical to <code>KVStore.get</code>.</p>
+        </div>
+        <div class="fn-entry" style="margin-top:1rem;">
+          <h3 class="fn-name">get_metadata(key) → dict | None</h3>
+          <p class="fn-desc">Return the stored metadata dict, or <code>None</code> if the key has no metadata or the tags CF has never been created. Returns <code>None</code> silently on corrupted JSON.</p>
+        </div>
+        <pre>vec  = vs.<span class="fn">vector_get</span>(<span class="str">b"doc:1"</span>)    <span class="cm"># np.ndarray(128,)</span>
+val  = vs.<span class="fn">get</span>(<span class="str">b"doc:1"</span>)            <span class="cm"># b"hello"</span>
+meta = vs.<span class="fn">get_metadata</span>(<span class="str">b"doc:2"</span>)  <span class="cm"># {"category": "news", "score": 0.9}</span></pre>
+      </section>
+
+      <section class="api-section" id="py-vec-search">
+        <h2 class="section-title">ANN Search</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">search(query, top_k=10, *, filter=None, rerank=False, oversample=3, max_distance=None) → List[SearchResult]</h3>
+          <p class="fn-desc">Approximate nearest-neighbour search. Returns up to <code>top_k</code> results sorted by distance ascending. Expired keys are skipped transparently.</p>
+          <div class="table-wrap"><table>
+            <tr><th>Parameter</th><th>Description</th></tr>
+            <tr><td><code>query</code></td><td>array-like, shape <code>(dim,)</code></td></tr>
+            <tr><td><code>top_k</code></td><td>Maximum results to return (must be &gt; 0).</td></tr>
+            <tr><td><code>filter</code></td><td><code>dict</code> — equality filter (all fields must match); <code>callable</code> — predicate <code>(metadata_dict) → bool</code>; <code>None</code> — no filter.</td></tr>
+            <tr><td><code>rerank</code></td><td><code>bool</code> — re-score ANN candidates with exact float32 distances.</td></tr>
+            <tr><td><code>oversample</code></td><td><code>int ≥ 1</code> — candidate pool = <code>top_k × oversample</code> when filter or rerank is active (default 3).</td></tr>
+            <tr><td><code>max_distance</code></td><td><code>float</code> or <code>None</code> — drop results with distance &gt; threshold, applied last after rerank.</td></tr>
+          </table></div>
+          <p class="fn-desc" style="margin-top:0.5rem;"><code>SearchResult</code> fields: <code>key: bytes</code>, <code>value: bytes</code>, <code>distance: float</code>, <code>metadata: dict | None</code> (populated only when <code>filter</code> is provided).</p>
+          <pre>q = np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>)
+
+<span class="cm"># Basic ANN search</span>
+results = vs.<span class="fn">search</span>(q, top_k=<span class="num">5</span>)
+<span class="kw">for</span> r <span class="kw">in</span> results:
+    print(r.key, r.distance, r.value)
+
+<span class="cm"># With metadata filter</span>
+results = vs.<span class="fn">search</span>(q, top_k=<span class="num">5</span>, filter={<span class="str">"category"</span>: <span class="str">"news"</span>})
+
+<span class="cm"># Exact rerank + distance cutoff</span>
+results = vs.<span class="fn">search</span>(q, top_k=<span class="num">5</span>, rerank=<span class="kw">True</span>, max_distance=<span class="num">0.5</span>)</pre>
+        </div>
+        <div class="fn-entry" style="margin-top:1.5rem;">
+          <h3 class="fn-name">search_keys(query, top_k=10) → List[Tuple[bytes, float]]</h3>
+          <p class="fn-desc">ANN search returning <code>(key, distance)</code> pairs only — no value fetch, no metadata. Faster than <code>search()</code> when you only need keys.</p>
+          <pre>pairs = vs.<span class="fn">search_keys</span>(q, top_k=<span class="num">10</span>)
+<span class="kw">for</span> key, dist <span class="kw">in</span> pairs:
+    print(key, dist)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-delete">
+        <h2 class="section-title">Deleting</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">delete(key) → None</h3>
+          <p class="fn-desc">Delete key from the KV store and HNSW index atomically. Raises <code>NotFoundError</code> if the key does not exist or has expired. If the vector index has been dropped, falls back to a plain KV delete.</p>
+          <pre>vs.<span class="fn">delete</span>(<span class="str">b"doc:1"</span>)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-ttl">
+        <h2 class="section-title">TTL</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">Vectors stored with <code>ttl=</code> are lazily expired: expired keys are skipped transparently in <code>search()</code>, <code>search_keys()</code>, and <code>get()</code>. Call <code>vector_purge_expired()</code> to reclaim disk space and remove them from the in-memory index.</p>
+        <pre><span class="cm"># Store with 1-hour TTL</span>
+vs.<span class="fn">vector_put</span>(<span class="str">b"session"</span>, <span class="str">b"data"</span>, vec, ttl=<span class="num">3600</span>)
+
+<span class="cm"># Expired keys are silently skipped in search</span>
+results = vs.<span class="fn">search</span>(q, top_k=<span class="num">5</span>)  <span class="cm"># won't include b"session" after expiry</span>
+
+<span class="cm"># Bulk-purge expired vectors (keeps in-memory index in sync)</span>
+n = vs.<span class="fn">vector_purge_expired</span>()
+print(<span class="str">f"purged {n} vectors"</span>)</pre>
+      </section>
+
+      <section class="api-section" id="py-vec-stats">
+        <h2 class="section-title">Stats &amp; Info</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">vector_stats() → dict</h3>
+          <p class="fn-desc">Return full index configuration and runtime state.</p>
+          <div class="table-wrap"><table>
+            <tr><th>Key</th><th>Description</th></tr>
+            <tr><td><code>dim</code></td><td>Vector dimension</td></tr>
+            <tr><td><code>space</code></td><td>Distance metric</td></tr>
+            <tr><td><code>dtype</code></td><td>In-memory index precision</td></tr>
+            <tr><td><code>connectivity</code></td><td>HNSW M parameter</td></tr>
+            <tr><td><code>expansion_add</code></td><td>HNSW build expansion</td></tr>
+            <tr><td><code>expansion_search</code></td><td>HNSW search expansion</td></tr>
+            <tr><td><code>count</code></td><td>Active vectors in usearch index</td></tr>
+            <tr><td><code>capacity</code></td><td>Allocated usearch capacity</td></tr>
+            <tr><td><code>fill_ratio</code></td><td><code>count / capacity</code></td></tr>
+            <tr><td><code>vec_cf_count</code></td><td>Entries in <code>_snkv_vec_</code> CF (may include expired)</td></tr>
+            <tr><td><code>has_metadata</code></td><td><code>True</code> if metadata CF exists</td></tr>
+          </table></div>
+        </div>
+        <div class="fn-entry" style="margin-top:1rem;">
+          <h3 class="fn-name">vector_info() → dict</h3>
+          <p class="fn-desc">Subset of <code>vector_stats()</code>: <code>dim</code>, <code>space</code>, <code>dtype</code>, <code>count</code>, <code>connectivity</code>, <code>expansion_add</code>, <code>expansion_search</code>.</p>
+        </div>
+        <div class="fn-entry" style="margin-top:1rem;">
+          <h3 class="fn-name">__len__() → int</h3>
+          <p class="fn-desc">Active vector count. Same as <code>vector_stats()["count"]</code>.</p>
+          <pre>print(len(vs))              <span class="cm"># active vector count</span>
+print(vs.<span class="fn">vector_stats</span>())   <span class="cm"># full dict</span></pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-maintenance">
+        <h2 class="section-title">Maintenance</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">vector_purge_expired() → int</h3>
+          <p class="fn-desc">Scan all vector entries, delete those whose KV value has expired, remove them from the HNSW index, and return the count deleted. Always call this instead of <code>KVStore.purge_expired()</code> on a VectorStore to keep the vector column families in sync.</p>
+          <pre>n = vs.<span class="fn">vector_purge_expired</span>()
+print(<span class="str">f"removed {n} expired vectors"</span>)</pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-drop">
+        <h2 class="section-title">drop_vector_index</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">drop_vector_index() → None</h3>
+          <p class="fn-desc">Drop all five internal vector column families (<code>_snkv_vec_</code>, <code>_snkv_vec_idk_</code>, <code>_snkv_vec_idi_</code>, <code>_snkv_vec_meta_</code>, <code>_snkv_vec_tags_</code>) permanently. KV data in the default CF is preserved and accessible via <code>get()</code>. After this call, <code>search()</code> and <code>vector_put()</code> raise <code>VectorIndexError</code>.</p>
+          <pre>vs.<span class="fn">drop_vector_index</span>()
+val = vs.<span class="fn">get</span>(<span class="str">b"doc:1"</span>)   <span class="cm"># still works — KV data intact</span></pre>
+        </div>
+      </section>
+
+      <section class="api-section" id="py-vec-dict">
+        <h2 class="section-title">Dict Interface</h2>
+        <p class="fn-desc" style="margin-bottom:0.75rem;">Standard dict operations are forwarded to the plain KV layer. They do <em>not</em> interact with the vector index.</p>
+        <div class="table-wrap"><table>
+          <tr><th>Syntax</th><th>Equivalent</th></tr>
+          <tr><td><code>vs[key]</code></td><td><code>get(key)</code>, raises <code>NotFoundError</code> if missing</td></tr>
+          <tr><td><code>vs[key] = value</code></td><td>Plain KV put — does <strong>not</strong> update vector index</td></tr>
+          <tr><td><code>del vs[key]</code></td><td><code>delete(key)</code> — removes from both KV and vector index</td></tr>
+          <tr><td><code>key in vs</code></td><td><code>True</code> if key exists in default CF</td></tr>
+          <tr><td><code>len(vs)</code></td><td>Active vector count</td></tr>
+        </table></div>
+      </section>
+
+      <section class="api-section" id="py-vec-lifecycle">
+        <h2 class="section-title">Lifecycle</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">close() / context manager</h3>
+          <p class="fn-desc">Close all column family handles and the underlying KVStore. Use as a context manager (<code>with VectorStore(...) as vs:</code>) for automatic cleanup.</p>
+        </div>
+        <div class="fn-entry" style="margin-top:1rem;">
+          <h3 class="fn-name">VectorIndexError</h3>
+          <p class="fn-desc">Raised when the usearch index is not initialised or has been dropped. Subclass of <code>Exception</code>. Import from <code>snkv.vector</code>.</p>
+          <pre><span class="kw">from</span> snkv.vector <span class="kw">import</span> VectorStore, VectorIndexError, SearchResult
+
+<span class="kw">with</span> VectorStore(<span class="str">"store.db"</span>, dim=<span class="num">128</span>) <span class="kw">as</span> vs:
+    vs.<span class="fn">vector_put</span>(<span class="str">b"k"</span>, <span class="str">b"v"</span>, np.zeros(<span class="num">128</span>, dtype=<span class="str">"f4"</span>))
+    results = vs.<span class="fn">search</span>(np.zeros(<span class="num">128</span>, dtype=<span class="str">"f4"</span>), top_k=<span class="num">1</span>)
+    print(results[<span class="num">0</span>].key, results[<span class="num">0</span>].distance)</pre>
+        </div>
       </section>
 
     </div><!-- /panel-py -->
