@@ -386,6 +386,7 @@
       <li class="toc-section"><a href="#c-new-apis">New APIs</a></li>
       <li class="toc-section"><a href="#c-session">Session Store</a></li>
       <li class="toc-section"><a href="#c-checkpoint">Checkpoint</a></li>
+      <li class="toc-section"><a href="#c-encryption">Encryption</a></li>
     </ul>
   </nav>
 
@@ -402,6 +403,7 @@
       <li class="toc-section"><a href="#py-new-apis">New APIs</a></li>
       <li class="toc-section"><a href="#py-session">Session Store</a></li>
       <li class="toc-section"><a href="#py-multiprocess">Multiprocess</a></li>
+      <li class="toc-section"><a href="#py-encryption">Encryption</a></li>
     </ul>
   </nav>
 
@@ -783,6 +785,106 @@ KVStoreStats st = {<span class="nm">0</span>};
         </div>
       </section>
 
+      <!-- Encryption -->
+      <section class="ex-section" id="c-encryption">
+        <div class="section-label">Security</div>
+        <h2 class="section-title">Encryption</h2>
+        <p class="section-desc">XChaCha20-Poly1305 AEAD encryption with Argon2id key derivation. Keys are stored plaintext (B-tree order preserved); values are encrypted. Overhead is 40 bytes per value (<code>SNKV_ENC_OVERHEAD</code>).</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Open encrypted store + read/write</span>
+            <span class="ex-card-file">examples/enc.c</span>
+          </div>
+<pre><span class="pp">#define SNKV_IMPLEMENTATION</span>
+<span class="pp">#include</span> <span class="str">"snkv.h"</span>
+
+KVStore *pKV = <span class="kw">NULL</span>;
+<span class="kw">const char</span> *zPass = <span class="str">"my-secret-password"</span>;
+
+<span class="cm">/* Open (or create) an encrypted store */</span>
+<span class="kw">int</span> rc = <span class="fn">kvstore_open_encrypted</span>(<span class="str">"secure.db"</span>, &amp;pKV,
+                                 KVSTORE_JOURNAL_WAL,
+                                 zPass, (<span class="kw">int</span>)<span class="fn">strlen</span>(zPass));
+<span class="kw">if</span> (rc == KVSTORE_AUTH_FAILED) {
+    <span class="fn">fprintf</span>(<span class="kw">stderr</span>, <span class="str">"Wrong password\n"</span>);
+    <span class="kw">return</span> <span class="nm">1</span>;
+}
+
+<span class="cm">/* Normal put/get — encryption/decryption is transparent */</span>
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"secret"</span>, <span class="nm">6</span>, <span class="str">"classified"</span>, <span class="nm">10</span>);
+
+<span class="kw">void</span> *pVal = <span class="kw">NULL</span>; <span class="kw">int</span> nVal = <span class="nm">0</span>;
+<span class="fn">kvstore_get</span>(pKV, <span class="str">"secret"</span>, <span class="nm">6</span>, &amp;pVal, &amp;nVal);
+<span class="fn">printf</span>(<span class="str">"%.*s\n"</span>, nVal, (<span class="kw">char</span>*)pVal);   <span class="cm">/* classified */</span>
+<span class="fn">snkv_free</span>(pVal);
+
+<span class="fn">kvstore_close</span>(pKV);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">is_encrypted · remove_encryption · reencrypt</span>
+            <span class="ex-card-file">examples/enc.c</span>
+          </div>
+<pre><span class="cm">/* Check whether the open store is encrypted */</span>
+<span class="kw">int</span> bEnc = <span class="nm">0</span>;
+<span class="fn">kvstore_is_encrypted</span>(pKV, &amp;bEnc);
+<span class="fn">printf</span>(<span class="str">"encrypted: %d\n"</span>, bEnc);   <span class="cm">/* 1 */</span>
+
+<span class="cm">/* Password rotation — re-encrypt in place with new password */</span>
+<span class="fn">kvstore_reencrypt</span>(pKV, <span class="str">"new-password"</span>, <span class="nm">12</span>);
+
+<span class="cm">/* Strip encryption — convert to plain store */</span>
+<span class="fn">kvstore_remove_encryption</span>(pKV);
+
+<span class="fn">kvstore_is_encrypted</span>(pKV, &amp;bEnc);
+<span class="fn">printf</span>(<span class="str">"encrypted: %d\n"</span>, bEnc);   <span class="cm">/* 0 */</span></pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Encrypted column families</span>
+            <span class="ex-card-file">examples/enc.c</span>
+          </div>
+<pre><span class="cm">/* CFs inherit encryption from the store — no extra config needed */</span>
+KVColumnFamily *pCF = <span class="kw">NULL</span>;
+<span class="fn">kvstore_cf_create</span>(pKV, <span class="str">"users"</span>, &amp;pCF);
+
+<span class="fn">kvstore_cf_put</span>(pCF, <span class="str">"alice"</span>, <span class="nm">5</span>, <span class="str">"secret_data"</span>, <span class="nm">11</span>);
+
+<span class="kw">void</span> *pOut = <span class="kw">NULL</span>; <span class="kw">int</span> nOut = <span class="nm">0</span>;
+<span class="fn">kvstore_cf_get</span>(pCF, <span class="str">"alice"</span>, <span class="nm">5</span>, &amp;pOut, &amp;nOut);
+<span class="fn">printf</span>(<span class="str">"%.*s\n"</span>, nOut, (<span class="kw">char</span>*)pOut);   <span class="cm">/* secret_data — decrypted */</span>
+<span class="fn">snkv_free</span>(pOut);
+
+<span class="fn">kvstore_cf_close</span>(pCF);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Plaintext confirmed after remove_encryption</span>
+            <span class="ex-card-file">examples/enc.c</span>
+          </div>
+<pre><span class="cm">/* Write sentinel, encrypt, then strip — verify raw bytes */</span>
+<span class="fn">kvstore_open_encrypted</span>(<span class="str">"data.db"</span>, &amp;pKV, KVSTORE_JOURNAL_WAL,
+                        <span class="str">"pass"</span>, <span class="nm">4</span>);
+<span class="fn">kvstore_put</span>(pKV, <span class="str">"k"</span>, <span class="nm">1</span>, <span class="str">"PLAINTEXT_SENTINEL"</span>, <span class="nm">18</span>);
+<span class="fn">kvstore_remove_encryption</span>(pKV);
+<span class="fn">kvstore_close</span>(pKV);
+
+<span class="cm">/* "PLAINTEXT_SENTINEL" is now readable in raw file bytes */</span>
+
+<span class="cm">/* Re-open as plain store — no password required */</span>
+<span class="fn">kvstore_open</span>(<span class="str">"data.db"</span>, &amp;pKV, KVSTORE_JOURNAL_WAL);
+<span class="kw">void</span> *pVal = <span class="kw">NULL</span>; <span class="kw">int</span> nVal = <span class="nm">0</span>;
+<span class="fn">kvstore_get</span>(pKV, <span class="str">"k"</span>, <span class="nm">1</span>, &amp;pVal, &amp;nVal);
+<span class="fn">printf</span>(<span class="str">"%.*s\n"</span>, nVal, (<span class="kw">char</span>*)pVal);   <span class="cm">/* PLAINTEXT_SENTINEL */</span>
+<span class="fn">snkv_free</span>(pVal);
+<span class="fn">kvstore_close</span>(pKV);</pre>
+        </div>
+      </section>
+
     </div><!-- /panel-c -->
 
     <!-- ════════════════════════════════════════════════ PYTHON PANEL -->
@@ -1160,6 +1262,95 @@ procs = [multiprocessing.<span class="fn">Process</span>(
 <span class="kw">for</span> p <span class="kw">in</span> procs: p.<span class="fn">start</span>()
 <span class="kw">for</span> p <span class="kw">in</span> procs: p.<span class="fn">join</span>()
 <span class="cm"># All 500 keys durable on disk</span></pre>
+        </div>
+      </section>
+
+      <!-- Encryption -->
+      <section class="ex-section" id="py-encryption">
+        <div class="section-label">Security</div>
+        <h2 class="section-title">Encryption</h2>
+        <p class="section-desc">XChaCha20-Poly1305 AEAD encryption with Argon2id key derivation. Use <code>KVStore.open_encrypted()</code> to create or open an encrypted store. All reads and writes are transparently encrypted/decrypted. Wrong password raises <code>AuthError</code>.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Open encrypted store + read/write</span>
+            <span class="ex-card-file">python/examples/enc.py</span>
+          </div>
+<pre>><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, AuthError
+
+<span class="cm"># Create or open an encrypted store</span>
+<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"my-secret-password"</span>) <span class="kw">as</span> db:
+    <span class="cm"># Normal put/get — encryption is transparent</span>
+    db.put(<span class="str">b"secret"</span>, <span class="str">b"classified"</span>)
+    print(db.get(<span class="str">b"secret"</span>))   <span class="cm"># b'classified'</span>
+
+    <span class="cm"># Wrong password raises AuthError</span>
+    <span class="kw">try</span>:
+        KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"wrong"</span>)
+    <span class="kw">except</span> AuthError:
+        print(<span class="str">"Bad password"</span>)</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">is_encrypted · remove_encryption · reencrypt</span>
+            <span class="ex-card-file">python/examples/enc.py</span>
+          </div>
+<pre>><span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"pass1"</span>) <span class="kw">as</span> db:
+    print(db.<span class="fn">is_encrypted</span>())   <span class="cm"># True</span>
+
+    <span class="cm"># Password rotation — re-encrypt with new password</span>
+    db.<span class="fn">reencrypt</span>(<span class="str">b"pass2"</span>)
+
+    <span class="cm"># Strip encryption — store becomes plain after close</span>
+    db.<span class="fn">remove_encryption</span>()
+
+<span class="cm"># Re-open as plain store — no password needed</span>
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"secure.db"</span>) <span class="kw">as</span> db:
+    print(db.<span class="fn">is_encrypted</span>())   <span class="cm"># False</span>
+    print(db.get(<span class="str">b"secret"</span>))   <span class="cm"># b'classified'</span></pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Plaintext → encrypt → plaintext lifecycle</span>
+            <span class="ex-card-file">python/examples/enc.py</span>
+          </div>
+<pre>><span class="kw">import</span> os
+
+<span class="cm"># Start plain</span>
+<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"data.db"</span>) <span class="kw">as</span> db:
+    db.put(<span class="str">b"k"</span>, <span class="str">b"SENTINEL"</span>)
+
+<span class="cm"># open_encrypted on a plain store encrypts it in place</span>
+<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"data.db"</span>, <span class="str">b"pass"</span>) <span class="kw">as</span> db:
+    raw = open(<span class="str">"data.db"</span>, <span class="str">"rb"</span>).read()
+    <span class="kw">assert</span> <span class="str">b"SENTINEL"</span> <span class="kw">not in</span> raw   <span class="cm"># ciphertext confirmed</span>
+    db.<span class="fn">remove_encryption</span>()
+
+raw = open(<span class="str">"data.db"</span>, <span class="str">"rb"</span>).read()
+<span class="kw">assert</span> <span class="str">b"SENTINEL"</span> <span class="kw">in</span> raw   <span class="cm"># plaintext confirmed</span></pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Encrypted store with TTL + column families</span>
+            <span class="ex-card-file">python/examples/enc.py</span>
+          </div>
+<pre>><span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"pass"</span>) <span class="kw">as</span> db:
+    <span class="cm"># TTL works transparently on encrypted store</span>
+    db.put(<span class="str">b"session"</span>, <span class="str">b"tok123"</span>, ttl=<span class="nm">3600</span>)
+    print(db.<span class="fn">ttl</span>(<span class="str">b"session"</span>))   <span class="cm"># ~3600.0</span>
+
+    <span class="cm"># Column families also encrypted</span>
+    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> cf:
+        cf.put(<span class="str">b"alice"</span>, <span class="str">b"secret_data"</span>, ttl=<span class="nm">86400</span>)
+        print(cf.get(<span class="str">b"alice"</span>))   <span class="cm"># b'secret_data'</span>
+        print(cf.<span class="fn">is_encrypted</span>())   <span class="cm"># True (inherited)</span>
+
+    <span class="cm"># Iterators work — keys plaintext, values decrypted</span>
+    <span class="kw">for</span> k, v <span class="kw">in</span> db.<span class="fn">iterator</span>():
+        print(k, v)</pre>
         </div>
       </section>
 
