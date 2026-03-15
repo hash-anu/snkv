@@ -302,15 +302,26 @@ def test_is_encrypted_plain(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 21: open_encrypted on plain file → AuthError
+# Test 21: open_encrypted on plain file → encrypts store (not AuthError)
 # ---------------------------------------------------------------------------
 def test_open_enc_on_plain_file(tmp_path):
     path = _tmpdb(tmp_path)
     db = KVStore(path)
     db.put(b"k", b"v")
     db.close()
+
+    # Should encrypt the store, not raise AuthError
+    with KVStore.open_encrypted(path, b"pw") as db:
+        assert db.is_encrypted() is True
+        assert db.get(b"k") == b"v"
+
+    # Wrong password must fail
     with pytest.raises(AuthError):
-        KVStore.open_encrypted(path, b"pw")
+        KVStore.open_encrypted(path, b"wrong")
+
+    # Correct password works
+    with KVStore.open_encrypted(path, b"pw") as db:
+        assert db.get(b"k") == b"v"
 
 
 # ---------------------------------------------------------------------------
