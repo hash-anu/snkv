@@ -1,3 +1,15 @@
+
+<p align="center">
+  <img src="snkv_logo.png" alt="SNKV Logo" width="220">
+</p>
+
+<h1 align="center">SNKV</h1>
+<p align="center">
+A simple, crash-safe embedded key-value store
+</p>
+
+<p align="center">
+
 # SNKV — a simple, crash-safe embedded key-value store
 
 [![Build](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
