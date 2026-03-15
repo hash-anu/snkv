@@ -160,6 +160,10 @@ struct KVStoreConfig {
   **                 is attempted automatically. Only effective in WAL journal mode.
   */
   int walSizeLimit;
+
+  /* Internal flag — set by kvstore_open_encrypted to bypass the plain-open
+  ** encryption guard.  Not part of the public API; zero-init leaves it 0. */
+  int allowEncrypted;
 };
 
 /*

@@ -751,7 +751,7 @@
   KVStore      **ppKV,      <span class="cm">/* out: handle */</span>
   <span class="kw">const</span> KVStoreConfig *pConfig  <span class="cm">/* NULL = all defaults */</span>
 );</div>
-          <p class="fn-desc">Open or create a database with full configuration control. Pass <code>NULL</code> for <code>pConfig</code> to use all defaults (WAL mode, NORMAL sync, 8 MB cache).</p>
+          <p class="fn-desc">Open or create a database with full configuration control. Pass <code>NULL</code> for <code>pConfig</code> to use all defaults (WAL mode, NORMAL sync, 8 MB cache). Returns <code>KVSTORE_AUTH_FAILED</code> if the file is an encrypted store — use <code>kvstore_open_encrypted</code> instead.</p>
           <pre><span class="cm">/* default open */</span>
 KVStore *kv;
 <span class="fn">kvstore_open_v2</span>(<span class="str">"mydb.db"</span>, &amp;kv, <span class="kw">NULL</span>);
@@ -779,7 +779,7 @@ ro.readOnly = <span class="nm">1</span>;
   KVStore     **ppKV,
   <span class="kw">int</span>           journalMode   <span class="cm">/* KVSTORE_JOURNAL_WAL or _DELETE */</span>
 );</div>
-          <p class="fn-desc">Simplified open. Equivalent to <code>kvstore_open_v2</code> with only <code>journalMode</code> set; all other fields use defaults.</p>
+          <p class="fn-desc">Simplified open. Equivalent to <code>kvstore_open_v2</code> with only <code>journalMode</code> set; all other fields use defaults. Returns <code>KVSTORE_AUTH_FAILED</code> if the file is an encrypted store.</p>
           <pre>KVStore *kv = <span class="kw">NULL</span>;
 <span class="fn">kvstore_open</span>(<span class="str">"mydata.db"</span>, &amp;kv, KVSTORE_JOURNAL_WAL);</pre>
         </div>
@@ -1467,14 +1467,14 @@ python3 setup.py build_ext --inplace</pre>
           <tr><td><code>LockedError</code></td><td>Write lock conflict with a concurrent transaction.</td></tr>
           <tr><td><code>ReadOnlyError</code></td><td>Write attempted on a read-only store.</td></tr>
           <tr><td><code>CorruptError</code></td><td>Integrity check detected corruption.</td></tr>
-          <tr><td><code>AuthError</code></td><td>Wrong password supplied to an encrypted store.</td></tr>
+          <tr><td><code>AuthError</code></td><td>Wrong password supplied to an encrypted store, or encrypted store opened without a password via <code>KVStore()</code>.</td></tr>
         </table></div>
       </section>
 
       <!-- KVStore -->
       <section class="api-section" id="py-kvstore">
         <h2 class="section-title">KVStore</h2>
-        <p class="fn-desc" style="margin-bottom:1rem;">The main entry point. Opens or creates a key-value store at a given path. Always use as a context manager to ensure proper cleanup.</p>
+        <p class="fn-desc" style="margin-bottom:1rem;">The main entry point. Opens or creates a key-value store at a given path. Always use as a context manager to ensure proper cleanup. Raises <code>AuthError</code> if the file is an encrypted store — use <code>KVStore.open_encrypted()</code> instead.</p>
       </section>
 
       <!-- Opening -->

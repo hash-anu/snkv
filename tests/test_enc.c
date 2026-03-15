@@ -517,23 +517,11 @@ static void test_plain_open_returns_garbage(void){
   kvstore_put(db, "k", 1, plaintext, ptlen);
   kvstore_close(db);
 
-  /* Re-open WITHOUT a password — encryption layer is off */
+  /* Re-open WITHOUT a password — must be rejected with AUTH_FAILED */
   db = NULL;
   int rc = kvstore_open(path, &db, KVSTORE_JOURNAL_WAL);
-  ASSERT("plain open of enc store ok", rc == KVSTORE_OK);
-
-  void *val = NULL; int nval = 0;
-  rc = kvstore_get(db, "k", 1, &val, &nval);
-  /* The get succeeds (the key exists), but the value is ciphertext */
-  ASSERT("plain open returns a value", rc == KVSTORE_OK);
-  /* Ciphertext is always longer than plaintext (nonce+mac overhead = 40 B) */
-  ASSERT("returned blob is longer than plaintext", nval > ptlen);
-  /* Raw bytes must NOT equal the original plaintext */
-  int matches = (nval == ptlen && memcmp(val, plaintext, ptlen) == 0);
-  ASSERT("returned value is NOT the original plaintext", !matches);
-
-  if( val ) snkv_free(val);
-  kvstore_close(db);
+  ASSERT("plain open of enc store returns AUTH_FAILED", rc == KVSTORE_AUTH_FAILED);
+  ASSERT("db handle is NULL on AUTH_FAILED", db == NULL);
   rmdb(path);
 }
 

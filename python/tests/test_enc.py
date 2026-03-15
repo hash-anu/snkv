@@ -375,25 +375,12 @@ def test_empty_value(tmp_path):
 # ---------------------------------------------------------------------------
 def test_plain_open_returns_garbage(tmp_path):
     """
-    Opening an encrypted store via KVStore() (no password, bEncrypted=0)
-    returns raw ciphertext blobs.  The value must NOT match the original
-    plaintext — there must be no accidental data leak when encryption is
-    bypassed.
+    Opening an encrypted store via KVStore() (no password) must raise AuthError.
     """
     path = _tmpdb(tmp_path)
-    plaintext = b"supersecretvalue"
 
-    # Write encrypted
     with KVStore.open_encrypted(path, b"pw") as db:
-        db.put(b"k", plaintext)
+        db.put(b"k", b"supersecretvalue")
 
-    # Re-open WITHOUT a password
-    with KVStore(path) as db:
-        raw = db.get(b"k")
-
-    # The get succeeds but returns the ciphertext blob
-    assert raw is not None, "expected a value (ciphertext) to be returned"
-    # Ciphertext is always longer (nonce 24 B + mac 16 B = 40 B overhead)
-    assert len(raw) > len(plaintext), "ciphertext must be longer than plaintext"
-    # Raw bytes must NOT equal the original plaintext
-    assert raw != plaintext, "returned value must NOT be the original plaintext"
+    with pytest.raises(AuthError):
+        KVStore(path)

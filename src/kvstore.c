@@ -878,8 +878,9 @@ static void kvstoreAutoCheckpoint(KVStore *pKV){
   }
 }
 
-/* Early forward declaration needed by kvstore_open_v2 TTL probe. */
+/* Early forward declarations needed by kvstore_open_v2. */
 static int kvstoreCfOpenInternal(KVStore*, const char*, KVColumnFamily**);
+static int kvstoreRawBtreeGet(KVStore*, int, const void*, int, void**, int*);
 
 /*
 ** Open a key-value store with full configuration control.
@@ -1152,6 +1153,35 @@ int kvstore_open_v2(
       if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
     }
     sqlite3_mutex_leave(pKV->pMutex);
+  }
+
+  /* Reject plain opens on encrypted stores — caller must use kvstore_open_encrypted.
+  ** Skip this check when allowEncrypted is set (used by kvstore_open_encrypted itself). */
+  if( !( pConfig && pConfig->allowEncrypted ) ){
+    KVColumnFamily *pAuthProbe = NULL;
+    sqlite3_mutex_enter(pKV->pMutex);
+    int authRc = kvstoreCfOpenInternal(pKV, SNKV_AUTH_CF_NAME, &pAuthProbe);
+    int isEncrypted = 0;
+    if( authRc == KVSTORE_OK ){
+      void *pSalt = NULL; int nSalt = 0;
+      int saltRc = kvstoreRawBtreeGet(pKV, pAuthProbe->iTable,
+                                      SNKV_AUTH_KEY_SALT, (int)strlen(SNKV_AUTH_KEY_SALT),
+                                      &pSalt, &nSalt);
+      if( pSalt ) sqlite3_free(pSalt);
+      if( saltRc == KVSTORE_OK ) isEncrypted = 1;
+      kvstoreFreeCFStruct(pAuthProbe);
+    }
+    sqlite3_mutex_leave(pKV->pMutex);
+    if( isEncrypted ){
+      if( pKV->inTrans ){
+        sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
+        pKV->inTrans = 0;
+      }
+      kvstoreTeardownNoLock(pKV);
+      sqlite3_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return KVSTORE_AUTH_FAILED;
+    }
   }
 
   *ppKV = pKV;
@@ -5781,8 +5811,11 @@ int kvstore_open_encrypted(
 ){
   if( !zFilename || !pPassword || nPassword <= 0 || !ppKV ) return KVSTORE_ERROR;
 
-  /* Open the store normally (no encryption yet) */
-  int rc = kvstore_open_v2(zFilename, ppKV, pConfig);
+  /* Open the store normally (no encryption yet).
+  ** Use allowEncrypted=1 to bypass the plain-open encryption guard. */
+  KVStoreConfig encCfg = pConfig ? *pConfig : (KVStoreConfig){0};
+  encCfg.allowEncrypted = 1;
+  int rc = kvstore_open_v2(zFilename, ppKV, &encCfg);
   if( rc != KVSTORE_OK ) return rc;
 
   KVStore *pKV = *ppKV;
