@@ -28,7 +28,8 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Bulk clear** — `db.clear()` / `cf.clear()` truncates all keys in O(pages) without dropping the store
 - **Key count** — `db.count()` / `cf.count()` returns entry count in O(pages); CF counts are fully isolated
 - **Extended stats** — `db.stats()` exposes 12 counters including `bytes_read`, `bytes_written`, `wal_commits`, `ttl_expired`, `db_pages`; reset with `db.stats_reset()`
-- **352 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, and more
+- **Vector search** — integrated HNSW approximate nearest-neighbour index via `snkv[vector]`; sidecar persistence, quantization (f32/f16/i8), metadata filtering, exact rerank, TTL on vectors, and encryption support
+- **471 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, encryption, and vector search
 
 ---
 
@@ -442,16 +443,126 @@ with KVStore("mydb.db") as db:    # plain open works now
 
 ---
 
+## Vector Search
+
+Integrated HNSW approximate nearest-neighbour index backed by [usearch](https://github.com/unum-cloud/usearch). All vectors and KV data live in the same `.db` file — no separate index file, no external service.
+
+### Installation
+
+```bash
+pip install snkv[vector]
+```
+
+### Quick Start
+
+```python
+from snkv.vector import VectorStore
+import numpy as np
+
+with VectorStore("store.db", dim=128, space="cosine") as vs:
+    vs.vector_put(b"doc:1", b"hello world", np.random.rand(128).astype("f4"))
+    results = vs.search(np.random.rand(128).astype("f4"), top_k=5)
+    for r in results:
+        print(r.key, r.distance, r.value)
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `path` | — | Path to `.db` file. `None` for in-memory. |
+| `dim` | — | Vector dimension. Fixed for the lifetime of the store. |
+| `space` | `"l2"` | Distance metric: `"l2"` (squared L2), `"cosine"`, or `"ip"` (inner product). |
+| `connectivity` | `16` | HNSW M parameter. |
+| `expansion_add` | `128` | HNSW expansion during index build. |
+| `expansion_search` | `None` | HNSW expansion at query time. `None` restores the stored value (default 64). |
+| `dtype` | `"f32"` | In-memory index precision: `"f32"`, `"f16"` (half RAM), or `"i8"` (quarter RAM). On-disk storage is always float32. |
+| `password` | `None` | Open/create an encrypted store. Sidecar is disabled for encrypted stores. |
+
+### Quantization
+
+`dtype` controls the in-memory HNSW graph precision only — on-disk storage in `_snkv_vec_` is always float32.
+
+| dtype | RAM per vector (dim=768) | Notes |
+|---|---|---|
+| `"f32"` | 3072 bytes | Full precision (default) |
+| `"f16"` | 1536 bytes | Half RAM, negligible recall loss |
+| `"i8"` | 768 bytes | Quarter RAM, small recall cost |
+
+For 1 M vectors at dim=768: `f32` ≈ 3 GB → `f16` ≈ 1.5 GB → `i8` ≈ 768 MB.
+
+```python
+# Half RAM for the in-memory index; on-disk vectors still float32
+with VectorStore("store.db", dim=768, space="cosine", dtype="f16") as vs:
+    vs.vector_put(b"doc:1", b"hello", np.random.rand(768).astype("f4"))
+```
+
+### Index Persistence (Sidecar)
+
+For unencrypted file-backed stores, the HNSW index is saved to `{path}.usearch` on `close()` and reloaded on the next open — skipping the O(n×d) CF rebuild. A companion `{path}.usearch.nid` stamp file detects any write that occurred after the last clean close (including crash scenarios). Stale or corrupt sidecars are silently discarded and the index is rebuilt from the column families.
+
+Encrypted stores and in-memory stores always rebuild from column families.
+
+### Key Methods
+
+```python
+# Write
+vs.vector_put(b"key", b"value", vec, ttl=None, metadata=None)
+vs.vector_put_batch([(b"key", b"value", vec), ...], ttl=None)
+
+# Search
+results = vs.search(query_vec, top_k=10)                           # ANN
+results = vs.search(query_vec, top_k=10, filter={"topic": "ml"})  # metadata filter
+results = vs.search(query_vec, top_k=10, rerank=True)             # exact rerank
+results = vs.search(query_vec, top_k=10, max_distance=0.5)        # distance cutoff
+pairs   = vs.search_keys(query_vec, top_k=10)                     # keys + distances only
+
+# Read
+vec  = vs.vector_get(b"key")          # np.ndarray(dim,) float32
+val  = vs.get(b"key")                 # value bytes from KV store
+meta = vs.get_metadata(b"key")        # dict or None
+
+# Delete / maintenance
+vs.delete(b"key")
+n = vs.vector_purge_expired()         # remove expired vectors from index + CFs
+
+# Stats
+stats = vs.vector_stats()
+# Keys: dim, space, dtype, connectivity, expansion_add, expansion_search,
+#       count, capacity, fill_ratio, vec_cf_count, has_metadata, sidecar_enabled
+
+# Drop index (KV data preserved)
+vs.drop_vector_index()
+```
+
+### Encrypted Vector Store
+
+```python
+from snkv import AuthError
+
+with VectorStore("store.db", dim=128, password=b"secret") as vs:
+    vs.vector_put(b"doc:1", b"classified", np.random.rand(128).astype("f4"))
+
+try:
+    VectorStore("store.db", dim=128, password=b"wrong")
+except AuthError:
+    print("bad password")
+```
+
+---
+
 ## Error Hierarchy
 
 ```
 snkv.Error (base)
-├── snkv.NotFoundError   (also KeyError — raised by db["missing"])
-├── snkv.BusyError       (SQLITE_BUSY — another writer holds the lock)
-├── snkv.LockedError     (SQLITE_LOCKED)
-├── snkv.ReadOnlyError   (write attempted on read-only store)
-└── snkv.CorruptError    (database file is corrupt)
-└── snkv.AuthError      (KVSTORE_AUTH_FAILED — wrong password or not an encrypted store)
+├── snkv.NotFoundError       (also KeyError — raised by db["missing"])
+├── snkv.BusyError           (SQLITE_BUSY — another writer holds the lock)
+├── snkv.LockedError         (SQLITE_LOCKED)
+├── snkv.ReadOnlyError       (write attempted on read-only store)
+├── snkv.CorruptError        (database file is corrupt)
+└── snkv.AuthError           (wrong password or not an encrypted store)
+
+snkv.vector.VectorIndexError  (index dropped or empty; not a subclass of snkv.Error)
 ```
 
 ```python
@@ -492,7 +603,7 @@ cd python
 PYTHONPATH=. python3 -m pytest tests/ -v
 ```
 
-All 352 tests should pass.
+All 471 tests should pass.
 
 ---
 
@@ -513,6 +624,7 @@ PYTHONPATH=. python3 examples/encryption.py  # encrypted store, wrong-password, 
 PYTHONPATH=. python3 examples/iterator_reverse.py # reverse iterators, descending scans
 PYTHONPATH=. python3 examples/new_apis.py        # seek, put_if_absent, clear, count, stats
 PYTHONPATH=. python3 examples/multiprocess.py    # 5 concurrent processes, busy_timeout
+PYTHONPATH=. python3 examples/vector.py          # vector search, quantization, sidecar, TTL, encryption
 ```
 
 **Windows — Native Python (x64 Native Tools Command Prompt for VS 2022)**
@@ -532,6 +644,7 @@ python examples\iterator_reverse.py
 python examples\new_apis.py
 python examples\multiprocess.py
 python examples\all_apis.py
+python examples\vector.py
 ```
 
 **Windows — MSYS2 MinGW64 shell**
@@ -574,10 +687,11 @@ The `snkv` Python package embeds the following third-party libraries compiled in
 |---------|---------|---------|-------|
 | [SQLite](https://www.sqlite.org/) | 3.x (amalgamation subset) | [Public Domain](https://www.sqlite.org/copyright.html) | B-tree, pager, WAL, OS layer |
 | [Monocypher](https://monocypher.org/) | 4.x | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) (Public Domain) | XChaCha20-Poly1305 + Argon2id |
+| [usearch](https://github.com/unum-cloud/usearch) | ≥ 2.9 | [Apache 2.0](https://github.com/unum-cloud/usearch/blob/main/LICENSE) | HNSW vector index (optional — `pip install snkv[vector]`) |
 
-No separate installation of these libraries is required — they are statically linked into the extension module.
+SQLite and Monocypher are statically linked into the extension module — no separate installation required.
 
-Both SQLite and Monocypher are public domain — no attribution is legally required, but credit is given here in the spirit of good practice.
+SQLite and Monocypher are public domain — no attribution is legally required, but credit is given here in the spirit of good practice. usearch is an optional runtime dependency and is not bundled.
 
 ---
 

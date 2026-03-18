@@ -377,10 +377,11 @@ SNKV embeds the following third-party libraries:
 |---------|---------|---------|-------|
 | [SQLite](https://www.sqlite.org/) | 3.x (amalgamation subset) | [Public Domain](https://www.sqlite.org/copyright.html) | B-tree, pager, WAL, OS layer |
 | [Monocypher](https://monocypher.org/) | 4.x | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) (Public Domain) | XChaCha20-Poly1305 + Argon2id |
+| [usearch](https://github.com/unum-cloud/usearch) | ≥ 2.9 | [Apache 2.0](https://github.com/unum-cloud/usearch/blob/main/LICENSE) | HNSW vector index (optional — `pip install snkv[vector]`) |
 
-These libraries are statically compiled into `libsnkv` and `snkv.h`. No dynamic linking or separate installation is required.
+SQLite and Monocypher are statically compiled into `libsnkv` and `snkv.h`. No dynamic linking or separate installation is required.
 
-Both SQLite and Monocypher are public domain — no attribution is legally required, but credit is given here in the spirit of good practice.
+SQLite and Monocypher are public domain — no attribution is legally required, but credit is given here in the spirit of good practice. usearch is an optional runtime dependency and is not bundled.
 
 ---
 

@@ -29,12 +29,20 @@ except ImportError as _err:
     ) from _err
 
 import json
+import logging
 import math
+import os
 import struct
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from snkv import KVStore, NotFoundError
+
+_logger = logging.getLogger(__name__)
+
+# Maximum vectors per index.add() call during CF rebuild.
+# Caps the peak RAM spike from np.stack() to ~_REBUILD_BATCH × dim × 4 bytes.
+_REBUILD_BATCH = 10_000
 
 # ---------------------------------------------------------------------------
 # Internal CF names (Decision 5)
@@ -140,8 +148,30 @@ class VectorStore:
         On-disk storage is always float32 regardless of dtype.
     password : bytes or str or None
         Opens/creates an encrypted store if given (Decision 18).
+        When encryption is enabled the sidecar is disabled — a plaintext
+        index file would defeat the purpose of encryption.
     **kv_kwargs
         Passed to KVStore() for the plain-open path.
+
+    Index persistence (Decision 28)
+    ---------------------------------
+    For unencrypted, file-backed stores the in-memory usearch index is saved
+    to ``{path}.usearch`` on close and reloaded on the next open, skipping the
+    O(n×d) rebuild entirely.  If the sidecar is absent, stale, or corrupt it
+    is silently discarded and the index is rebuilt from the column families as
+    usual.  Encrypted stores and in-memory stores always rebuild from CFs.
+
+    Thread safety
+    -------------
+    VectorStore is **not thread-safe**.  Each thread must open its own
+    instance.  For concurrent reads, open the same file in each thread.
+    For write workloads, serialise writes through a single instance or
+    process.  See Decision 11 in the design document.
+
+    Logging
+    -------
+    Diagnostic messages (sidecar load failures, metadata decode errors) are
+    emitted at ``logging.DEBUG`` level on the ``snkv.vector`` logger.
     """
 
     def __init__(
@@ -190,6 +220,10 @@ class VectorStore:
         self._index: Optional[_Index] = None
         self._next_id: int = 0
         self._tags_cf = None  # lazy — created on first metadata write (Decision 21)
+        # Sidecar: unencrypted file-backed stores only (Decision 28)
+        self._sidecar_path: Optional[str] = (
+            (path + ".usearch") if (path is not None and password is None) else None
+        )
 
         # Open (or create) the four core internal CFs (Decision 5)
         self._vec_cf  = self._get_or_create_cf(_CF_VEC)
@@ -286,8 +320,43 @@ class VectorStore:
         )
         self._index.expansion_search = self._expansion_search
 
+        # Try to load from sidecar (non-encrypted stores only) — Decision 28
+        # A companion .nid file holds the 8-byte next_id at the time of save.
+        # Comparing it to the current meta-CF next_id detects any write that
+        # occurred after the last clean close (e.g. crash after delete+add where
+        # vec_cf.count() happens to be unchanged).
+        if self._sidecar_path and os.path.exists(self._sidecar_path):
+            nid_path = self._sidecar_path + ".nid"
+            try:
+                with open(nid_path, "rb") as f:
+                    sidecar_next_id = struct.unpack(">q", f.read(8))[0]
+                if sidecar_next_id == self._next_id:
+                    candidate = _Index.restore(self._sidecar_path)
+                    if candidate.ndim == self._dim:
+                        self._index = candidate
+                        self._index.expansion_search = self._expansion_search
+                        return  # fast path — skip CF rebuild entirely
+                    _logger.debug(
+                        "sidecar ndim mismatch (%d vs %d), rebuilding from CFs",
+                        candidate.ndim, self._dim,
+                    )
+                else:
+                    _logger.debug(
+                        "sidecar stale (stamp=%d meta_next_id=%d), rebuilding from CFs",
+                        sidecar_next_id, self._next_id,
+                    )
+            except Exception as _exc:
+                _logger.debug("sidecar load failed, rebuilding from CFs: %s", _exc)
+            # Stale or corrupt — remove both files and fall through to full rebuild
+            for p in (self._sidecar_path, nid_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
         if count > 0:
-            # Batch-load all stored vectors (Decision 8 Phase 1)
+            # Batch-load all stored vectors in chunks to cap peak RAM usage.
+            # Each chunk: _REBUILD_BATCH × dim × 4 bytes for the stacked matrix.
             ids:  List[int]          = []
             vecs: List["np.ndarray"] = []
             with self._vec_cf.iterator() as it:
@@ -296,6 +365,13 @@ class VectorStore:
                     if id_raw is not None:
                         ids.append(_unpack_i64(id_raw))
                         vecs.append(np.frombuffer(vec_bytes, dtype=np.float32))
+                        if len(ids) >= _REBUILD_BATCH:
+                            self._index.add(
+                                np.array(ids, dtype=np.uint64),
+                                np.stack(vecs),
+                            )
+                            ids.clear()
+                            vecs.clear()
             if ids:
                 self._index.add(
                     np.array(ids, dtype=np.uint64),
@@ -350,7 +426,7 @@ class VectorStore:
         """
         key_b = _enc(key)
         val_b = _enc(value)
-        vec   = np.asarray(vector, dtype=np.float32)
+        vec   = np.ascontiguousarray(vector, dtype=np.float32)
         if vec.ndim != 1 or vec.shape[0] != self._dim:
             raise ValueError(
                 f"vector must have shape ({self._dim},), got {vec.shape}"
@@ -467,7 +543,7 @@ class VectorStore:
                     "items must be (key, value, vector) or "
                     "(key, value, vector, metadata)"
                 )
-            vec = np.asarray(vector, dtype=np.float32)
+            vec = np.ascontiguousarray(vector, dtype=np.float32)
             if vec.ndim != 1 or vec.shape[0] != self._dim:
                 raise ValueError(
                     f"vector must have shape ({self._dim},), got {vec.shape}"
@@ -771,7 +847,8 @@ class VectorStore:
                 if meta_bytes is not None:
                     try:
                         metadata = json.loads(meta_bytes.decode())
-                    except (json.JSONDecodeError, UnicodeDecodeError):
+                    except (json.JSONDecodeError, UnicodeDecodeError) as _exc:
+                        _logger.debug("metadata decode error for key %r: %s", key_b, _exc)
                         metadata = None
 
             candidates.append((key_b, value, float(ann_dist), vec_bytes, metadata))
@@ -867,6 +944,7 @@ class VectorStore:
             "fill_ratio":       fill_ratio,
             "vec_cf_count":     self._vec_cf.count() if self._vec_cf else 0,
             "has_metadata":     self._tags_cf is not None,
+            "sidecar_enabled":  self._sidecar_path is not None,
         }
 
     def vector_info(self) -> dict:
@@ -970,12 +1048,39 @@ class VectorStore:
         self._index   = None
         self._next_id = 0
 
+        # Remove sidecar + stamp so a future open won't load a stale index (Decision 28)
+        if self._sidecar_path:
+            for p in (self._sidecar_path, self._sidecar_path + ".nid"):
+                try:
+                    os.unlink(p)
+                except FileNotFoundError:
+                    pass
+            self._sidecar_path = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Close all CF handles and the underlying KVStore."""
+        """Close all CF handles and the underlying KVStore.
+
+        For non-encrypted file-backed stores the in-memory usearch index is
+        saved to ``{path}.usearch`` so the next open can skip the O(n×d)
+        rebuild (Decision 28).
+        """
+        # Save sidecar + next_id stamp (non-encrypted file-backed stores only)
+        if self._sidecar_path and self._index is not None:
+            try:
+                self._index.save(self._sidecar_path)
+                with open(self._sidecar_path + ".nid", "wb") as f:
+                    f.write(struct.pack(">q", self._next_id))
+            except Exception:
+                # Partial write — remove both files so the next open rebuilds cleanly
+                for p in (self._sidecar_path, self._sidecar_path + ".nid"):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
         cfs = [self._vec_cf, self._idk_cf, self._idi_cf, self._meta_cf, self._tags_cf]
         for cf in cfs:
             if cf is not None:

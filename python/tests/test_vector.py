@@ -10,6 +10,8 @@ Requires:
     pip install snkv[vector]
 """
 
+import os
+
 import pytest
 
 pytest.importorskip("usearch", reason="usearch not installed; skip vector tests")
@@ -410,7 +412,7 @@ class TestIndexStats:
         expected = {
             "dim", "space", "dtype", "connectivity", "expansion_add",
             "expansion_search", "count", "capacity", "fill_ratio",
-            "vec_cf_count", "has_metadata",
+            "vec_cf_count", "has_metadata", "sidecar_enabled",
         }
         with make_store(tmp_path) as vs:
             vs.vector_put(b"k", b"v", rand_vecs(1)[0])
@@ -765,6 +767,144 @@ class TestVectorInfo:
 # ---------------------------------------------------------------------------
 # ip space
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Sidecar index persistence (Decision 28)
+# ---------------------------------------------------------------------------
+
+class TestSidecar:
+    def test_sidecar_created_on_close(self, tmp_path):
+        """Plain file-backed store creates both sidecar files on close."""
+        path = str(tmp_path / "store.db")
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k", b"v", rand_vecs(1)[0])
+        assert os.path.exists(path + ".usearch")
+        assert os.path.exists(path + ".usearch.nid")
+
+    def test_sidecar_not_created_for_encrypted(self, tmp_path):
+        """Encrypted store must not create a sidecar (would expose plaintext index)."""
+        path = str(tmp_path / "enc.db")
+        with VectorStore(path, dim=DIM, password=b"pw") as vs:
+            vs.vector_put(b"k", b"v", rand_vecs(1)[0])
+        assert not os.path.exists(path + ".usearch")
+        assert not os.path.exists(path + ".usearch.nid")
+
+    def test_sidecar_not_created_for_memory_store(self):
+        """In-memory store (path=None) has no sidecar."""
+        with VectorStore(None, dim=DIM) as vs:
+            vs.vector_put(b"k", b"v", rand_vecs(1)[0])
+            assert vs.vector_stats()["sidecar_enabled"] is False
+
+    def test_sidecar_loaded_on_reopen(self, tmp_path):
+        """Reopen uses sidecar — search still returns correct results."""
+        path = str(tmp_path / "store.db")
+        vecs = rand_vecs(5)
+        with VectorStore(path, dim=DIM) as vs:
+            for i, v in enumerate(vecs):
+                vs.vector_put(f"k{i}".encode(), b"v", v)
+        with VectorStore(path, dim=DIM) as vs:
+            assert len(vs) == 5
+            assert vs.search(vecs[0], top_k=1)[0].key == b"k0"
+
+    def test_stale_sidecar_triggers_rebuild(self, tmp_path):
+        """Corrupt sidecar is deleted; index rebuilt from CFs, store still works."""
+        path = str(tmp_path / "store.db")
+        sidecar = path + ".usearch"
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k1", b"v", rand_vecs(1, seed=0)[0])
+        # Overwrite sidecar with garbage
+        with open(sidecar, "wb") as f:
+            f.write(b"not a valid usearch file")
+        with VectorStore(path, dim=DIM) as vs:
+            assert len(vs) == 1
+            assert vs.get(b"k1") == b"v"
+
+    def test_sidecar_deleted_on_drop_vector_index(self, tmp_path):
+        """drop_vector_index removes both sidecar files and clears sidecar_enabled."""
+        path = str(tmp_path / "store.db")
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k", b"v", rand_vecs(1)[0])
+            vs.drop_vector_index()
+            assert vs.vector_stats()["sidecar_enabled"] is False
+        assert not os.path.exists(path + ".usearch")
+        assert not os.path.exists(path + ".usearch.nid")
+
+    def test_sidecar_stats_flag(self, tmp_path):
+        """sidecar_enabled is True for plain store, False for encrypted."""
+        path = str(tmp_path / "plain.db")
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k", b"v", rand_vecs(1)[0])
+            assert vs.vector_stats()["sidecar_enabled"] is True
+
+        path_enc = str(tmp_path / "enc.db")
+        with VectorStore(path_enc, dim=DIM, password=b"pw") as vs:
+            vs.vector_put(b"k", b"v", rand_vecs(1)[0])
+            assert vs.vector_stats()["sidecar_enabled"] is False
+
+    def test_stale_nid_triggers_rebuild(self, tmp_path):
+        """Sidecar with wrong next_id stamp is rejected; index rebuilt from CFs."""
+        import struct
+        path = str(tmp_path / "store.db")
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k1", b"v1", rand_vecs(1, seed=0)[0])
+            vs.vector_put(b"k2", b"v2", rand_vecs(1, seed=1)[0])
+        # Corrupt .nid to simulate crash-after-write (next_id advanced but sidecar stale)
+        with open(path + ".usearch.nid", "wb") as f:
+            f.write(struct.pack(">q", 999))  # wrong next_id
+        # Reopen — must reject sidecar and fall back to CF rebuild
+        with VectorStore(path, dim=DIM) as vs:
+            assert len(vs) == 2
+            assert vs.get(b"k1") == b"v1"
+            assert vs.get(b"k2") == b"v2"
+        # Sidecar should be regenerated with correct stamp on close
+        with open(path + ".usearch.nid", "rb") as f:
+            restored_nid = struct.unpack(">q", f.read(8))[0]
+        assert restored_nid == 2  # 2 inserts → next_id == 2
+
+    def test_sidecar_consistent_after_delete(self, tmp_path):
+        """Delete → close → reopen via sidecar → deleted key not searchable."""
+        path = str(tmp_path / "store.db")
+        vecs = rand_vecs(3)
+        with VectorStore(path, dim=DIM) as vs:
+            for i, v in enumerate(vecs):
+                vs.vector_put(f"k{i}".encode(), b"v", v)
+        with VectorStore(path, dim=DIM) as vs:
+            vs.delete(b"k1")
+        with VectorStore(path, dim=DIM) as vs:
+            assert len(vs) == 2
+            assert vs.get(b"k1") is None
+            keys = [r.key for r in vs.search(vecs[0], top_k=3)]
+            assert b"k1" not in keys
+
+    def test_sidecar_consistent_after_overwrite(self, tmp_path):
+        """Overwrite → close → reopen via sidecar → new value and vector correct."""
+        path = str(tmp_path / "store.db")
+        v1, v2 = rand_vecs(2)
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k", b"old", v1)
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"k", b"new", v2)
+        with VectorStore(path, dim=DIM) as vs:
+            assert vs.get(b"k") == b"new"
+            np.testing.assert_allclose(vs.vector_get(b"k"), v2, rtol=1e-5)
+
+    def test_sidecar_consistent_after_purge(self, tmp_path):
+        """Purge expired → close → reopen via sidecar → purged keys gone."""
+        import time
+        path = str(tmp_path / "store.db")
+        vecs = rand_vecs(4)
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"live1", b"v", vecs[0])
+            vs.vector_put(b"live2", b"v", vecs[1])
+            vs.vector_put(b"exp1",  b"v", vecs[2], ttl=0.01)
+            vs.vector_put(b"exp2",  b"v", vecs[3], ttl=0.01)
+        time.sleep(0.05)
+        with VectorStore(path, dim=DIM) as vs:
+            removed = vs.vector_purge_expired()
+            assert removed == 2
+        with VectorStore(path, dim=DIM) as vs:
+            assert len(vs) == 2
+
 
 class TestIPSpace:
     def test_ip_search_returns_results(self, tmp_path):

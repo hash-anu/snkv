@@ -71,28 +71,30 @@ except ImportError:
 
 ---
 
-## Decision 4 — Storage: SNKV column families, not a separate `.usearch` file
+## Decision 4 — Storage: SNKV column families as the single source of truth
 
 **Choice:** All vector metadata and raw vectors live inside the `.db` file using dedicated
-SNKV column families (`__snkv_vec__`, `__snkv_vec_id__k`, `__snkv_vec_id__i`,
-`__snkv_vec_meta__`). The in-memory usearch `Index` object is rebuilt from these CFs on
-every open.
+SNKV column families (`_snkv_vec_`, `_snkv_vec_idk_`, `_snkv_vec_idi_`,
+`_snkv_vec_meta_`). These CFs are the durable source of truth. The in-memory usearch
+`Index` object is either loaded from a sidecar file (Decision 28) or rebuilt from these
+CFs on open.
 
-**Alternative:** Persist the usearch index as a sidecar file (`store.usearch`) using
-`index.save()` / `index.load()`.
+**Alternative considered:** Sidecar file (`store.usearch`) as the *only* persistence
+mechanism (no raw vectors stored in CFs).
 
 **Rejected because:**
-- Two files means two things to back up, copy, move, and keep in sync. Loss of the sidecar
-  means re-embedding from scratch if raw vectors aren't stored.
+- Without raw vectors in CFs, loss of the sidecar means re-embedding from scratch.
 - The sidecar is not crash-safe relative to the SNKV WAL. A crash between a KV commit and
-  `index.save()` leaves them inconsistent.
-- SNKV's WAL atomicity applies naturally when vectors are stored as CFs: the KV write and
-  the raw-vector write are a single transaction.
+  `index.save()` leaves them inconsistent. CFs, backed by the WAL, provide the
+  crash-safe baseline.
+- Encryption via SNKV's XChaCha20-Poly1305 layer applies naturally to CF values. A
+  sidecar on its own would expose plaintext vectors.
 
-**Trade-off accepted:** Rebuilding the index on every open is O(n × d). For 100k vectors
-at dim=1536 this takes 2–5 s. Phase 2 mitigates this with a snapshot CF
-(`__snkv_vec_snap__`) that stores the serialised usearch index binary for instant load
-(see Decision 8).
+**Sidecar as startup optimisation (Decision 28):** For unencrypted file-backed stores,
+`close()` additionally saves the usearch index to `{path}.usearch`. On the next open,
+this sidecar is loaded if it is consistent with the CF data (same vector count), skipping
+the O(n × d) rebuild. The CFs remain the authoritative store; the sidecar is purely a
+startup-time cache. See Decision 28 for full details.
 
 ---
 
@@ -170,37 +172,50 @@ normal operation (index is rebuilt synchronously on open).
 
 ---
 
-## Decision 8 — Index rebuild on open (Phase 1) vs snapshot (Phase 2)
+## Decision 8 — Index startup: rebuild from CFs with sidecar fast-path
 
-**Phase 1 (0.6.0):** On every `VectorStore.__init__`, scan all `__snkv_vec__` and
-`__snkv_vec_id__k` entries, batch-add to a fresh `Index`, then set `expansion_search`
+**Phase 1 (0.6.0):** On every `VectorStore.__init__`, scan all `_snkv_vec_` and
+`_snkv_vec_idk_` entries, batch-add to a fresh `Index`, then set `expansion_search`
 (the usearch query-time search width, equivalent to hnswlib's `ef`).
 
-**Phase 2 (0.7.0):** Serialize the usearch index binary to `__snkv_vec_snap__` CF on
-`close()`. On open, load the snapshot if present and consistent (matches stored `next_id`
-and item count); fall back to full rebuild if not.
+**Phase 2 (0.6.x / Decision 28):** For unencrypted file-backed stores, `close()` calls
+`index.save("{path}.usearch")` and writes `next_id` as an 8-byte big-endian int64 to
+`{path}.usearch.nid`. On open, the stamp is read from `.nid`, compared to `_next_id`
+loaded from the meta CF; on match, `_Index.restore(sidecar_path)` is called. If
+`ndim` matches, the restored index is used directly — zero O(n × d) rebuild cost. Any
+failure (absent stamp, next_id mismatch, restore error) deletes both files and falls back
+to the full Phase 1 rebuild. Encrypted stores always use Phase 1 (Decision 9).
 
-**Why defer Phase 2:**
-- Rebuild is fast enough for typical embedded workloads (< 50k vectors).
-- Phase 2 adds complexity: snapshot invalidation logic, partial-snapshot detection after
-  crash, and the snapshot binary is not encrypted (raw float32 data). These concerns are
-  better solved with more usage feedback.
-- Keeping Phase 1 simple reduces the test matrix for the initial release.
+**Why `next_id` stamp instead of vector count:**
+`vec_cf.count()` can accidentally match the sidecar `len` after a delete+add sequence
+that crashes before close (net count unchanged but sidecar IDs stale). `next_id` is
+monotonically increasing — any write increments it, making post-crash staleness always
+detectable via the stamp file.
 
 ---
 
-## Decision 9 — Encryption interaction: raw vectors are encrypted, snapshot is not (Phase 2 concern)
+## Decision 9 — Encryption interaction: raw vectors encrypted; sidecar disabled for encrypted stores
 
-**Phase 1:** Raw float32 bytes stored in `__snkv_vec__` CF are encrypted by SNKV's
-XChaCha20-Poly1305 layer just like any other value. The in-memory usearch index holds
-plaintext vectors (necessary for similarity computation).
+**Storage:** Raw float32 bytes in `_snkv_vec_` CF are encrypted by SNKV's
+XChaCha20-Poly1305 layer just like any other CF value. The in-memory usearch index holds
+plaintext vectors (required for ANN computation).
 
-**Phase 2 consideration:** The usearch snapshot binary stored in `__snkv_vec_snap__` would
-contain plaintext float32 data. Options when Phase 2 ships:
-1. Encrypt the snapshot blob before storing it as a CF value (same AEAD, ≤ 40 bytes overhead).
-2. Always rebuild from encrypted `__snkv_vec__` entries (skip the snapshot for encrypted stores).
+**Sidecar and encryption (Decision 28 resolution):** The usearch sidecar file
+(`{path}.usearch`) contains plaintext float32 vectors — the graph is serialized as-is by
+usearch. Storing this file for an encrypted store would expose the raw vectors on disk,
+defeating the purpose of encryption.
 
-Option 1 is preferred but deferred. For Phase 1 (rebuild-only) there is no plaintext-at-rest concern because the index is never serialized.
+**Choice (Option 2):** Encrypted stores (opened with `password=`) always rebuild the
+index from the encrypted CFs on open. `self._sidecar_path` is `None` for encrypted
+stores; `close()` never calls `index.save()`, and `_rebuild_index()` never attempts a
+sidecar load.
+
+**Option 1 (encrypt the sidecar blob) was considered and rejected:**
+- Would require applying SNKV's AEAD to an arbitrarily large binary blob outside the
+  normal CF write path.
+- The usearch binary format is not designed for partial or streamed decryption, so the
+  entire blob must be decrypted into memory before use — no memory saving vs. rebuild.
+- Option 2 is simpler and provides an equivalent security guarantee.
 
 ---
 
@@ -686,6 +701,68 @@ inner product for `space="ip"`.
 
 ---
 
+## Decision 27 — (reserved: multi-space support in a single file)
+
+Placeholder. Multi-space support (e.g. text + image vectors in one `.db` file) requires
+CF-name namespacing. Deferred pending usage feedback.
+
+---
+
+## Decision 28 — Sidecar index persistence for unencrypted stores
+
+**Choice:** For unencrypted, file-backed stores (`path is not None and password is None`):
+- `close()` calls `self._index.save("{path}.usearch")` (usearch serialises the HNSW
+  graph), then writes `self._next_id` as 8-byte big-endian int64 to `{path}.usearch.nid`.
+  If either write fails, both files are removed so the next open always sees a consistent
+  state.
+- `_rebuild_index()` checks `{path}.usearch.nid` first. If the stamp matches the current
+  `_next_id` (loaded from the meta CF), it calls `_Index.restore("{path}.usearch")`. If
+  `restored_index.ndim == self._dim` the restored index is used directly and
+  `_rebuild_index` returns early.
+- If the `.nid` file is absent, its `next_id` does not match, the sidecar fails to load,
+  or `ndim` is wrong, both files are deleted and the full O(n × d) CF rebuild proceeds.
+
+**Why `next_id` stamp instead of vector count:**
+`vec_cf.count()` is the number of stored vectors. If a session deletes K keys and inserts
+K new keys (net count unchanged) and then crashes, the sidecar count would match the CF
+count — but the sidecar's labels would be stale (pointing to the old IDs, not the new
+ones). `_next_id` is monotonically increasing; any write increments it. A crash after any
+write produces a meta-CF `next_id` larger than the sidecar's stamp, making the mismatch
+detectable.
+
+**Why file-backed + unencrypted only:**
+- In-memory stores (`path=None`) have no file path; a sidecar would be meaningless.
+- Encrypted stores must not produce a plaintext sidecar (Decision 9). They always rebuild
+  from encrypted CFs.
+
+**Crash safety:**
+The CFs are always the authoritative source of truth (Decision 4). A crash after any
+write advances `next_id` in the meta CF beyond the last sidecar stamp. On the next open,
+the stamp mismatch is detected, both sidecar files are deleted, and the full rebuild from
+CFs produces a correct index.
+
+**`drop_vector_index()` interaction:**
+`drop_vector_index()` deletes both sidecar files (if present) and sets
+`self._sidecar_path = None`. `vector_stats()["sidecar_enabled"]` correctly returns
+`False` after a drop.
+
+**`vector_stats()` exposure:**
+`vector_stats()["sidecar_enabled"]` is `True` when `_sidecar_path is not None` (i.e.
+an unencrypted, file-backed store that has not had `drop_vector_index()` called).
+
+**Invariant: `next_id` in sidecar stamp == `next_id` in meta CF**
+
+| Operation | `meta_cf next_id` | Sidecar stamp | Sidecar valid? |
+|---|---|---|---|
+| `vector_put` new key | +1 | stale (old) | ✗ until close() |
+| `vector_put` overwrite | +1 | stale (old) | ✗ until close() |
+| `delete` | unchanged | unchanged | ✓ |
+| `vector_purge_expired` | unchanged | unchanged | ✓ |
+| clean `close()` | N | written as N | ✓ |
+| Crash after any write | N+K | old stamp (N) | mismatch → rebuild |
+
+---
+
 ## Known limitations
 
 **One vector space per `.db` file.**
@@ -702,7 +779,7 @@ image_vs = VectorStore("store_image.db", dim=512,  space="l2")
 ```
 
 Multi-space support in a single file (CF name namespacing) is a candidate for a future
-decision (D27).
+decision (Decision 27, currently reserved).
 
 ---
 
@@ -770,6 +847,21 @@ decision (D27).
 | T26 | `search(max_distance=large)` → same results as no threshold |
 | T27 | `search(filter=…, rerank=True, max_distance=X)` — all three compose correctly |
 
+### Sidecar index persistence (Decision 28) — 10 tests
+
+| # | Test |
+|---|---|
+| S1 | Plain file-backed store: `.usearch` sidecar exists after close |
+| S2 | Encrypted store: no sidecar created |
+| S3 | In-memory store (`path=None`): `sidecar_enabled` is False |
+| S4 | Reopen via sidecar: `len(vs)` and search results correct |
+| S5 | Corrupt sidecar: deleted, full rebuild from CFs, store still works |
+| S6 | `drop_vector_index()`: sidecar file removed |
+| S7 | `vector_stats()["sidecar_enabled"]`: True for plain, False for encrypted |
+| S8 | Delete → close → reopen via sidecar: deleted key not searchable |
+| S9 | Overwrite → close → reopen via sidecar: new value and vector correct |
+| S10 | Purge expired → close → reopen via sidecar: purged keys gone, count correct |
+
 ---
 
 ## Summary table
@@ -802,4 +894,6 @@ decision (D27).
 | 24 | Index statistics | `vector_stats()` returns config + runtime counters; `__len__` |
 | 25 | `expansion_search` persistence | Stored in meta; restored on reopen; caller arg overrides |
 | 26 | `max_distance` filter | Applied last after rerank; silent empty list if none pass |
+| 27 | Multi-space in single file | Reserved — deferred pending usage feedback |
+| 28 | Sidecar index persistence | `{path}.usearch` saved on close; loaded on open (non-encrypted only); CFs remain source of truth |
 | — | Known limitations | One vector space per `.db` file; multi-space = separate files |

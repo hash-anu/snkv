@@ -1966,7 +1966,8 @@ db.<span class="fn">remove_encryption</span>()</div>
       <section class="api-section" id="py-vector">
         <div class="section-label">Python API</div>
         <h2 class="section-title">VectorStore</h2>
-        <p class="fn-desc">SNKV key-value store with an integrated <a href="https://github.com/unum-cloud/usearch">usearch</a> HNSW vector index. All vector data lives inside the same <code>.db</code> file using dedicated column families. The in-memory index is rebuilt from disk on every open — no separate index file.</p>
+        <p class="fn-desc">SNKV key-value store with an integrated <a href="https://github.com/unum-cloud/usearch">usearch</a> HNSW vector index. All vector data lives inside the same <code>.db</code> file using dedicated column families.</p>
+        <p class="fn-desc" style="margin-top:0.5rem;"><strong>Index persistence:</strong> For unencrypted, file-backed stores the in-memory index is saved to <code>{path}.usearch</code> on <code>close()</code> and reloaded on the next open — skipping the O(n×d) rebuild. If the sidecar is absent, stale, or corrupt it is silently discarded and the index is rebuilt from the column families. Encrypted stores and in-memory stores always rebuild from column families (a plaintext sidecar would defeat encryption).</p>
         <div class="note">Requires the <code>vector</code> extra: <code>pip install snkv[vector]</code></div>
       </section>
 
@@ -1992,8 +1993,8 @@ VectorStore(path, dim, *, space=<span class="str">"l2"</span>, connectivity=<spa
             <tr><td><code>connectivity</code></td><td><code>16</code></td><td>HNSW M parameter. Must be ≥ 1.</td></tr>
             <tr><td><code>expansion_add</code></td><td><code>128</code></td><td>HNSW expansion during index build. Must be ≥ 1.</td></tr>
             <tr><td><code>expansion_search</code></td><td><code>None</code></td><td><code>None</code> restores the stored value (falls back to 64 for new stores). Explicit value overrides stored.</td></tr>
-            <tr><td><code>dtype</code></td><td><code>"f32"</code></td><td>In-memory index precision: <code>"f32"</code>, <code>"f16"</code>, or <code>"i8"</code>. On-disk storage is always float32.</td></tr>
-            <tr><td><code>password</code></td><td><code>None</code></td><td><code>bytes</code> or <code>str</code>. Opens/creates an encrypted store.</td></tr>
+            <tr><td><code>dtype</code></td><td><code>"f32"</code></td><td>In-memory HNSW index precision: <code>"f32"</code> (default), <code>"f16"</code> (half RAM), or <code>"i8"</code> (quarter RAM). On-disk storage in <code>_snkv_vec_</code> is always float32 regardless of dtype. Lower precision reduces memory at a small recall cost — see Quantization below.</td></tr>
+            <tr><td><code>password</code></td><td><code>None</code></td><td><code>bytes</code> or <code>str</code>. Opens/creates an encrypted store. Disables sidecar — index is always rebuilt from encrypted CFs.</td></tr>
           </table></div>
           <pre><span class="kw">from</span> snkv.vector <span class="kw">import</span> VectorStore
 <span class="kw">import</span> numpy <span class="kw">as</span> np
@@ -2004,7 +2005,12 @@ VectorStore(path, dim, *, space=<span class="str">"l2"</span>, connectivity=<spa
 
 <span class="cm"># Encrypted store</span>
 <span class="kw">with</span> VectorStore(<span class="str">"store.db"</span>, dim=<span class="num">128</span>, password=<span class="str">b"secret"</span>) <span class="kw">as</span> vs:
-    vs.<span class="fn">vector_put</span>(<span class="str">b"doc:1"</span>, <span class="str">b"hello world"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>))</pre>
+    vs.<span class="fn">vector_put</span>(<span class="str">b"doc:1"</span>, <span class="str">b"hello world"</span>, np.random.rand(<span class="num">128</span>).astype(<span class="str">"f4"</span>))
+
+<span class="cm"># Quantized store — half RAM for the in-memory HNSW index</span>
+<span class="kw">with</span> VectorStore(<span class="str">"store.db"</span>, dim=<span class="num">768</span>, space=<span class="str">"cosine"</span>, dtype=<span class="str">"f16"</span>) <span class="kw">as</span> vs:
+    vs.<span class="fn">vector_put</span>(<span class="str">b"doc:1"</span>, <span class="str">b"hello world"</span>, np.random.rand(<span class="num">768</span>).astype(<span class="str">"f4"</span>))</pre>
+        <p class="fn-desc" style="margin-top:0.75rem;"><strong>Quantization:</strong> <code>dtype</code> controls only the in-memory HNSW graph precision — on-disk vectors in <code>_snkv_vec_</code> are always float32. Memory per vector in the index: <code>f32</code> = <code>dim × 4</code> bytes, <code>f16</code> = <code>dim × 2</code> bytes, <code>i8</code> = <code>dim × 1</code> byte. For 1 M vectors at dim=768: <code>f32</code> ≈ 3 GB, <code>f16</code> ≈ 1.5 GB, <code>i8</code> ≈ 768 MB. <code>dtype</code> is immutable — validated against the stored value on reopen.</p>
         </div>
       </section>
 
@@ -2137,6 +2143,7 @@ print(<span class="str">f"purged {n} vectors"</span>)</pre>
             <tr><td><code>fill_ratio</code></td><td><code>count / capacity</code></td></tr>
             <tr><td><code>vec_cf_count</code></td><td>Entries in <code>_snkv_vec_</code> CF (may include expired)</td></tr>
             <tr><td><code>has_metadata</code></td><td><code>True</code> if metadata CF exists</td></tr>
+            <tr><td><code>sidecar_enabled</code></td><td><code>True</code> for unencrypted file-backed stores; <code>False</code> for encrypted or in-memory</td></tr>
           </table></div>
         </div>
         <div class="fn-entry" style="margin-top:1rem;">
@@ -2165,7 +2172,7 @@ print(<span class="str">f"removed {n} expired vectors"</span>)</pre>
         <h2 class="section-title">drop_vector_index</h2>
         <div class="fn-entry">
           <h3 class="fn-name">drop_vector_index() → None</h3>
-          <p class="fn-desc">Drop all five internal vector column families (<code>_snkv_vec_</code>, <code>_snkv_vec_idk_</code>, <code>_snkv_vec_idi_</code>, <code>_snkv_vec_meta_</code>, <code>_snkv_vec_tags_</code>) permanently. KV data in the default CF is preserved and accessible via <code>get()</code>. After this call, <code>search()</code> and <code>vector_put()</code> raise <code>VectorIndexError</code>.</p>
+          <p class="fn-desc">Drop all five internal vector column families (<code>_snkv_vec_</code>, <code>_snkv_vec_idk_</code>, <code>_snkv_vec_idi_</code>, <code>_snkv_vec_meta_</code>, <code>_snkv_vec_tags_</code>) permanently. KV data in the default CF is preserved and accessible via <code>get()</code>. The sidecar file (<code>{path}.usearch</code>) is also deleted. After this call, <code>search()</code> and <code>vector_put()</code> raise <code>VectorIndexError</code>.</p>
           <pre>vs.<span class="fn">drop_vector_index</span>()
 val = vs.<span class="fn">get</span>(<span class="str">b"doc:1"</span>)   <span class="cm"># still works — KV data intact</span></pre>
         </div>
@@ -2188,7 +2195,7 @@ val = vs.<span class="fn">get</span>(<span class="str">b"doc:1"</span>)   <span 
         <h2 class="section-title">Lifecycle</h2>
         <div class="fn-entry">
           <h3 class="fn-name">close() / context manager</h3>
-          <p class="fn-desc">Close all column family handles and the underlying KVStore. Use as a context manager (<code>with VectorStore(...) as vs:</code>) for automatic cleanup.</p>
+          <p class="fn-desc">Close all column family handles and the underlying KVStore. For unencrypted file-backed stores, saves the in-memory usearch index to <code>{path}.usearch</code> so the next open can skip the rebuild. Use as a context manager (<code>with VectorStore(...) as vs:</code>) for automatic cleanup.</p>
         </div>
         <div class="fn-entry" style="margin-top:1rem;">
           <h3 class="fn-name">VectorIndexError</h3>
