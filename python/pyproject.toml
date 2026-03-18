@@ -20,6 +20,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+vector = ["usearch>=2.9", "numpy>=1.21"]
+
 [project.urls]
 Homepage = "https://github.com/hash-anu/snkv"
 Documentation = "https://hash-anu.github.io/snkv/api.html#lang=py"
