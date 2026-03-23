@@ -1,5 +1,14 @@
 #include <cassert>
 
+/* MAP_FAILED is a POSIX mmap constant absent on Windows/MinGW.
+** usearch's memory_mapping_allocator uses it; define it before pulling
+** in the usearch headers so compilation succeeds on all platforms. */
+#ifdef _WIN32
+#  ifndef MAP_FAILED
+#    define MAP_FAILED ((void*)(uintptr_t)(-1))
+#  endif
+#endif
+
 #include <usearch/index_dense.hpp>
 
 extern "C" {

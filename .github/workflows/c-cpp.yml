@@ -38,7 +38,7 @@ jobs:
       with:
         msystem: MINGW64
         update: true
-        install: mingw-w64-x86_64-gcc make
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-gcc-libs make
 
     - name: Build
       if: runner.os != 'Windows'
@@ -60,6 +60,11 @@ jobs:
 
     - name: Run vector tests
       if: runner.os != 'Windows'
+      run: make test-vector
+
+    - name: Run vector tests (Windows)
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
       run: make test-vector
 
     - name: Clean
