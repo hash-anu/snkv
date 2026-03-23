@@ -598,6 +598,20 @@
       <li class="toc-section"><a href="#c-memory">Memory</a></li>
       <li class="toc-section"><a href="#c-enc">Encryption</a></li>
       <li class="toc-section"><a href="#c-threads">Thread Safety</a></li>
+      <li class="toc-section"><a href="#c-vec">Vector Store</a>
+        <ul class="toc-sub">
+          <li><a href="#c-vec-types">Types &amp; Constants</a></li>
+          <li><a href="#c-vec-open">Open / Close</a></li>
+          <li><a href="#c-vec-writes">Writes</a></li>
+          <li><a href="#c-vec-reads">Reads</a></li>
+          <li><a href="#c-vec-search">Search</a></li>
+          <li><a href="#c-vec-delete">Delete</a></li>
+          <li><a href="#c-vec-ttl">TTL</a></li>
+          <li><a href="#c-vec-stats">Stats</a></li>
+          <li><a href="#c-vec-maintenance">Maintenance</a></li>
+          <li><a href="#c-vec-build">Build</a></li>
+        </ul>
+      </li>
     </ul>
   </aside>
 
@@ -1399,6 +1413,336 @@ KVStore *plain = <span class="kw">NULL</span>;
             <li><strong>Column families:</strong> all CFs share one key; re-encryption covers all CFs atomically</li>
           </ul>
         </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════ -->
+      <!-- VECTOR STORE (C)                                          -->
+      <!-- ═══════════════════════════════════════════════════════════ -->
+
+      <section class="api-section" id="c-vec">
+        <div class="section-label">C / C++ API — Vector Store</div>
+        <h2 class="section-title">Vector Store</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">
+          An HNSW approximate nearest-neighbour index built on top of KVStore, using the
+          <a href="https://github.com/unum-cloud/usearch" target="_blank">usearch</a> C SDK.
+          Vectors and KV data share a single <code>.db</code> file. The index is rebuilt from
+          the database on open and saved to a <code>.usearch</code> sidecar on close for fast
+          reload. All writes are atomic KVStore transactions; the usearch index is updated after
+          each successful commit.
+        </p>
+        <div class="note">Include <code>kvstore_vec.h</code> and link against <code>libsnkv_vec.a</code>
+        (built with <code>make vector</code>). The core store (<code>libsnkv.a</code> / <code>snkv.h</code>)
+        does <strong>not</strong> include the vector layer — it requires g++ to compile the usearch C++ core.</div>
+      </section>
+
+      <!-- Types & Constants -->
+      <section class="api-section" id="c-vec-types">
+        <h2 class="section-title">Types &amp; Constants</h2>
+
+        <h3 style="margin-bottom:0.4rem;">Opaque handle</h3>
+        <table class="prop-table">
+          <tr><td><code>KVVecStore</code></td><td>Opaque handle returned by <code>kvstore_vec_open</code>.</td></tr>
+        </table>
+
+        <h3 style="margin:1rem 0 0.4rem;">Result structs</h3>
+        <table class="prop-table">
+          <tr><td><code>KVVecSearchResult</code></td><td><code>pKey/nKey</code>, <code>pValue/nValue</code>, <code>distance</code>, <code>pMetadata/nMetadata</code>. Free with <code>kvstore_vec_free_results</code>.</td></tr>
+          <tr><td><code>KVVecKeyResult</code></td><td><code>pKey/nKey</code>, <code>distance</code>. Free with <code>kvstore_vec_free_key_results</code>.</td></tr>
+          <tr><td><code>KVVecStats</code></td><td>Filled by <code>kvstore_vec_stats</code>. See Stats section.</td></tr>
+          <tr><td><code>KVVecItem</code></td><td>One item for <code>kvstore_vec_put_batch</code>: <code>pKey/nKey</code>, <code>pVal/nVal</code>, <code>pVec</code>, <code>pMeta/nMeta</code>.</td></tr>
+        </table>
+
+        <h3 style="margin:1rem 0 0.4rem;">Distance spaces</h3>
+        <table class="prop-table">
+          <tr><td><code>KVVEC_SPACE_L2</code></td><td>0</td><td><strong>Squared</strong> Euclidean (‖a−b‖²) — distances are comparable but <em>not</em> sqrt L2; default</td></tr>
+          <tr><td><code>KVVEC_SPACE_COSINE</code></td><td>1</td><td>Cosine distance (1 − dot(a,b) / (‖a‖·‖b‖))</td></tr>
+          <tr><td><code>KVVEC_SPACE_IP</code></td><td>2</td><td>Inner product (negative dot product)</td></tr>
+        </table>
+        <div class="note" style="margin-top:0.6rem;"><strong>Note on L2:</strong> <code>KVVEC_SPACE_L2</code> returns <em>squared</em> Euclidean distance — squaring is omitted for performance. Relative ordering is identical to true L2, so nearest-neighbour results are unaffected. To recover metric distance, take <code>sqrtf(result.distance)</code>.</div>
+
+        <h3 style="margin:1rem 0 0.4rem;">Index precision (dtype)</h3>
+        <table class="prop-table">
+          <tr><td><code>KVVEC_DTYPE_F32</code></td><td>0</td><td>float32 — full precision (default)</td></tr>
+          <tr><td><code>KVVEC_DTYPE_F16</code></td><td>1</td><td>float16 — half RAM, negligible recall loss</td></tr>
+          <tr><td><code>KVVEC_DTYPE_I8</code></td><td>2</td><td>int8 — quarter RAM, cosine-like metrics only</td></tr>
+        </table>
+
+        <h3 style="margin:1rem 0 0.4rem;">Extra error codes</h3>
+        <table class="prop-table">
+          <tr><td><code>KVVEC_DIM_MISMATCH</code></td><td>20</td><td>Opened with wrong <code>dim</code> for existing store</td></tr>
+          <tr><td><code>KVVEC_DTYPE_MISMATCH</code></td><td>21</td><td>Opened with wrong <code>dtype</code> for existing store</td></tr>
+          <tr><td><code>KVVEC_SPACE_MISMATCH</code></td><td>22</td><td>Opened with wrong <code>space</code> for existing store</td></tr>
+          <tr><td><code>KVVEC_INDEX_DROPPED</code></td><td>23</td><td>Index has been dropped; search unavailable</td></tr>
+          <tr><td><code>KVVEC_INDEX_EMPTY</code></td><td>24</td><td>Index is empty; put a vector first</td></tr>
+          <tr><td><code>KVVEC_BAD_VECTOR</code></td><td>25</td><td>Vector shape or value is invalid</td></tr>
+        </table>
+      </section>
+
+      <!-- Open / Close -->
+      <section class="api-section" id="c-vec-open">
+        <h2 class="section-title">Open / Close</h2>
+
+        <div class="fn-entry" id="c-vec-open-fn">
+          <h3 class="fn-name">kvstore_vec_open</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_open</span>(
+  <span class="kw">const char</span>    *zPath,
+  <span class="kw">int</span>            dim,
+  <span class="kw">int</span>            space,          <span class="cm">/* KVVEC_SPACE_* */</span>
+  <span class="kw">int</span>            connectivity,   <span class="cm">/* HNSW M;              0 → default 16  */</span>
+  <span class="kw">int</span>            expansion_add,  <span class="cm">/* ef_construction;     0 → default 128 */</span>
+  <span class="kw">int</span>            expansion_search, <span class="cm">/* ef at query time;  0 → default 64  */</span>
+  <span class="kw">int</span>            dtype,          <span class="cm">/* KVVEC_DTYPE_* */</span>
+  <span class="kw">const uint8_t</span> *pPassword,      <span class="cm">/* NULL for plain store */</span>
+  <span class="kw">int</span>            nPassword,
+  KVVecStore   **ppVS
+);</div>
+          <p class="fn-desc">Open or create a vector store. <code>dim</code>, <code>space</code>, and <code>dtype</code> are immutable after the first open — passing different values on a subsequent open returns the corresponding mismatch error. Pass <code>pPassword/nPassword</code> for an encrypted store; sidecar persistence is disabled for encrypted stores. <code>*ppVS</code> is <code>NULL</code> on any error.</p>
+          <pre><span class="kw">KVVecStore</span> *vs = <span class="kw">NULL</span>;
+<span class="kw">int</span> rc = <span class="fn">kvstore_vec_open</span>(
+    <span class="str">"store.db"</span>, <span class="nm">128</span>, KVVEC_SPACE_COSINE,
+    <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>,            <span class="cm">/* defaults */</span>
+    KVVEC_DTYPE_F32,
+    <span class="kw">NULL</span>, <span class="nm">0</span>,              <span class="cm">/* plain (unencrypted) */</span>
+    &amp;vs
+);
+<span class="kw">if</span> (rc == KVVEC_DIM_MISMATCH) puts(<span class="str">"wrong dim for existing store"</span>);</pre>
+        </div>
+
+        <div class="fn-entry" id="c-vec-close-fn">
+          <h3 class="fn-name">kvstore_vec_close</h3>
+          <div class="fn-sig"><span class="kw">void</span> <span class="fn">kvstore_vec_close</span>(KVVecStore *pVS);</div>
+          <p class="fn-desc">Close the store and free all resources. For unencrypted file-backed stores, saves the HNSW graph to <code>{path}.usearch</code> and the next-id stamp to <code>{path}.usearch.nid</code> so the next open can skip the O(n·dim) rebuild. Safe to call with <code>NULL</code>.</p>
+        </div>
+      </section>
+
+      <!-- Writes -->
+      <section class="api-section" id="c-vec-writes">
+        <h2 class="section-title">Writes</h2>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_put</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_put</span>(
+  KVVecStore  *pVS,
+  <span class="kw">const void</span>  *pKey,  <span class="kw">int</span> nKey,
+  <span class="kw">const void</span>  *pVal,  <span class="kw">int</span> nVal,
+  <span class="kw">const float</span> *pVec,            <span class="cm">/* dim float32 values */</span>
+  <span class="kw">int64_t</span>      expire_ms,       <span class="cm">/* 0 = no TTL */</span>
+  <span class="kw">const void</span>  *pMeta, <span class="kw">int</span> nMeta <span class="cm">/* NULL/0 = preserve; "" nMeta=0 = clear */</span>
+);</div>
+          <p class="fn-desc">Insert or update a key/value pair and add its vector to the HNSW index. The KVStore write (all 5 internal CFs) is one atomic transaction; the usearch index update happens after commit. If the key already exists, the old usearch label is removed before the new one is added (count stays constant on overwrite).</p>
+          <pre><span class="kw">float</span> vec[<span class="nm">128</span>] = { <span class="cm">/* ... */</span> };
+<span class="fn">kvstore_vec_put</span>(vs, <span class="str">"doc:1"</span>, <span class="nm">5</span>, <span class="str">"hello"</span>, <span class="nm">5</span>,
+                vec,
+                <span class="nm">0</span>,                     <span class="cm">/* no TTL */</span>
+                <span class="str">"{\"tag\":\"ai\"}"</span>, <span class="nm">12</span>);  <span class="cm">/* metadata */</span></pre>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_put_batch</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_put_batch</span>(
+  KVVecStore       *pVS,
+  <span class="kw">const</span> KVVecItem  *pItems,
+  <span class="kw">int</span>               nItems,
+  <span class="kw">int64_t</span>           expire_ms  <span class="cm">/* applied uniformly; 0 = no TTL */</span>
+);</div>
+          <p class="fn-desc">Insert or update <code>nItems</code> records in one atomic transaction. Last-write-wins for duplicate keys within the batch. All usearch insertions happen after the commit.</p>
+          <pre>KVVecItem items[3] = {
+    { <span class="str">"k1"</span>, <span class="nm">2</span>, <span class="str">"val1"</span>, <span class="nm">4</span>, vec1, <span class="kw">NULL</span>, <span class="nm">0</span> },
+    { <span class="str">"k2"</span>, <span class="nm">2</span>, <span class="str">"val2"</span>, <span class="nm">4</span>, vec2, <span class="kw">NULL</span>, <span class="nm">0</span> },
+    { <span class="str">"k3"</span>, <span class="nm">2</span>, <span class="str">"val3"</span>, <span class="nm">4</span>, vec3, meta, nMeta },
+};
+<span class="fn">kvstore_vec_put_batch</span>(vs, items, <span class="nm">3</span>, <span class="nm">0</span>);</pre>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_kv_put</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_kv_put</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">const void</span> *pVal, <span class="kw">int</span> nVal);</div>
+          <p class="fn-desc">Plain KV write — does <strong>not</strong> update the vector index. Useful for storing non-vector data (config, counters) alongside vector keys in the same file.</p>
+        </div>
+      </section>
+
+      <!-- Reads -->
+      <section class="api-section" id="c-vec-reads">
+        <h2 class="section-title">Reads</h2>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_get</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_get</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">void</span> **ppVal, <span class="kw">int</span> *pnVal);</div>
+          <p class="fn-desc">Fetch value bytes. TTL-aware: returns <code>KVSTORE_NOTFOUND</code> and lazily deletes the key if it has expired. Caller must <code>snkv_free(*ppVal)</code>.</p>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_get_vector</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_get_vector</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">float</span> **ppVec, <span class="kw">int</span> *pnFloats);</div>
+          <p class="fn-desc">Fetch the stored float32 vector. <code>*ppVec</code> is a flat array of <code>dim</code> floats. Caller must <code>snkv_free(*ppVec)</code>.</p>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_get_metadata</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_get_metadata</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">void</span> **ppMeta, <span class="kw">int</span> *pnMeta);</div>
+          <p class="fn-desc">Fetch JSON metadata bytes. Returns <code>KVSTORE_OK</code> with <code>*ppMeta=NULL</code> when no metadata has ever been written to this store (tags CF does not yet exist). Returns <code>KVSTORE_NOTFOUND</code> with <code>*ppMeta=NULL</code> when the tags CF exists but this specific key has no metadata. Both cases are not errors. Caller must <code>snkv_free(*ppMeta)</code> on <code>KVSTORE_OK</code> with non-NULL result.</p>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_contains</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_contains</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);</div>
+          <p class="fn-desc">Returns <code>1</code> if the key exists and is not expired, <code>0</code> otherwise.</p>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_count</h3>
+          <div class="fn-sig"><span class="kw">int64_t</span> <span class="fn">kvstore_vec_count</span>(KVVecStore *pVS);</div>
+          <p class="fn-desc">Returns the number of active (non-deleted) vectors in the HNSW index (<code>usearch_size</code>).</p>
+        </div>
+      </section>
+
+      <!-- Search -->
+      <section class="api-section" id="c-vec-search">
+        <h2 class="section-title">Search</h2>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_search</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_search</span>(
+  KVVecStore          *pVS,
+  <span class="kw">const float</span>         *pQuery,
+  <span class="kw">int</span>                  top_k,
+  <span class="kw">int</span>                  rerank,      <span class="cm">/* 1 = exact rerank from stored f32 */</span>
+  <span class="kw">int</span>                  oversample,  <span class="cm">/* candidate pool = top_k×oversample; 0→3 */</span>
+  <span class="kw">float</span>                max_distance, <span class="cm">/* drop results beyond threshold; 0 = no limit */</span>
+  KVVecSearchResult  **ppResults,
+  <span class="kw">int</span>                 *pnResults
+);</div>
+          <p class="fn-desc">Approximate nearest-neighbour search. Expired keys are filtered out transparently. Results are sorted ascending by distance. Caller must pass the array to <code>kvstore_vec_free_results</code>. Returns <code>KVVEC_INDEX_EMPTY</code> if no vectors have been inserted, <code>KVVEC_INDEX_DROPPED</code> after <code>kvstore_vec_drop_index</code>.</p>
+          <pre><span class="kw">float</span> q[<span class="nm">128</span>] = { <span class="cm">/* ... */</span> };
+KVVecSearchResult *res = <span class="kw">NULL</span>; <span class="kw">int</span> n = <span class="nm">0</span>;
+
+<span class="cm">/* Basic ANN search */</span>
+<span class="fn">kvstore_vec_search</span>(vs, q, <span class="nm">5</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0.0f</span>, &amp;res, &amp;n);
+
+<span class="cm">/* With exact rerank (oversample×top_k candidates → exact distance sort) */</span>
+<span class="fn">kvstore_vec_search</span>(vs, q, <span class="nm">5</span>, <span class="nm">1</span>, <span class="nm">3</span>, <span class="nm">0.0f</span>, &amp;res, &amp;n);
+
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++)
+    printf(<span class="str">"%.*s  dist=%.4f  val=%.*s\n"</span>,
+           res[i].nKey, (<span class="kw">char</span>*)res[i].pKey, res[i].distance,
+           res[i].nValue, (<span class="kw">char</span>*)res[i].pValue);
+<span class="fn">kvstore_vec_free_results</span>(res, n);</pre>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_search_keys</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_search_keys</span>(KVVecStore *pVS, <span class="kw">const float</span> *pQuery, <span class="kw">int</span> top_k, KVVecKeyResult **ppResults, <span class="kw">int</span> *pnResults);</div>
+          <p class="fn-desc">ANN search returning <code>(key, distance)</code> pairs only — no value fetch. Cheaper than <code>kvstore_vec_search</code> when values are not needed. Caller must pass the array to <code>kvstore_vec_free_key_results</code>.</p>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_free_results / kvstore_vec_free_key_results</h3>
+          <div class="fn-sig"><span class="kw">void</span> <span class="fn">kvstore_vec_free_results</span>(KVVecSearchResult *pResults, <span class="kw">int</span> nResults);
+<span class="kw">void</span> <span class="fn">kvstore_vec_free_key_results</span>(KVVecKeyResult *pResults, <span class="kw">int</span> nResults);</div>
+          <p class="fn-desc">Free the result arrays returned by the search functions. Safe to call with <code>NULL</code>.</p>
+        </div>
+      </section>
+
+      <!-- Delete -->
+      <section class="api-section" id="c-vec-delete">
+        <h2 class="section-title">Delete</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_delete</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_delete</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);</div>
+          <p class="fn-desc">Delete the key from the KV store, all 5 vector CFs, and the HNSW index — all in one atomic transaction. Returns <code>KVSTORE_NOTFOUND</code> if the key does not exist.</p>
+        </div>
+      </section>
+
+      <!-- TTL -->
+      <section class="api-section" id="c-vec-ttl">
+        <h2 class="section-title">TTL</h2>
+        <p class="fn-desc" style="margin-bottom:1rem;">
+          Pass a non-zero <code>expire_ms</code> to <code>kvstore_vec_put</code> (absolute milliseconds since the Unix epoch — use <code>kvstore_now_ms() + delta</code>). Expired vectors are filtered out transparently during search and lazily deleted on get. Use <code>kvstore_vec_purge_expired</code> for bulk cleanup.
+        </p>
+        <pre><span class="cm">/* Expire in 60 seconds */</span>
+<span class="kw">int64_t</span> exp = <span class="fn">kvstore_now_ms</span>() + <span class="nm">60000</span>;
+<span class="fn">kvstore_vec_put</span>(vs, <span class="str">"sess:abc"</span>, <span class="nm">8</span>, token, nToken, vec, exp, <span class="kw">NULL</span>, <span class="nm">0</span>);
+
+<span class="cm">/* Bulk-delete all expired vectors */</span>
+<span class="kw">int</span> nPurged = <span class="nm">0</span>;
+<span class="fn">kvstore_vec_purge_expired</span>(vs, &amp;nPurged);</pre>
+      </section>
+
+      <!-- Stats -->
+      <section class="api-section" id="c-vec-stats">
+        <h2 class="section-title">Stats</h2>
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_stats</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_stats</span>(KVVecStore *pVS, KVVecStats *pStats);</div>
+          <p class="fn-desc">Fill <code>*pStats</code> with current index configuration and runtime state. Always returns <code>KVSTORE_OK</code>.</p>
+          <table class="prop-table" style="margin-top:0.6rem;">
+            <tr><td><code>dim</code></td><td>Vector dimension</td></tr>
+            <tr><td><code>space</code></td><td><code>KVVEC_SPACE_*</code></td></tr>
+            <tr><td><code>dtype</code></td><td><code>KVVEC_DTYPE_*</code></td></tr>
+            <tr><td><code>connectivity</code></td><td>HNSW M parameter</td></tr>
+            <tr><td><code>expansion_add</code></td><td>ef_construction</td></tr>
+            <tr><td><code>expansion_search</code></td><td>ef at query time</td></tr>
+            <tr><td><code>count</code></td><td>Active vectors in HNSW index (<code>usearch_size</code>)</td></tr>
+            <tr><td><code>capacity</code></td><td>Allocated HNSW capacity</td></tr>
+            <tr><td><code>fill_ratio</code></td><td><code>count / capacity</code> — 0–1 ratio (multiply by 100 for %). Auto-doubles at 0.9.</td></tr>
+            <tr><td><code>vec_cf_count</code></td><td>Entries in <code>_snkv_vec_</code> CF (may include expired)</td></tr>
+            <tr><td><code>has_metadata</code></td><td>1 if <code>_snkv_vec_tags_</code> CF exists</td></tr>
+            <tr><td><code>sidecar_enabled</code></td><td>1 for unencrypted file-backed stores</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <!-- Maintenance -->
+      <section class="api-section" id="c-vec-maintenance">
+        <h2 class="section-title">Maintenance</h2>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_purge_expired</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_purge_expired</span>(KVVecStore *pVS, <span class="kw">int</span> *pnDeleted);</div>
+          <p class="fn-desc">Scan the <code>_snkv_vec_</code> CF and delete all expired vectors from every CF and the HNSW index in one atomic transaction. <code>*pnDeleted</code> (may be <code>NULL</code>) is set to the number removed. Use this in preference to <code>kvstore_purge_expired</code> to keep vector CFs in sync. Returns <code>KVSTORE_OK</code> (0 deleted) when there are no TTL entries.</p>
+        </div>
+
+        <div class="fn-entry">
+          <h3 class="fn-name">kvstore_vec_drop_index</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_drop_index</span>(KVVecStore *pVS);</div>
+          <p class="fn-desc">Drop all five <code>_snkv_vec*_</code> column families and free the in-memory HNSW index. KV data in the default CF is preserved and readable via <code>kvstore_vec_get</code>. After this call, <code>kvstore_vec_search</code> returns <code>KVVEC_INDEX_DROPPED</code>. Sidecar files are removed.</p>
+          <pre><span class="fn">kvstore_vec_drop_index</span>(vs);    <span class="cm">/* index gone, KV intact */</span>
+
+<span class="kw">void</span> *v = <span class="kw">NULL</span>; <span class="kw">int</span> n = <span class="nm">0</span>;
+<span class="fn">kvstore_vec_get</span>(vs, <span class="str">"doc:1"</span>, <span class="nm">5</span>, &amp;v, &amp;n);  <span class="cm">/* still works */</span>
+<span class="fn">snkv_free</span>(v);</pre>
+        </div>
+      </section>
+
+      <!-- Build -->
+      <section class="api-section" id="c-vec-build">
+        <h2 class="section-title">Build</h2>
+        <p class="fn-desc" style="margin-bottom:0.8rem;">The vector layer requires <code>g++</code> (C++17) to compile the usearch HNSW core. The default <code>make</code> / <code>make test</code> targets use pure <code>gcc</code> and are unaffected.</p>
+        <pre><span class="cm"># Build libsnkv_vec.a (core + usearch objects)</span>
+make vector
+
+<span class="cm"># Build and run the comprehensive example</span>
+make vector-examples
+make run-vector-examples
+
+<span class="cm"># Build and run the test suite (150 tests)</span>
+make test-vector</pre>
+
+        <h3 style="margin:1rem 0 0.4rem;">Internal storage (5 Column Families)</h3>
+        <table class="prop-table">
+          <tr><td><code>_snkv_vec_</code></td><td>key → float32[dim] — stored vector</td></tr>
+          <tr><td><code>_snkv_vec_idk_</code></td><td>key → uint64 label (8B big-endian) — maps key to HNSW label</td></tr>
+          <tr><td><code>_snkv_vec_idi_</code></td><td>uint64 label → key — reverse lookup used during search</td></tr>
+          <tr><td><code>_snkv_vec_meta_</code></td><td>config keys: <code>ndim</code>, <code>metric</code>, <code>connectivity</code>, <code>expansion_add</code>, <code>expansion_search</code>, <code>dtype</code>, <code>next_id</code></td></tr>
+          <tr><td><code>_snkv_vec_tags_</code></td><td>key → JSON bytes — created lazily on first metadata write</td></tr>
+        </table>
+
+        <h3 style="margin:1rem 0 0.4rem;">Sidecar files</h3>
+        <table class="prop-table">
+          <tr><td><code>{path}.usearch</code></td><td>usearch HNSW binary graph — saved on close, loaded on open</td></tr>
+          <tr><td><code>{path}.usearch.nid</code></td><td>8-byte big-endian next-id stamp — used to detect stale sidecars</td></tr>
+        </table>
+        <div class="note" style="margin-top:0.8rem;">Sidecar persistence is disabled for encrypted stores and in-memory stores (<code>zPath=NULL</code>). If the stamp in <code>.usearch.nid</code> does not match the stored <code>next_id</code> the sidecar is discarded and the index is rebuilt from the CFs.</div>
       </section>
 
     </div><!-- /panel-c -->

@@ -122,6 +122,74 @@ with KVStore.open_encrypted("mydb.db", b"hunter2") as db:
 
 ---
 
+## Vector Search (C API)
+
+SNKV includes a native C vector search layer built on [usearch](https://github.com/unum-cloud/usearch)'s HNSW index. Vectors and KV data share the same `.db` file. The index is rebuilt from the database on open and optionally saved to a `.usearch` sidecar for fast reload.
+
+```c
+#include "kvstore_vec.h"
+
+/* Open (or create) a 128-dim cosine store */
+KVVecStore *vs = NULL;
+kvstore_vec_open("store.db", 128, KVVEC_SPACE_COSINE,
+                 0, 0, 0, KVVEC_DTYPE_F32, NULL, 0, &vs);
+
+/* Insert key + value + vector (+ optional JSON metadata) */
+float vec[128] = { /* ... */ };
+kvstore_vec_put(vs, "doc:1", 5, "hello world", 11,
+                vec, 0, "{\"tag\":\"ai\"}", 12);
+
+/* Approximate nearest-neighbour search */
+KVVecSearchResult *res = NULL; int n = 0;
+kvstore_vec_search(vs, query, /*top_k=*/5, /*rerank=*/0,
+                   /*oversample=*/0, /*max_dist=*/0.0f, &res, &n);
+for (int i = 0; i < n; i++)
+    printf("%.*s  dist=%.4f\n", res[i].nKey, (char*)res[i].pKey, res[i].distance);
+kvstore_vec_free_results(res, n);
+
+kvstore_vec_close(vs);
+```
+
+### Distance spaces
+
+| Constant | Description |
+|----------|-------------|
+| `KVVEC_SPACE_L2` | Squared Euclidean (‖a−b‖²) — **not** sqrt; distances are comparable but not metric L2 |
+| `KVVEC_SPACE_COSINE` | Cosine distance (1 − dot(a,b) / (‖a‖·‖b‖)) |
+| `KVVEC_SPACE_IP` | Inner product (negative dot product) |
+
+### Index precision
+
+| Constant | RAM usage | Notes |
+|----------|-----------|-------|
+| `KVVEC_DTYPE_F32` | Full | Default |
+| `KVVEC_DTYPE_F16` | Half | Negligible recall loss |
+| `KVVEC_DTYPE_I8` | Quarter | Cosine-like metrics only |
+
+### Key features
+
+- **Atomic writes** — every `put` is one KVStore transaction (5 internal CFs); usearch updated after commit
+- **Exact rerank** — pass `rerank=1` to fetch `oversample×top_k` candidates and re-score with exact float32 distances
+- **TTL** — pass `expire_ms > 0` to `kvstore_vec_put`; expired vectors are lazily evicted on search/get and bulk-removable via `kvstore_vec_purge_expired`
+- **Sidecar persistence** — `close` saves the HNSW graph to `{path}.usearch`; `open` loads it in O(1) instead of an O(n·dim) rebuild (disabled for encrypted stores)
+- **Encryption** — pass a password to `kvstore_vec_open`; values and vectors are encrypted, sidecar is disabled
+- **Batch inserts** — `kvstore_vec_put_batch` writes N items in one atomic transaction
+
+### Build
+
+The vector layer requires g++ to compile the usearch C++ core:
+
+```bash
+make vector               # builds libsnkv_vec.a  (core + usearch)
+make vector-examples      # compiles examples/vector.c
+make run-vector-examples  # runs the example
+make test-vector          # runs the test suite
+```
+
+See [examples/vector.c](examples/vector.c) for a complete walkthrough of every API, and [api.html](https://hash-anu.github.io/snkv/api.html#c-vec) for the full C reference.
+
+---
+
 ## Configuration
 
 Use `kvstore_open_v2` to control how the store is opened. Zero-initialise the
@@ -158,11 +226,17 @@ kvstore_open_v2("mydb.db", &db, &cfg);
 ### Linux / macOS
 
 ```bash
-make              # builds libsnkv.a
-make snkv.h       # generates single-header version
-make examples     # builds examples
-make run-examples # run all examples
-make test         # run all tests (CI suite)
+make                      # builds libsnkv.a (pure gcc, no C++)
+make snkv.h               # generates single-header version
+make examples             # builds examples
+make run-examples         # run all examples
+make test                 # run all tests (CI suite)
+
+make vector               # builds libsnkv_vec.a (core + usearch, requires g++)
+make vector-examples      # builds examples/vector
+make run-vector-examples  # run the vector example
+make test-vector          # run the vector test suite
+
 make clean
 ```
 
@@ -213,7 +287,7 @@ with KVStore("mydb.db") as db:
     print(db["hello"].decode())   # world
 ```
 
-**Vector search** (Python only) — integrated HNSW approximate nearest-neighbour index backed by [usearch](https://github.com/unum-cloud/usearch). Vectors and KV data share the same `.db` file. Supports metadata filtering, exact rerank, TTL on vectors, quantization (f32/f16/i8), sidecar index persistence, and encryption.
+**Vector search** — integrated HNSW approximate nearest-neighbour index backed by [usearch](https://github.com/unum-cloud/usearch). Vectors and KV data share the same `.db` file. Supports metadata filtering, exact rerank, TTL on vectors, quantization (f32/f16/i8), sidecar index persistence, and encryption. Available in both C and Python.
 
 ```python
 from snkv.vector import VectorStore
@@ -348,7 +422,8 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 - **SSD-friendly** — WAL appends sequentially, reducing random writes
 
 - **Python Bindings** — idiomatic Python 3.8+ API with dict-style access, TTL, encryption, column families, iterators, and typed exceptions — see [python/README.md](python/README.md)
-- **Vector Search (Python)** — integrated HNSW index via `pip install snkv[vector]`; metadata filtering, exact rerank, TTL on vectors, quantization (f32/f16/i8), sidecar persistence — see [python/README.md#vector-search](python/README.md#vector-search)
+- **Vector Search (C)** — native HNSW index via `make vector`; ANN search, exact rerank, TTL, sidecar persistence, encryption, batch insert — see [examples/vector.c](examples/vector.c)
+- **Vector Search (Python)** — `pip install snkv[vector]`; metadata filtering, exact rerank, TTL on vectors, quantization (f32/f16/i8), sidecar persistence — see [python/README.md#vector-search](python/README.md#vector-search)
 
 ---
 
@@ -392,7 +467,7 @@ SNKV embeds the following third-party libraries:
 |---------|---------|---------|-------|
 | [SQLite](https://www.sqlite.org/) | 3.x (amalgamation subset) | [Public Domain](https://www.sqlite.org/copyright.html) | B-tree, pager, WAL, OS layer |
 | [Monocypher](https://monocypher.org/) | 4.x | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) (Public Domain) | XChaCha20-Poly1305 + Argon2id |
-| [usearch](https://github.com/unum-cloud/usearch) | ≥ 2.9 | [Apache 2.0](https://github.com/unum-cloud/usearch/blob/main/LICENSE) | HNSW vector index (optional — `pip install snkv[vector]`) |
+| [usearch](https://github.com/unum-cloud/usearch) | ≥ 2.9 | [Apache 2.0](https://github.com/unum-cloud/usearch/blob/main/LICENSE) | HNSW vector index (optional — C: `make vector`, Python: `pip install snkv[vector]`) |
 
 SQLite and Monocypher are statically compiled into `libsnkv` and `snkv.h`. No dynamic linking or separate installation is required.
 

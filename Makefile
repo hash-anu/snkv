@@ -1,4 +1,5 @@
-CC ?= gcc
+CC  ?= gcc
+CXX ?= g++
 
 # ---- Build mode ----
 BUILD ?= debug
@@ -107,6 +108,21 @@ run-examples: examples
 	  echo; \
 	done
 
+# ---- Vector example (requires g++ runtime — built separately from snkv.h examples) ----
+VEC_EXAMPLE_BIN = examples/vector$(TARGET_EXT)
+
+vector-examples: $(VLIB) $(VEC_EXAMPLE_BIN)
+
+examples/vector.o: examples/vector.c
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(VEC_EXAMPLE_BIN): examples/vector.o $(LIB_OBJ) $(VEC_OBJ)
+	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS) -lm
+
+run-vector-examples: vector-examples
+	@echo "=== Running $(VEC_EXAMPLE_BIN) ==="; \
+	./$(VEC_EXAMPLE_BIN) || exit 1
+
 # ---- Test targets ----
 tests: $(TEST_BIN)
 
@@ -121,8 +137,67 @@ test: tests
 	done
 	rm -f *.db *.db-wal *.db-shm
 
+# ============================================================
+# ---- Vector support (requires g++ / C++17) ----
+# Build with:   make vector
+# Test with:    make test-vector
+# ============================================================
+
+# Vector-specific flags
+VEC_CFLAGS   = $(CFLAGS) -Isrc/usearch -Isrc
+
+ifeq ($(BUILD),debug)
+  VEC_CXXFLAGS = -Wall -std=c++17 -g -O0 -DDEBUG \
+                 -Iinclude -Isrc -Isrc/usearch -Isrc/usearch/include \
+                 -DUSEARCH_USE_FP16LIB=0
+endif
+ifeq ($(BUILD),release)
+  VEC_CXXFLAGS = -Wall -std=c++17 -O2 -DNDEBUG \
+                 -Iinclude -Isrc -Isrc/usearch -Isrc/usearch/include \
+                 -DUSEARCH_USE_FP16LIB=0
+endif
+
+# Vector object files (built separately from core LIB_OBJ)
+VEC_OBJ = src/kvstore_vec.o src/usearch/usearch_impl.o
+
+# Combined static library: core + vector
+VLIB = libsnkv_vec.a
+
+# Vector test binary
+VEC_TEST_BIN = tests/test_vec$(TARGET_EXT)
+
+# Build the combined vector library
+vector: $(VLIB)
+
+$(VLIB): $(LIB_OBJ) $(VEC_OBJ)
+	ar rcs $@ $^
+
+# kvstore_vec.c is plain C — compiled with gcc, extra include path for usearch.h
+src/kvstore_vec.o: src/kvstore_vec.c
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+# usearch HNSW wrapper — compiled with g++
+src/usearch/usearch_impl.o: src/usearch/usearch_impl.cpp
+	$(CXX) $(VEC_CXXFLAGS) -c -o $@ $<
+
+# Build and run vector tests
+test-vector: $(VEC_TEST_BIN)
+	@echo "=== Running $(VEC_TEST_BIN) ==="; \
+	./$(VEC_TEST_BIN) || exit 1
+	rm -f tests/*.db tests/*.db-wal tests/*.db-shm
+
+# Link vector test: C file compiled with gcc, linked with g++ for C++ runtime
+tests/test_vec.o: tests/test_vec.c
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(VEC_TEST_BIN): tests/test_vec.o $(LIB_OBJ) $(VEC_OBJ)
+	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS) -lm
+
+# ============================================================
+
 clean:
 	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
+	rm -f $(VEC_OBJ) $(VLIB) $(VEC_TEST_BIN) $(VEC_EXAMPLE_BIN) examples/vector.o
 	rm -f snkv.h
 	rm -f *.db *.db-wal *.db-shm
 	rm -f tests/*.db tests/*.db-wal tests/*.db-shm
@@ -139,4 +214,5 @@ tests/test_crash_10gb$(TARGET_EXT): tests/test_crash_10gb.c $(LIB_OBJ)
 test-crash-10gb: tests/test_crash_10gb$(TARGET_EXT)
 	./tests/test_crash_10gb$(TARGET_EXT) run tests/crash_10gb.db
 
-.PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb
+.PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb \
+        vector test-vector vector-examples run-vector-examples

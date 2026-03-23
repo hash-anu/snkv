@@ -13,6 +13,7 @@ tests/test_concurrent
 tests/test_config
 tests/test_crash_recovery
 libsnkv.a
+libsnkv_vec.a
 tests/test_enc
 tests/test_stress
 tests/test_prefix
@@ -21,6 +22,7 @@ tests/test_checkpoint
 tests/test_ttl
 tests/test_iterator_reverse
 tests/test_new_apis
+tests/test_vec
 examples/basic
 examples/benchmark
 examples/config
@@ -34,3 +36,4 @@ examples/iterator_reverse
 examples/snkv.h
 examples/new_apis
 examples/encryption
+examples/vector
