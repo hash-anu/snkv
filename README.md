@@ -477,6 +477,40 @@ SQLite and Monocypher are public domain — no attribution is legally required, 
 
 ---
 
+## Hire Me
+
+If you're reading this, you're probably dealing with one of these:
+
+- Your SQLite queries are too slow for a pure KV workload and you don't know where to start optimizing
+- You need an embedded store on Android/iOS/edge but can't ship a heavy dependency
+- You're building an AI pipeline and need fast local vector + KV storage without standing up a separate service
+- You have a C/C++ performance problem and need someone who actually reads storage engine source code
+
+I built SNKV by going deep into SQLite's B-tree and pager internals — the kind of work most engineers avoid. That's the level I operate at.
+
+**I can help you with:**
+- Diagnosing and fixing storage/performance bottlenecks in C, C++, or Python
+- Integrating or adapting SNKV (or SQLite) into your embedded / mobile / edge product
+- Building Python native extensions that wrap C libraries cleanly
+- Setting up vector search for AI workloads without the infrastructure overhead
+- Cross-compiling native libraries for Android or other constrained targets
+
+**Availability:** ~3 hrs/day · Remote · Flexible rate — reach out and we'll find something that works
+
+**Contact:** [hashmak.jsn@gmail.com](mailto:hashmak.jsn@gmail.com) · [GitHub](https://github.com/hash-anu)
+
+---
+
+## Support This Project
+
+SNKV is free and open-source. If it's been useful to you — or you just want to support independent systems software — any amount helps keep the work going.
+
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/hash-anu)
+
+Even a one-time coffee keeps things moving — thank you.
+
+---
+
 ## License
 
 Apache License 2.0 © 2025 Hash Anu
