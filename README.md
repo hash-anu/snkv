@@ -441,17 +441,6 @@ Because SNKV uses SQLite's file format and pager layer, backup tools that operat
 
 ---
 
-## Internals & Documentation
-
-I documented the SQLite internals explored while building this:
-
-- [B-Tree operations](https://github.com/hash-anu/snkv/blob/master/internal/BTREE_OPERATIONS.md)
-- [Pager operations](https://github.com/hash-anu/snkv/blob/master/internal/PAGER_OPERATIONS.md)
-- [OS layer operations](https://github.com/hash-anu/snkv/blob/master/internal/OS_LAYER_OPERATIONS.md)
-- [KV layer design](https://github.com/hash-anu/snkv/blob/master/internal/KVSTORE_OPERATIONS.md)
-
----
-
 ## Design Principles
 
 - **Minimalism wins** — fewer layers, less overhead
@@ -498,16 +487,6 @@ I built SNKV by going deep into SQLite's B-tree and pager internals — the kind
 **Availability:** ~3 hrs/day · Remote · Flexible rate — reach out and we'll find something that works
 
 **Contact:** [hashmak.jsn@gmail.com](mailto:hashmak.jsn@gmail.com) · [GitHub](https://github.com/hash-anu)
-
----
-
-## Support This Project
-
-SNKV is free and open-source. If it's been useful to you — or you just want to support independent systems software — any amount helps keep the work going.
-
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/hash-anu)
-
-Even a one-time coffee keeps things moving — thank you.
 
 ---
 
