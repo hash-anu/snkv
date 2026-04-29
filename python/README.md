@@ -663,6 +663,83 @@ PYTHONPATH=. python3 examples/transactions.py
 
 ---
 
+## Benchmarks
+
+Benchmarks run on **Windows 11** comparing SNKV against [diskcache](https://pypi.org/project/diskcache/) 5.6.3.
+Both libraries are SQLite-backed; diskcache adds pickle serialization overhead that SNKV avoids by operating on raw bytes.
+
+Run it yourself:
+```bash
+pip install diskcache
+cd python
+PYTHONIOENCODING=utf-8 python examples/benchmark_diskcache.py
+```
+
+### Core Operations — N = 10,000 ops, 64-byte values
+
+| Operation | SNKV | diskcache | Speedup |
+|---|---|---|---|
+| Bulk write (batched tx) | 24.4 ms | 649.6 ms | **26.6x** |
+| Individual write | 189.2 ms | 2.02 s | **10.7x** |
+| Read — hit (100%) | 19.5 ms | 178.7 ms | **9.2x** |
+| Read — miss (100%) | 18.1 ms | 170.3 ms | **9.4x** |
+| Delete (batched tx) | 25.1 ms | 250.8 ms | **10.0x** |
+| Full scan (key + value) | 7.3 ms | 31.8 ms | **4.4x** |
+| Write with TTL | 68.7 ms | 636.5 ms | **9.3x** |
+
+### Prefix Scan — 10,000 keys, 1,000 matching `ns3:`
+
+SNKV uses a native `prefix_iterator` that visits only matching keys. diskcache has no native prefix support and scans all keys in Python.
+
+| Operation | SNKV | diskcache | Speedup |
+|---|---|---|---|
+| Forward prefix scan | 3.0 ms | 94.7 ms | **31.7x** |
+| Reverse prefix scan | 2.8 ms | 93.7 ms | **33.4x** |
+
+### Mixed Workload — 80% read / 20% write, 10,000 ops
+
+| Operation | SNKV | diskcache | Speedup |
+|---|---|---|---|
+| 80% read / 20% write | 57.5 ms | 575.0 ms | **10.0x** |
+
+### Value Size Scaling — N = 5,000 ops
+
+| Size | Op | SNKV | diskcache | Speedup |
+|---|---|---|---|---|
+| 64 B | write | 11.5 ms | 369.7 ms | **32.2x** |
+| 64 B | read | 10.7 ms | 95.3 ms | **8.9x** |
+| 1 KB | write | 294.3 ms | 400.6 ms | **1.4x** |
+| 1 KB | read | 288.1 ms | 103.2 ms | 0.4x |
+| 10 KB | write | 769.3 ms | 914.3 ms | **1.2x** |
+| 10 KB | read | 746.8 ms | 156.4 ms | 0.2x |
+| 100 KB | write | 5.98 s | 7.03 s | **1.2x** |
+| 100 KB | read | 5.77 s | 1.33 s | 0.2x |
+
+> For large values (≥ 1 KB) diskcache's read path becomes competitive because pickle overhead shrinks relative to I/O cost. SNKV retains its write advantage at every size.
+
+### Large Dataset — N = 100,000 keys, 64-byte values
+
+| Operation | SNKV | diskcache | Speedup |
+|---|---|---|---|
+| Bulk write (batched tx) | 217.7 ms | 5.05 s | **23.2x** |
+| Read (10,000 sampled) | 35.3 ms | 186.1 ms | **5.3x** |
+| Full scan (key + value) | 50.1 ms | 199.1 ms | **4.0x** |
+
+### Durability — Write → Close → Reopen → Verify, N = 10,000 keys
+
+| Library | Test | Write | Reopen + Read | Verified |
+|---|---|---|---|---|
+| SNKV | Plain write | 31.7 ms | 22.0 ms | 10,000 / 10,000 ✓ |
+| diskcache | Plain write | 741.6 ms | 175.2 ms | 10,000 / 10,000 ✓ |
+| SNKV | Write with TTL | 129.6 ms | 30.1 ms | 10,000 / 10,000 ✓ |
+| diskcache | Write with TTL | 717.3 ms | 177.5 ms | 10,000 / 10,000 ✓ |
+
+Write speedup: **23.4x** (plain) · **5.5x** (TTL). Both stores verified all keys correctly after a cold reopen.
+
+**Overall: SNKV faster in 20 / 23 tests — average speedup 11.1x**
+
+---
+
 ## Thread Safety
 
 Each thread must use its own `KVStore` instance. WAL mode serialises concurrent writers
