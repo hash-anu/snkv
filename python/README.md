@@ -666,7 +666,6 @@ PYTHONPATH=. python3 examples/transactions.py
 ## Benchmarks
 
 Benchmarks run on **Windows 11** comparing SNKV against [diskcache](https://pypi.org/project/diskcache/) 5.6.3.
-Both libraries are SQLite-backed; diskcache adds pickle serialization overhead that SNKV avoids by operating on raw bytes.
 
 Run it yourself:
 ```bash
