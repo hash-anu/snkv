@@ -443,7 +443,7 @@ Because SNKV uses SQLite's file format and pager layer, backup tools that operat
 
 ## Real-World Integration
 
-[lightrag-snkv](https://github.com/hash-anu/lightrag-snkv) demonstrates SNKV powering a full [LightRAG](https://github.com/HKUDS/LightRAG) deployment — replacing all four storage backends (KV cache, vector store, knowledge graph, doc status) with two embedded SQLite files. No Redis, no Postgres, no Qdrant. Just SNKV.
+[lightrag-snkv](https://github.com/hash-anu/lightrag-snkv) demonstrates SNKV powering a full [LightRAG](https://github.com/HKUDS/LightRAG) deployment — replacing all four storage backends (KV cache, vector store, knowledge graph, doc status) with two embedded database files. No Redis, no Postgres, no Qdrant. Just SNKV.
 
 ---
 
