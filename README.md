@@ -32,7 +32,7 @@ The idea: bypass the SQL layer entirely and talk directly to SQLite's storage en
 > *SQLite-grade reliability. KV-first design. Lower overhead for read-heavy and mixed key-value workloads.*
 
 <p align="center">
-  <video src="demo_snkv.mp4" controls width="100%"></video>
+  <video src="https://github.com/user-attachments/assets/3d8ea6a3-bfe2-45c5-ae88-44ffd9a1406f" controls width="100%"></video>
 </p>
 
 ---
