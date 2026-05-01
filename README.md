@@ -31,6 +31,10 @@ The idea: bypass the SQL layer entirely and talk directly to SQLite's storage en
 
 > *SQLite-grade reliability. KV-first design. Lower overhead for read-heavy and mixed key-value workloads.*
 
+<p align="center">
+  <video src="demo_snkv.mp4" controls width="100%"></video>
+</p>
+
 ---
 
 ## Quick Start
@@ -303,8 +307,6 @@ with VectorStore("store.db", dim=128, space="cosine") as vs:
 
 Full documentation — installation, API reference, examples, and thread-safety notes — is in
 **[python/README.md](python/README.md)**.
-
-![SNKV Python API Demo](demo.gif)
 
 ---
 
