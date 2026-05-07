@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch without-mirrors total and update badge JSON
+      - name: Fetch without-mirrors total and write badge JSON
         run: |
           python3 - <<'EOF'
           import urllib.request
@@ -32,7 +32,6 @@ jobs:
               if row["category"] == "without_mirrors"
           )
 
-          # Round down to nearest 1,000 so the badge never over-claims
           rounded = (total // 1000) * 1000
           message = f"{rounded:,}+"
           print(f"without-mirrors total: {total}  → badge: {message}")
@@ -44,26 +43,26 @@ jobs:
               "color": "brightgreen",
           }
 
-          path = "badges/pypi-downloads.json"
-          with open(path, "r") as f:
-              current = f.read()
-
-          new = json.dumps(badge, indent=2) + "\n"
-          if new == current:
-              print("Badge already up to date.")
-              sys.exit(0)
-
-          with open(path, "w") as f:
-              f.write(new)
-          print("Badge updated.")
+          with open("/tmp/pypi-downloads.json", "w") as f:
+              json.dump(badge, f, indent=2)
+              f.write("\n")
           EOF
 
-      - name: Commit and push if changed
+      - name: Publish to badges branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git diff --quiet badges/pypi-downloads.json || (
-            git add badges/pypi-downloads.json &&
-            git commit -m "chore: update PyPI download stats (without mirrors)" &&
-            git push
-          )
+
+          git fetch origin badges 2>/dev/null || true
+          if git rev-parse --verify origin/badges >/dev/null 2>&1; then
+            git switch badges
+          else
+            git switch --orphan badges
+            git rm -rf . 2>/dev/null || true
+          fi
+
+          cp /tmp/pypi-downloads.json pypi-downloads.json
+          git add pypi-downloads.json
+          git diff --cached --quiet && echo "No change." && exit 0
+          git commit -m "chore: update PyPI download stats (without mirrors) [skip ci]"
+          git push origin badges
