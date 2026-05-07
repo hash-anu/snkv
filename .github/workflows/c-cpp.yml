@@ -366,9 +366,9 @@ jobs:
         # Create or switch to orphan 'badges' branch
         git fetch origin badges 2>/dev/null || true
         if git rev-parse --verify origin/badges >/dev/null 2>&1; then
-          git checkout badges
+          git switch badges
         else
-          git checkout --orphan badges
+          git switch --orphan badges
           git rm -rf . 2>/dev/null || true
         fi
 
