@@ -1,0 +1,69 @@
+name: Update PyPI Download Stats
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch without-mirrors total and update badge JSON
+        run: |
+          python3 - <<'EOF'
+          import urllib.request
+          import json
+          import sys
+
+          url = "https://pypistats.org/api/packages/snkv/overall"
+          req = urllib.request.Request(url, headers={"User-Agent": "snkv-stats-bot/1.0"})
+          with urllib.request.urlopen(req) as resp:
+              data = json.loads(resp.read())
+
+          total = sum(
+              row["downloads"]
+              for row in data["data"]
+              if row["category"] == "without_mirrors"
+          )
+
+          # Round down to nearest 1,000 so the badge never over-claims
+          rounded = (total // 1000) * 1000
+          message = f"{rounded:,}+"
+          print(f"without-mirrors total: {total}  → badge: {message}")
+
+          badge = {
+              "schemaVersion": 1,
+              "label": "PyPI Downloads",
+              "message": message,
+              "color": "brightgreen",
+          }
+
+          path = "badges/pypi-downloads.json"
+          with open(path, "r") as f:
+              current = f.read()
+
+          new = json.dumps(badge, indent=2) + "\n"
+          if new == current:
+              print("Badge already up to date.")
+              sys.exit(0)
+
+          with open(path, "w") as f:
+              f.write(new)
+          print("Badge updated.")
+          EOF
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet badges/pypi-downloads.json || (
+            git add badges/pypi-downloads.json &&
+            git commit -m "chore: update PyPI download stats (without mirrors)" &&
+            git push
+          )
