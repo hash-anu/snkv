@@ -18,13 +18,30 @@ jobs:
         run: |
           python3 - <<'EOF'
           import urllib.request
+          import urllib.error
           import json
           import sys
+          import time
 
           url = "https://pypistats.org/api/packages/snkv/overall"
-          req = urllib.request.Request(url, headers={"User-Agent": "snkv-stats-bot/1.0"})
-          with urllib.request.urlopen(req) as resp:
-              data = json.loads(resp.read())
+
+          data = None
+          for attempt in range(5):
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "snkv-stats-bot/1.0"})
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      data = json.loads(resp.read())
+                  break
+              except urllib.error.HTTPError as e:
+                  if e.code == 429:
+                      wait = 10 * (2 ** attempt)
+                      print(f"429 rate-limited, retrying in {wait}s (attempt {attempt+1}/5)...")
+                      time.sleep(wait)
+                  else:
+                      raise
+          else:
+              print("All retries exhausted.", file=sys.stderr)
+              sys.exit(1)
 
           total = sum(
               row["downloads"]
@@ -49,9 +66,12 @@ jobs:
           EOF
 
       - name: Publish to badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           git fetch origin badges 2>/dev/null || true
           if git rev-parse --verify origin/badges >/dev/null 2>&1; then
