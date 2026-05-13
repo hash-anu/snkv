@@ -221,3 +221,8 @@
 #ifndef SQLITE_MAX_TRIGGER_DEPTH
 # define SQLITE_MAX_TRIGGER_DEPTH 1000
 #endif
+
+/* Added in SQLite 3.53.0: maximum safe single allocation size (2GB - 257 bytes) */
+#ifndef SQLITE_MAX_ALLOCATION_SIZE
+# define SQLITE_MAX_ALLOCATION_SIZE 2147483391
+#endif
