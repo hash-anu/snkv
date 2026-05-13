@@ -235,6 +235,9 @@ class VectorStore:
         try:
             self._rebuild_index()
         except Exception:
+            # Null out CF refs before closing — they hold handles into _kv and
+            # would corrupt the heap when GC'd after _kv is closed.
+            self._vec_cf = self._idk_cf = self._idi_cf = self._meta_cf = None
             self._kv.close()
             raise
 

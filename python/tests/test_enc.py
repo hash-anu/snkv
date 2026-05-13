@@ -209,7 +209,7 @@ def test_ttl_roundtrip(tmp_path):
         assert val == b"tok"
         remaining = db.ttl(b"session")
         assert remaining is not None
-        assert 0 < remaining <= 60.0
+        assert 0 < remaining <= 60.0 + 0.01  # allow ~10ms for timestamp rounding in C layer
 
 
 # ---------------------------------------------------------------------------

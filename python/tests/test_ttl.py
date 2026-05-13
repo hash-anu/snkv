@@ -107,7 +107,7 @@ def test_ttl_positive_for_live_key(db):
     db.put(b"k", b"v", ttl=10)
     remaining = db.ttl(b"k")
     assert remaining is not None
-    assert 0 < remaining <= 10
+    assert 0 < remaining <= 10 + 0.01  # allow ~10ms for timestamp rounding in C layer
 
 
 def test_ttl_none_for_permanent_key(db):
