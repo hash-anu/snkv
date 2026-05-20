@@ -160,13 +160,16 @@ static void test_snapshot_isolation(void){
   kvstore_put(kv, "pre", 3, "exists", 6);
   kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_FULL, NULL, NULL);
 
-  /* Use a pipe to synchronise: parent signals child to proceed. */
-  int pipefd[2];
-  pipe(pipefd);
+  /* Two pipes for bidirectional sync:
+  **   c2p: child writes, parent reads  (child signals snapshot ready)
+  **   p2c: parent writes, child reads  (parent signals new_key written) */
+  int c2p[2], p2c[2];
+  pipe(c2p);
+  pipe(p2c);
 
   pid_t pid = fork();
   if(pid == 0){
-    close(pipefd[1]);
+    close(c2p[0]); close(p2c[1]);
     /* Child: open snapshot before parent writes. */
     KVStore *ckv = NULL;
     kvstore_open(DB_PATH, &ckv, KVSTORE_JOURNAL_WAL);
@@ -174,10 +177,10 @@ static void test_snapshot_isolation(void){
     kvstore_begin(ckv, 0);
 
     /* Signal parent that snapshot is open. */
-    char sig = 'R'; write(pipefd[0], &sig, 1);
+    char sig = 'R'; write(c2p[1], &sig, 1);
 
-    /* Wait for parent to commit new data (signal via pipe write). */
-    read(pipefd[0], &sig, 1);
+    /* Wait for parent to commit new data. */
+    read(p2c[0], &sig, 1);
 
     /* Snapshot should not see "new_key" written after our begin. */
     int ex = 0;
@@ -186,20 +189,20 @@ static void test_snapshot_isolation(void){
 
     kvstore_rollback(ckv);
     kvstore_close(ckv);
-    close(pipefd[0]);
+    close(c2p[1]); close(p2c[0]);
     _exit(ok ? 0 : 2);
   }
 
-  close(pipefd[0]);
+  close(c2p[1]); close(p2c[0]);
   /* Wait for child to open its snapshot. */
-  char sig; read(pipefd[1], &sig, 1);
+  char sig; read(c2p[0], &sig, 1);
 
   /* Parent: write new key AFTER child has its snapshot. */
   kvstore_put(kv, "new_key", 7, "new_val", 7);
 
   /* Signal child that write is done. */
-  sig = 'W'; write(pipefd[1], &sig, 1);
-  close(pipefd[1]);
+  sig = 'W'; write(p2c[1], &sig, 1);
+  close(c2p[0]); close(p2c[1]);
 
   int status = 0;
   waitpid(pid, &status, 0);
