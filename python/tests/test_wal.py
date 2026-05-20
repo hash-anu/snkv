@@ -159,6 +159,12 @@ def test_wal_concurrent_1_writer_7_readers(tmp_path):
     errors = []
     lock = threading.Lock()
 
+    # Pre-create and initialise the WAL database before spawning threads so
+    # they don't all race on WAL SHM initialisation simultaneously (macOS is
+    # particularly sensitive to this race).
+    with KVStore(path, journal_mode=JOURNAL_WAL):
+        pass
+
     def _writer():
         try:
             with KVStore(path, journal_mode=JOURNAL_WAL, busy_timeout=5000) as db:
