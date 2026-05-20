@@ -68,21 +68,13 @@ static void make_value(char *buf, int buflen, int writer_id, int seq) {
     snprintf(buf, buflen, "w%02d-val-%06d-payload", writer_id, seq);
 }
 
-/* ---- open with busy retry ---- */
+/* ---- open with built-in busy timeout ---- */
 
 static int open_with_retry(const char *db, KVStore **ppKV) {
-    int rc, retries = 0;
-    do {
-        rc = kvstore_open(db, ppKV, KVSTORE_JOURNAL_WAL);
-        if (rc == KVSTORE_OK) return KVSTORE_OK;
-        if (IS_BUSY(rc)) {
-            usleep(5000 + (rand() % 10000));
-            retries++;
-        } else {
-            return rc;
-        }
-    } while (retries < 30);
-    return rc;
+    KVStoreConfig cfg = {0};
+    cfg.journalMode = KVSTORE_JOURNAL_WAL;
+    cfg.busyTimeout = 10000;   /* 10 s — SQLite retries all lock waits internally */
+    return kvstore_open_v2(db, ppKV, &cfg);
 }
 
 /* ================================================================
