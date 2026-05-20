@@ -117,6 +117,13 @@ static void test_concurrent_readers(void){
   kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_FULL, NULL, NULL);
   kvstore_close(kv);
 
+  /* Pre-open and immediately close to ensure WAL SHM is initialised before
+  ** forking.  Without this, two children racing to open the same WAL database
+  ** simultaneously can both hit the SHM initialisation path and one fails. */
+  KVStore *init = NULL;
+  kvstore_open(DB_PATH, &init, KVSTORE_JOURNAL_WAL);
+  kvstore_close(init);
+
   /* Fork two reader processes. */
   pid_t pids[2];
   for(int p = 0; p < 2; p++){
