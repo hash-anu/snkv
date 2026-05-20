@@ -127,7 +127,7 @@ jobs:
     - name: Install Python test dependencies
       run: |
         python3 -m venv .venv
-        .venv/bin/pip install pytest
+        .venv/bin/pip install pytest setuptools
 
     - name: Build Python extension (in-place)
       run: |
