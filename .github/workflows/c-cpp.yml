@@ -125,15 +125,17 @@ jobs:
         brew install python || true
 
     - name: Install Python test dependencies
-      run: python3 -m pip install pytest
+      run: |
+        python3 -m venv .venv
+        .venv/bin/pip install pytest
 
     - name: Build Python extension (in-place)
       run: |
         cd python
-        python3 setup.py build_ext --inplace
+        ../.venv/bin/python setup.py build_ext --inplace
 
     - name: Run Python tests
-      run: PYTHONPATH=python python3 -m pytest python/tests/ -v
+      run: PYTHONPATH=python .venv/bin/python -m pytest python/tests/ -v
 
   # ==================================================================
   # Valgrind + memory profiling + test counting + badge publishing
