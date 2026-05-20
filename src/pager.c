@@ -4801,15 +4801,9 @@ int sqlite3PagerOpen(
     }
     nPathname = sqlite3Strlen30(zPathname);
     z = zUri = &zFilename[sqlite3Strlen30(zFilename)+1];
-    /* Only scan for URI key=value pairs when the caller set SQLITE_OPEN_URI.
-    ** Without that flag the caller provides a plain C string (single null
-    ** terminator), so reading one byte past it is undefined behaviour that
-    ** ASAN correctly flags. */
-    if( vfsFlags & SQLITE_OPEN_URI ){
-      while( *z ){
-        z += strlen(z)+1;
-        z += strlen(z)+1;
-      }
+    while( *z ){
+      z += strlen(z)+1;
+      z += strlen(z)+1;
     }
     nUriByte = (int)(&z[1] - zUri);
     assert( nUriByte>=1 );

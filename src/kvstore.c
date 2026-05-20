@@ -984,15 +984,31 @@ int kvstore_open_v2(
     ? (SQLITE_OPEN_READONLY  | SQLITE_OPEN_MAIN_DB)
     : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
 
+  /* sqlite3BtreeOpen's pager scans one byte past the filename's null
+  ** terminator looking for URI key=value params (SQLite internal double-null
+  ** convention).  Provide a copy with an extra trailing '\0' so the scan
+  ** exits immediately and ASAN does not flag the out-of-bounds read. */
+  int nFn = (int)strlen(zFilename);
+  char *zFnBuf = sqlite3_malloc(nFn + 2);
+  if( !zFnBuf ){
+    kvstoreTeardownNoLock(pKV);
+    sqlite3_mutex_free(pKV->pMutex);
+    sqlite3_free(pKV);
+    return KVSTORE_NOMEM;
+  }
+  memcpy(zFnBuf, zFilename, nFn + 1);
+  zFnBuf[nFn + 1] = '\0';
+
   /* Open the btree */
   rc = sqlite3BtreeOpen(
     sqlite3_vfs_find(0),
-    zFilename,
+    zFnBuf,
     pKV->db,
     &pKV->pBt,
     0,           /* no btree flags */
     vfsFlags
   );
+  sqlite3_free(zFnBuf);
   if( rc != SQLITE_OK ){
     kvstoreSetError(pKV, "failed to open btree: error %d", rc);
     kvstoreTeardownNoLock(pKV);
