@@ -268,6 +268,194 @@ static void test_delete_notfound(void){
   dbRemove("reg10.db");
 }
 
+/*
+** Test 11: Failed write begin restores the persistent read transaction.
+**
+** Bug: when kvstore_put (or kvstore_begin) released the persistent read
+** then failed to open a write transaction (e.g. SQLITE_BUSY from a second
+** writer), inTrans was left at 0. Subsequent reads on that store still
+** worked but paid a per-call BeginTrans/Commit overhead.  More critically,
+** on the next write attempt the store would again release a read that was
+** never there, leaving inTrans permanently at 0.
+**
+** We trigger the SQLITE_BUSY path by opening a second handle to the same
+** file and holding a write transaction on it, then attempting a write on
+** the first handle.  After the failed write, reads on the first handle
+** must still succeed and the store must accept a later write once the
+** second handle releases its lock.
+*/
+static void test_write_fail_restores_read(void){
+  printf("\nTest 11: failed write begin restores persistent read\n");
+  const char *p = "reg11.db";
+  dbRemove(p);
+
+  /* Seed the database via a separate open so both handles see existing data. */
+  {
+    KVStore *seed = NULL;
+    kvstore_open(p, &seed, KVSTORE_JOURNAL_WAL);
+    if(!seed){ ASSERT("seed open", 0); dbRemove(p); return; }
+    kvstore_put(seed, "pre", 3, "val", 3);
+    kvstore_close(seed);
+  }
+
+  KVStore *kv1 = NULL, *kv2 = NULL;
+  kvstore_open(p, &kv1, KVSTORE_JOURNAL_WAL);
+  kvstore_open(p, &kv2, KVSTORE_JOURNAL_WAL);
+  if(!kv1 || !kv2){
+    ASSERT("dual open", 0);
+    if(kv1) kvstore_close(kv1);
+    if(kv2) kvstore_close(kv2);
+    dbRemove(p); return;
+  }
+
+  /* Hold a write transaction on kv2 so kv1 cannot acquire one. */
+  int rc = kvstore_begin(kv2, 1);
+  ASSERT("kv2 write begin ok", rc == KVSTORE_OK);
+
+  /* Attempt a write on kv1 — must fail (SQLITE_BUSY). */
+  rc = kvstore_put(kv1, "new", 3, "data", 4);
+  ASSERT("kv1 write blocked by kv2", rc != KVSTORE_OK);
+
+  /* After the failure, reads on kv1 must still work. */
+  void *pv = NULL; int nv = 0;
+  rc = kvstore_get(kv1, "pre", 3, &pv, &nv);
+  ASSERT("kv1 read after failed write ok", rc == KVSTORE_OK);
+  ASSERT("kv1 read correct value", pv && nv==3 && memcmp(pv,"val",3)==0);
+  if(pv) snkv_free(pv);
+
+  /* Release kv2's write lock, then kv1 must be able to write. */
+  kvstore_rollback(kv2);
+  rc = kvstore_put(kv1, "new", 3, "data", 4);
+  ASSERT("kv1 write succeeds after kv2 releases lock", rc == KVSTORE_OK);
+
+  kvstore_close(kv1);
+  kvstore_close(kv2);
+  dbRemove(p);
+}
+
+/*
+** Test 12: kvstore_open (the simple wrapper) produces a working store.
+**
+** Bug: kvstore_open zero-initialised its KVStoreConfig, so syncLevel=0
+** was passed to kvstore_open_v2.  Because pConfig was non-NULL the NULL
+** guard that defaults to KVSTORE_SYNC_NORMAL was bypassed, and the store
+** silently opened with PAGER_SYNCHRONOUS_OFF.
+**
+** The fix sets cfg.syncLevel = KVSTORE_SYNC_NORMAL explicitly.  This test
+** verifies the store opened through kvstore_open is fully functional and
+** data survives a close/reopen cycle, which would fail under sync=OFF on a
+** system where the OS page cache is dropped between the two opens.
+*/
+static void test_kvstore_open_is_functional(void){
+  printf("\nTest 12: kvstore_open wrapper produces a functional store\n");
+  const char *p = "reg12.db";
+  dbRemove(p);
+
+  KVStore *kv = NULL;
+  int rc = kvstore_open(p, &kv, KVSTORE_JOURNAL_WAL);
+  ASSERT("kvstore_open ok", rc == KVSTORE_OK && kv != NULL);
+  if(!kv){ dbRemove(p); return; }
+
+  rc = kvstore_put(kv, "durability", 10, "check", 5);
+  ASSERT("put ok", rc == KVSTORE_OK);
+  kvstore_close(kv);
+
+  /* Reopen — data must survive. */
+  kv = NULL;
+  rc = kvstore_open(p, &kv, KVSTORE_JOURNAL_WAL);
+  ASSERT("reopen ok", rc == KVSTORE_OK && kv != NULL);
+  if(!kv){ dbRemove(p); return; }
+
+  void *pv = NULL; int nv = 0;
+  rc = kvstore_get(kv, "durability", 10, &pv, &nv);
+  ASSERT("data survived close/reopen", rc == KVSTORE_OK);
+  ASSERT("correct value after reopen", pv && nv==5 && memcmp(pv,"check",5)==0);
+  if(pv) snkv_free(pv);
+
+  kvstore_close(kv);
+  dbRemove(p);
+}
+
+/*
+** Test 13: dropping a CF does not make sibling CFs unreachable.
+**
+** Bug: the metadata table uses open-addressing (linear probing).  When
+** kvstore_cf_drop deleted a row with sqlite3BtreeDelete, the probe slot
+** became empty.  Any CF stored at a later probe offset due to a hash
+** collision with the dropped CF would never be found again — the seeker
+** stops at the first empty slot.
+**
+** The fix writes a tombstone (4-byte zero payload) instead of deleting.
+** The seeker naturally skips tombstones (payloadSz < 4+nKey) and continues
+** probing.
+**
+** We create several CFs, drop one in the middle, then verify every
+** non-dropped CF is still openable and its data still readable.
+*/
+static void test_cf_drop_does_not_break_siblings(void){
+  printf("\nTest 13: CF drop does not make sibling CFs unreachable\n");
+  const char *p = "reg13.db";
+  dbRemove(p);
+
+  KVStore *kv = NULL;
+  kvstore_open(p, &kv, KVSTORE_JOURNAL_WAL);
+  if(!kv){ ASSERT("open ok", 0); dbRemove(p); return; }
+
+  /* Create several CFs and put one key in each. */
+  const char *names[] = { "alpha", "beta", "gamma", "delta", "epsilon" };
+  int n = (int)(sizeof(names)/sizeof(names[0]));
+  int i;
+  for(i = 0; i < n; i++){
+    KVColumnFamily *cf = NULL;
+    int rc = kvstore_cf_create(kv, names[i], &cf);
+    ASSERT("create cf ok", rc == KVSTORE_OK);
+    if(rc == KVSTORE_OK){
+      kvstore_cf_put(cf, "k", 1, names[i], (int)strlen(names[i]));
+      kvstore_cf_close(cf);
+    }
+  }
+
+  /* Drop "beta" (middle of the list). */
+  int rc = kvstore_cf_drop(kv, "beta");
+  ASSERT("drop beta ok", rc == KVSTORE_OK);
+
+  kvstore_close(kv);
+
+  /* Reopen and verify every non-dropped CF is accessible with correct data. */
+  kv = NULL;
+  kvstore_open(p, &kv, KVSTORE_JOURNAL_WAL);
+  ASSERT("reopen ok", kv != NULL);
+  if(!kv){ dbRemove(p); return; }
+
+  const char *surviving[] = { "alpha", "gamma", "delta", "epsilon" };
+  int ns = (int)(sizeof(surviving)/sizeof(surviving[0]));
+  for(i = 0; i < ns; i++){
+    KVColumnFamily *cf = NULL;
+    rc = kvstore_cf_open(kv, surviving[i], &cf);
+    ASSERT("surviving CF still openable", rc == KVSTORE_OK);
+    if(rc != KVSTORE_OK){
+      printf("  CF '%s' not found after drop of 'beta'\n", surviving[i]);
+      continue;
+    }
+    void *pv = NULL; int nv = 0;
+    rc = kvstore_cf_get(cf, "k", 1, &pv, &nv);
+    ASSERT("data intact in surviving CF", rc == KVSTORE_OK);
+    ASSERT("correct value", pv && (int)strlen(surviving[i])==nv &&
+           memcmp(pv, surviving[i], nv)==0);
+    if(pv) snkv_free(pv);
+    kvstore_cf_close(cf);
+  }
+
+  /* "beta" must be gone. */
+  KVColumnFamily *cf = NULL;
+  rc = kvstore_cf_open(kv, "beta", &cf);
+  ASSERT("dropped CF not openable", rc == KVSTORE_NOTFOUND);
+  if(cf) kvstore_cf_close(cf);
+
+  kvstore_close(kv);
+  dbRemove(p);
+}
+
 int main(void){
   printf("=== test_regressions ===\n");
   test_ttl_overwrite_not_doubled();
@@ -280,6 +468,9 @@ int main(void){
   test_close_with_open_iterator();
   test_errmsg_null();
   test_delete_notfound();
+  test_write_fail_restores_read();
+  test_kvstore_open_is_functional();
+  test_cf_drop_does_not_break_siblings();
   printf("\n--- %d passed, %d failed ---\n", passed, failed);
   return (failed > 0) ? 1 : 0;
 }

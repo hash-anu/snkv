@@ -664,6 +664,20 @@ static int kvstoreMetaSeekKey(
   return SQLITE_OK;
 }
 
+/* Write a tombstone into the metadata row at rowid.
+** A tombstone is a 4-byte payload with key_len=0. kvstoreMetaSeekKey skips
+** it naturally (payloadSz < 4+nKey for any non-empty CF name), so probing
+** continues past it. kvstoreMetaFindSlot treats it as a reusable slot. */
+static int kvstoreMetaWriteTombstone(BtCursor *pCur, i64 rowid){
+  static const unsigned char zeroHdr[4] = {0, 0, 0, 0};
+  BtreePayload payload;
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey  = rowid;
+  payload.pData = (void*)zeroHdr;
+  payload.nData = 4;
+  return sqlite3BtreeInsert(pCur, &payload, 0, 0);
+}
+
 static int kvstoreMetaFindSlot(
   BtCursor *pCur,
   const void *pKey, int nKey,
@@ -677,8 +691,21 @@ static int kvstoreMetaFindSlot(
     int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
     if( rc != SQLITE_OK ) return rc;
     if( res != 0 ){
+      /* Completely empty slot — use it. */
       *pRowid = tryRowid;
       return SQLITE_OK;
+    }
+    /* Check for a tombstone (key_len == 0) — reusable. */
+    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    if( payloadSz == 4 ){
+      unsigned char hdr[4];
+      rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+      if( rc != SQLITE_OK ) return rc;
+      int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      if( storedKeyLen == 0 ){
+        *pRowid = tryRowid;
+        return SQLITE_OK;
+      }
     }
   }
   return SQLITE_FULL;
@@ -1201,6 +1228,7 @@ int kvstore_open(
   KVStoreConfig cfg;
   memset(&cfg, 0, sizeof(cfg));
   cfg.journalMode = journalMode;
+  cfg.syncLevel   = KVSTORE_SYNC_NORMAL;
   return kvstore_open_v2(zFilename, ppKV, &cfg);
 }
 
@@ -1340,11 +1368,18 @@ int kvstore_begin(KVStore *pKV, int wrflag){
   }else{
     kvstoreCheckCorruption(pKV, rc);
     kvstoreSetError(pKV, "failed to begin transaction: error %d", rc);
+    /* Restore persistent read so subsequent gets don't pay per-call overhead. */
+    if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
+      pKV->inTrans = 1;
+    }
   }
 
   sqlite3_mutex_leave(pKV->pMutex);
   return rc;
 }
+
+/* Forward declaration — defined near kvstoreEnsureWrite below. */
+static void kvstoreRestorePersistentRead(KVStore *pKV);
 
 /*
 ** Commit the current transaction.
@@ -1375,9 +1410,7 @@ int kvstore_commit(KVStore *pKV){
     kvstoreAutoCheckpoint(pKV);
     /* Restore the persistent read transaction so that subsequent get/exists
     ** calls avoid per-call BeginTrans/Commit overhead. */
-    if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
-      pKV->inTrans = 1;
-    }
+    kvstoreRestorePersistentRead(pKV);
   }else{
     kvstoreCheckCorruption(pKV, rc);
     kvstoreSetError(pKV, "failed to commit transaction: error %d", rc);
@@ -1419,9 +1452,7 @@ int kvstore_rollback(KVStore *pKV){
 
   /* Restore the persistent read transaction after rollback. */
   if( !pKV->closing ){
-    if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
-      pKV->inTrans = 1;
-    }
+    kvstoreRestorePersistentRead(pKV);
   }
 
   sqlite3_mutex_leave(pKV->pMutex);
@@ -1466,9 +1497,7 @@ int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt){
   if( rc == SQLITE_OK ) pKV->stats.nCheckpoints++;
 
   /* Restore the persistent read transaction. */
-  if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
-    pKV->inTrans = 1;
-  }
+  kvstoreRestorePersistentRead(pKV);
 
   if( rc != SQLITE_OK ){
     kvstoreSetError(pKV, "checkpoint failed: error %d", rc);
@@ -2418,6 +2447,7 @@ static int kvstore_cf_put_internal(
     }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
@@ -2776,6 +2806,7 @@ static int kvstore_cf_delete_internal(
     }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
@@ -4549,7 +4580,7 @@ static void kvstoreDropHiddenCFNoLock(KVStore *pKV, const char *zName){
   int iTable = (tableRootBytes[0]<<24)|(tableRootBytes[1]<<16)|
                (tableRootBytes[2]<<8)|tableRootBytes[3];
 
-  sqlite3BtreeDelete(pCur, 0);
+  kvstoreMetaWriteTombstone(pCur, foundRowid);
   kvstoreFreeCursor(pCur);
 
   int iMoved = 0;
@@ -4608,6 +4639,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex);
       return rc;
     }
@@ -4672,8 +4704,8 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   iTable = (tableRootBytes[0] << 24) | (tableRootBytes[1] << 16) |
            (tableRootBytes[2] << 8) | tableRootBytes[3];
 
-  /* Delete from metadata table */
-  rc = sqlite3BtreeDelete(pCur, 0);
+  /* Write tombstone in metadata table — preserves probe chain for sibling CFs. */
+  rc = kvstoreMetaWriteTombstone(pCur, foundRowid);
   kvstoreFreeCursor(pCur);
   pCur = NULL;
 
@@ -4781,6 +4813,7 @@ int kvstore_cf_put_ttl(
     if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -5076,6 +5109,7 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
     if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
@@ -5226,6 +5260,7 @@ int kvstore_cf_put_if_absent(
     if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -5393,6 +5428,7 @@ int kvstore_cf_clear(KVColumnFamily *pCF){
     if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
+      kvstoreRestorePersistentRead(pKV);
       sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -5618,6 +5654,17 @@ int sqlite3_config(int op, ...){
 ** kvstore_remove_encryption — decrypt in-place and reopen as plaintext
 */
 
+/* Helper: try to reopen the persistent read transaction.
+** Called whenever a write-begin fails after the persistent read was released,
+** so subsequent reads don't pay per-call BeginTrans/Commit overhead. */
+static void kvstoreRestorePersistentRead(KVStore *pKV){
+  if( pKV->inTrans == 0 ){
+    if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
+      pKV->inTrans = 1;
+    }
+  }
+}
+
 /* Helper: ensure we are in a write transaction.  Returns KVSTORE_OK on
 ** success or an error code.  Sets *pAutoTrans to 1 if we started one. */
 static int kvstoreEnsureWrite(KVStore *pKV, int *pAutoTrans){
@@ -5628,7 +5675,10 @@ static int kvstoreEnsureWrite(KVStore *pKV, int *pAutoTrans){
     pKV->inTrans = 0;
   }
   int rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc != SQLITE_OK ){
+    kvstoreRestorePersistentRead(pKV);
+    return rc;
+  }
   pKV->inTrans = 2;
   *pAutoTrans = 1;
   return KVSTORE_OK;
