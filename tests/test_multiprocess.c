@@ -171,7 +171,7 @@ static void test_snapshot_isolation(void){
     KVStore *ckv = NULL;
     kvstore_open(DB_PATH, &ckv, KVSTORE_JOURNAL_WAL);
     /* Begin read transaction to freeze snapshot. */
-    kvstore_begin_read(ckv);
+    kvstore_begin(ckv, 0);
 
     /* Signal parent that snapshot is open. */
     char sig = 'R'; write(pipefd[0], &sig, 1);
