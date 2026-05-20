@@ -115,14 +115,10 @@ static void test_concurrent_readers(void){
     kvstore_put(kv, k, (int)strlen(k), "value", 5);
   }
   kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_FULL, NULL, NULL);
-  kvstore_close(kv);
-
-  /* Pre-open and immediately close to ensure WAL SHM is initialised before
-  ** forking.  Without this, two children racing to open the same WAL database
-  ** simultaneously can both hit the SHM initialisation path and one fails. */
-  KVStore *init = NULL;
-  kvstore_open(DB_PATH, &init, KVSTORE_JOURNAL_WAL);
-  kvstore_close(init);
+  /* Keep kv open through the fork so the WAL SHM stays fully initialised.
+  ** Closing before fork leaves a window where both children race to
+  ** initialise SHM simultaneously; keeping one connection live prevents
+  ** that race on both Linux and macOS. */
 
   /* Fork two reader processes. */
   pid_t pids[2];
@@ -148,6 +144,7 @@ static void test_concurrent_readers(void){
     int st = 0; waitpid(pids[p], &st, 0);
     if(!WIFEXITED(st) || WEXITSTATUS(st) != 0) all_ok = 0;
   }
+  kvstore_close(kv);
   ASSERT("both concurrent readers saw all keys", all_ok);
   db_remove();
 }
