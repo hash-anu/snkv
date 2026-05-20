@@ -986,23 +986,28 @@ int kvstore_open_v2(
 
   /* sqlite3BtreeOpen's pager scans one byte past the filename's null
   ** terminator looking for URI key=value params (SQLite internal double-null
-  ** convention).  Provide a copy with an extra trailing '\0' so the scan
-  ** exits immediately and ASAN does not flag the out-of-bounds read. */
-  int nFn = (int)strlen(zFilename);
-  char *zFnBuf = sqlite3_malloc(nFn + 2);
-  if( !zFnBuf ){
-    kvstoreTeardownNoLock(pKV);
-    sqlite3_mutex_free(pKV->pMutex);
-    sqlite3_free(pKV);
-    return KVSTORE_NOMEM;
+  ** convention).  For real file paths, provide a copy with an extra trailing
+  ** '\0' so the scan exits immediately and ASAN does not flag the read.
+  ** NULL / empty filenames (in-memory DBs) go through unchanged — pager.c
+  ** already guards those with `if(zFilename && zFilename[0])`. */
+  char *zFnBuf = NULL;
+  if( zFilename && zFilename[0] ){
+    int nFn = (int)strlen(zFilename);
+    zFnBuf = sqlite3_malloc(nFn + 2);
+    if( !zFnBuf ){
+      kvstoreTeardownNoLock(pKV);
+      sqlite3_mutex_free(pKV->pMutex);
+      sqlite3_free(pKV);
+      return KVSTORE_NOMEM;
+    }
+    memcpy(zFnBuf, zFilename, nFn + 1);
+    zFnBuf[nFn + 1] = '\0';
   }
-  memcpy(zFnBuf, zFilename, nFn + 1);
-  zFnBuf[nFn + 1] = '\0';
 
   /* Open the btree */
   rc = sqlite3BtreeOpen(
     sqlite3_vfs_find(0),
-    zFnBuf,
+    zFnBuf ? zFnBuf : zFilename,
     pKV->db,
     &pKV->pBt,
     0,           /* no btree flags */
