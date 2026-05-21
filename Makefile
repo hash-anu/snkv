@@ -226,6 +226,7 @@ test-tsan:
 test-coverage:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(COV_CFLAGS)" test
+	$(MAKE) CFLAGS="$(COV_CFLAGS)" test-vector
 	lcov --capture --directory . --output-file $(LCOV_OUT).info --ignore-errors mismatch,negative
 	genhtml $(LCOV_OUT).info --output-directory $(LCOV_OUT)/html
 	@echo "HTML report: $(LCOV_OUT)/html/index.html"
