@@ -77,30 +77,65 @@ jobs:
       run: make clean
 
   # ==================================================================
-  # Python bindings — build + pytest (Linux only)
+  # ARM64 build and test (native GitHub-hosted ARM runner)
+  # ==================================================================
+  build-arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Build
+      run: make
+
+    - name: Run tests
+      run: make test
+
+    - name: Clean
+      if: always()
+      run: make clean
+
+  # ==================================================================
+  # Python bindings — build + pytest (Linux + macOS)
   # ==================================================================
   python:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install build dependencies
+    - name: Install build dependencies (Linux)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential python3-dev python3-pip
 
+    - name: Install build dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install python || true
+
     - name: Install Python test dependencies
-      run: python3 -m pip install pytest
+      run: |
+        python3 -m venv .venv
+        .venv/bin/pip install pytest setuptools
 
     - name: Build Python extension (in-place)
       run: |
         cd python
-        python3 setup.py build_ext --inplace
+        ../.venv/bin/python setup.py build_ext --inplace
 
     - name: Run Python tests
-      run: PYTHONPATH=python python3 -m pytest python/tests/ -v
+      run: PYTHONPATH=python .venv/bin/python -m pytest python/tests/ -v
 
   # ==================================================================
   # Valgrind + memory profiling + test counting + badge publishing
@@ -258,6 +293,21 @@ jobs:
 
         echo "{\"schemaVersion\":1,\"label\":\"peak memory (stress)\",\"message\":\"${PEAK_HR}\",\"color\":\"blue\"}" > badge-data/memory.json
 
+    # ---- Performance regression: capture ops/sec from test_benchmark ----
+    - name: Benchmark performance
+      run: |
+        echo "=== Benchmark ==="
+        OUTPUT=$(./tests/test_benchmark 2>&1) || true
+        rm -f *.db
+        echo "$OUTPUT"
+        OPS=$(echo "$OUTPUT" | grep -oE '[0-9]+ ops/sec' | grep -oE '^[0-9]+' | tail -1 || echo "")
+        [ -z "$OPS" ] && OPS=0
+        echo "ops/sec: ${OPS}"
+        if [ "$OPS" -gt 0 ] && [ "$OPS" -lt 10000 ] 2>/dev/null; then
+          echo "WARNING: ops/sec ${OPS} is below soft baseline of 10,000"
+        fi
+        echo "{\"schemaVersion\":1,\"label\":\"perf\",\"message\":\"${OPS} ops/sec\",\"color\":\"blue\"}" > badge-data/perf.json
+
     # ---- Count total tests passed ----
     - name: Count tests passed
       run: |
@@ -376,7 +426,85 @@ jobs:
         cp /tmp/badge-data/*.json .
 
         # Commit and push
-        git add valgrind.json tests.json memory.json
+        git add valgrind.json tests.json memory.json perf.json
         git diff --cached --quiet && echo "No badge changes" && exit 0
         git commit -m "Update badges [skip ci]"
         git push origin badges
+
+  # ==================================================================
+  # AddressSanitizer + UndefinedBehaviorSanitizer
+  # ==================================================================
+  sanitizers:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Run tests with ASAN + UBSAN
+      run: make test-asan
+
+  # ==================================================================
+  # Coverage report (lcov + genhtml)
+  # ==================================================================
+  coverage:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential lcov
+
+    - name: Run tests with coverage instrumentation
+      run: make test-coverage
+
+    - name: Upload coverage HTML report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage-report/html/
+
+    - name: Update README coverage badges
+      if: github.event_name == 'push'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        for FILE in kvstore kvstore_vec; do
+          lcov --extract coverage-report.info "*/src/${FILE}.c" \
+               --output-file "${FILE}-cov.info" --ignore-errors mismatch 2>/dev/null || true
+
+          PCT="0"
+          if [ -f "${FILE}-cov.info" ] && [ -s "${FILE}-cov.info" ]; then
+            P=$(lcov --summary "${FILE}-cov.info" 2>&1 \
+                | grep -i "lines" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+            [ -n "$P" ] && PCT="$P"
+          fi
+
+          PCT_INT=$(echo "$PCT" | cut -d. -f1)
+          if [ "$PCT_INT" -ge 80 ] 2>/dev/null; then COLOR="brightgreen"
+          elif [ "$PCT_INT" -ge 60 ] 2>/dev/null; then COLOR="yellow"
+          else COLOR="red"; fi
+
+          echo "${FILE}: ${PCT}% (${COLOR})"
+
+          # Rewrite the badge URL directly in README — percentage is in the URL itself
+          sed -i "s|img\.shields\.io/badge/${FILE}-[0-9.]*%25-[a-z]*|img.shields.io/badge/${FILE}-${PCT}%25-${COLOR}|g" README.md
+        done
+
+        git add README.md
+        git diff --cached --quiet && echo "No badge changes" && exit 0
+        git commit -m "chore: update coverage badges [skip ci]"
+        git push origin HEAD:${{ github.ref_name }}
+

@@ -18,7 +18,7 @@ endif
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME_S),Linux)
-  LDFLAGS =
+  LDFLAGS = -lpthread -lm
 endif
 ifeq ($(UNAME_S),Darwin)
   LDFLAGS = -lpthread -lm
@@ -75,8 +75,17 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_ttl.c \
            tests/test_iterator_reverse.c \
            tests/test_new_apis.c \
-           tests/test_enc.c
-TEST_BIN = $(TEST_SRC:.c=$(TARGET_EXT))
+           tests/test_enc.c \
+           tests/test_regressions.c \
+           tests/test_fault_inject.c \
+           tests/test_new_gaps.c
+TEST_BIN := $(TEST_SRC:.c=$(TARGET_EXT))
+
+# test_multiprocess uses fork() — POSIX only (Linux / macOS)
+ifneq (,$(filter Linux Darwin,$(UNAME_S)))
+  TEST_SRC += tests/test_multiprocess.c
+  TEST_BIN += tests/test_multiprocess$(TARGET_EXT)
+endif
 
 # ---- Example files ----
 EXAMPLE_SRC = $(filter-out examples/vector.c,$(wildcard examples/*.c))
@@ -193,6 +202,36 @@ $(VEC_TEST_BIN): tests/test_vec.o $(LIB_OBJ) $(VEC_OBJ)
 
 # ============================================================
 
+# ============================================================
+# ---- Sanitizer & coverage targets (Linux / macOS) ----------
+# ============================================================
+ASAN_CFLAGS  = $(BASE_CFLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
+UBSAN_CFLAGS = $(BASE_CFLAGS) -g -O1 -fsanitize=undefined -fno-omit-frame-pointer
+TSAN_CFLAGS  = $(BASE_CFLAGS) -g -O1 -fsanitize=thread -fno-omit-frame-pointer
+COV_CFLAGS   = $(BASE_CFLAGS) -g -O0 --coverage
+LCOV_OUT     = coverage-report
+
+test-asan:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="$(ASAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test
+
+test-ubsan:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="$(UBSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=undefined" test
+
+test-tsan:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
+
+test-coverage:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="$(COV_CFLAGS)" test
+	lcov --capture --directory . --output-file $(LCOV_OUT).info --ignore-errors mismatch,negative
+	genhtml $(LCOV_OUT).info --output-directory $(LCOV_OUT)/html
+	@echo "HTML report: $(LCOV_OUT)/html/index.html"
+
+# ============================================================
+
 clean:
 	rm -f $(LIB_OBJ) $(LIB) $(TEST_BIN) $(EXAMPLE_BIN) tests/*.o
 	rm -f $(VEC_OBJ) $(VLIB) $(VEC_TEST_BIN) $(VEC_EXAMPLE_BIN) examples/vector.o
@@ -213,4 +252,5 @@ test-crash-10gb: tests/test_crash_10gb$(TARGET_EXT)
 	./tests/test_crash_10gb$(TARGET_EXT) run tests/crash_10gb.db
 
 .PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb \
-        vector test-vector vector-examples run-vector-examples
+        vector test-vector vector-examples run-vector-examples \
+        test-asan test-ubsan test-tsan test-coverage

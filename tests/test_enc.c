@@ -37,6 +37,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#if !defined(_WIN32) && !defined(_WIN64)
+# include <pthread.h>
+#endif
 
 static int passed = 0;
 static int failed = 0;
@@ -1038,6 +1041,93 @@ static void test_remove_then_reencrypt_full_functionality(void){
   rmdb(path);
 }
 
+/* ================================================================
+** Test 25: concurrent encrypted access from multiple threads (M4)
+**
+** 10 threads each do N_OPS put+get cycles on the same encrypted
+** KVStore handle.  The store's internal mutex ensures correctness.
+** ================================================================ */
+
+#define ENC_CONC_THREADS 10
+#define ENC_CONC_OPS     30
+
+#if defined(_WIN32) || defined(_WIN64)
+
+static void test_enc_concurrent(void){
+  printf("Test 25 (concurrent encrypted): SKIP (no pthreads on Windows)\n");
+}
+
+#else  /* POSIX */
+
+typedef struct {
+  KVStore *kv;
+  int      tid;
+  int      ok;
+} EncConcArg;
+
+static void *enc_conc_worker(void *arg){
+  EncConcArg *a = (EncConcArg *)arg;
+  a->ok = 1;
+  char key[32], val[32], expected[32];
+  for(int i = 0; i < ENC_CONC_OPS; i++){
+    snprintf(key, sizeof(key), "t%d_k%d", a->tid, i);
+    snprintf(val, sizeof(val), "t%d_v%d", a->tid, i);
+    if(kvstore_put(a->kv, key, (int)strlen(key),
+                   val, (int)strlen(val)) != KVSTORE_OK){
+      a->ok = 0; continue;
+    }
+    void *pv = NULL; int nv = 0;
+    if(kvstore_get(a->kv, key, (int)strlen(key), &pv, &nv) != KVSTORE_OK){
+      a->ok = 0; if(pv) snkv_free(pv); continue;
+    }
+    snprintf(expected, sizeof(expected), "t%d_v%d", a->tid, i);
+    if(nv != (int)strlen(expected) || memcmp(pv, expected, nv) != 0)
+      a->ok = 0;
+    snkv_free(pv);
+  }
+  return NULL;
+}
+
+static void test_enc_concurrent(void){
+  printf("Test 25: concurrent encrypted access (10 threads)\n");
+  const char *path = "enc_concurrent.db";
+  const char *pw   = "concpassword";
+  char w[256], s[256];
+  remove(path);
+  snprintf(w, sizeof(w), "%s-wal", path); remove(w);
+  snprintf(s, sizeof(s), "%s-shm", path); remove(s);
+
+  KVStore *kv = NULL;
+  int rc = kvstore_open_encrypted(path, pw, (int)strlen(pw), &kv, NULL);
+  if(rc != KVSTORE_OK || !kv){
+    printf("  FAIL: could not open encrypted store (%d)\n", rc);
+    failed++;
+    return;
+  }
+
+  pthread_t threads[ENC_CONC_THREADS];
+  EncConcArg args[ENC_CONC_THREADS];
+  for(int i = 0; i < ENC_CONC_THREADS; i++){
+    args[i].kv  = kv;
+    args[i].tid = i;
+    args[i].ok  = 0;
+    pthread_create(&threads[i], NULL, enc_conc_worker, &args[i]);
+  }
+  int all_ok = 1;
+  for(int i = 0; i < ENC_CONC_THREADS; i++){
+    pthread_join(threads[i], NULL);
+    if(!args[i].ok) all_ok = 0;
+  }
+
+  kvstore_close(kv);
+  remove(path); remove(w); remove(s);
+
+  if(all_ok){ printf("  PASS: all threads OK\n"); passed++; }
+  else       { printf("  FAIL: one or more threads failed\n"); failed++; }
+}
+
+#endif /* POSIX */
+
 /* ---- Main ---- */
 int main(void){
   printf("=== SNKV Encryption Tests ===\n\n");
@@ -1066,6 +1156,7 @@ int main(void){
   test_reencrypt_full_functionality();
   test_remove_encryption_full_functionality();
   test_remove_then_reencrypt_full_functionality();
+  test_enc_concurrent();
 
   printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
   return failed > 0 ? 1 : 0;

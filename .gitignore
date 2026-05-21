@@ -1,4 +1,6 @@
 *.o
+tests/*.exe
+bin/
 /snkv
 /snkv.h
 tests/test_autovacuum
