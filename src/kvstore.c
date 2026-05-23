@@ -2704,6 +2704,7 @@ static int kvstore_cf_get_internal(
             sqlite3_free(pExpKey);
           }
           if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+          pKV->stats.nTtlExpired++;
           sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
           kvstoreAutoCheckpoint(pKV);
           if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
@@ -2883,6 +2884,7 @@ static int kvstore_cf_delete_internal(
       sqlite3_free(pExpKey);
     }
     kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+    if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
   }
   if( pOldTtl ) sqlite3_free(pOldTtl);
 
@@ -4639,6 +4641,14 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
     sqlite3_mutex_enter(pKV->pMutex);
     kvstoreSetError(pKV, "cannot drop default column family");
+    sqlite3_mutex_leave(pKV->pMutex);
+    return KVSTORE_ERROR;
+  }
+
+  /* Cannot drop internal CFs via the public API */
+  if( zName[0]=='_' && zName[1]=='_' ){
+    sqlite3_mutex_enter(pKV->pMutex);
+    kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
     sqlite3_mutex_leave(pKV->pMutex);
     return KVSTORE_ERROR;
   }

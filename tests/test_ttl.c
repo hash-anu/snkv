@@ -883,6 +883,84 @@ static void test23_exists_expired_key(void){
   cleanup(&pKV, path);
 }
 
+/* ---- Test 24: nTtlExpired stat incremented by get lazy expiry (Bug A regression) ---- */
+static void test24_nttlexpired_via_get(void){
+  printf("\nTest 24: nTtlExpired stat incremented by get lazy expiry (Bug A)\n");
+  const char *path = "tests/ttl24.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  KVStoreStats s0, s1;
+  kvstore_stats(pKV, &s0);
+
+  /* Write a key with an already-expired TTL. */
+  int64_t past = kvstore_now_ms() - 1000;
+  int rc = kvstore_put_ttl(pKV, "bugA", 4, "v", 1, past);
+  ASSERT("put_ttl ok", rc == KVSTORE_OK);
+
+  /* Trigger lazy expiry via get — must return NOTFOUND and bump nTtlExpired. */
+  void *pVal = NULL; int nVal = 0;
+  rc = kvstore_get(pKV, "bugA", 4, &pVal, &nVal);
+  ASSERT("get returns NOTFOUND", rc == KVSTORE_NOTFOUND);
+
+  kvstore_stats(pKV, &s1);
+  ASSERT("nTtlExpired incremented by get", s1.nTtlExpired == s0.nTtlExpired + 1);
+
+  cleanup(&pKV, path);
+}
+
+/* ---- Test 25: nTtlActive decremented on delete (Bug B regression) ---- */
+static void test25_nttlactive_decremented_on_delete(void){
+  printf("\nTest 25: nTtlActive decremented on delete; TTL index clean after (Bug B)\n");
+  const char *path = "tests/ttl25.db";
+  KVStore *pKV = openFresh(path);
+  if( !pKV ){ ASSERT("open", 0); return; }
+
+  int64_t future = kvstore_now_ms() + 60000;
+
+  /* Put 3 keys with active TTLs. */
+  kvstore_put_ttl(pKV, "d1", 2, "v", 1, future);
+  kvstore_put_ttl(pKV, "d2", 2, "v", 1, future);
+  kvstore_put_ttl(pKV, "d3", 2, "v", 1, future);
+
+  /* Delete all 3 — each delete should clean up the TTL index entries. */
+  ASSERT("delete d1 ok", kvstore_delete(pKV, "d1", 2) == KVSTORE_OK);
+  ASSERT("delete d2 ok", kvstore_delete(pKV, "d2", 2) == KVSTORE_OK);
+  ASSERT("delete d3 ok", kvstore_delete(pKV, "d3", 2) == KVSTORE_OK);
+
+  /* TTL entries for d1/d2/d3 must be gone — ttl_remaining returns NOTFOUND. */
+  int64_t rem = 0;
+  ASSERT("d1 ttl gone", kvstore_ttl_remaining(pKV, "d1", 2, &rem) == KVSTORE_NOTFOUND);
+  ASSERT("d2 ttl gone", kvstore_ttl_remaining(pKV, "d2", 2, &rem) == KVSTORE_NOTFOUND);
+  ASSERT("d3 ttl gone", kvstore_ttl_remaining(pKV, "d3", 2, &rem) == KVSTORE_NOTFOUND);
+
+  /* purge_expired must find nothing — TTL index is already clean. */
+  int nDeleted = -1;
+  ASSERT("purge ok",    kvstore_purge_expired(pKV, &nDeleted) == KVSTORE_OK);
+  ASSERT("purge sees 0", nDeleted == 0);
+
+  /*
+  ** With Bug B unfixed, nTtlActive stays at 3 after the deletes.
+  ** Verify the system still works correctly for subsequent TTL operations:
+  ** put a new key with a past TTL and confirm get expires it (nTtlActive > 0
+  ** is required for the lazy expiry path to run).
+  */
+  int64_t past = kvstore_now_ms() - 500;
+  kvstore_put_ttl(pKV, "newkey", 6, "v", 1, past);
+
+  KVStoreStats s0, s1;
+  kvstore_stats(pKV, &s0);
+
+  void *pVal = NULL; int nVal = 0;
+  int rc = kvstore_get(pKV, "newkey", 6, &pVal, &nVal);
+  ASSERT("newkey expired via get", rc == KVSTORE_NOTFOUND);
+
+  kvstore_stats(pKV, &s1);
+  ASSERT("nTtlExpired incremented", s1.nTtlExpired == s0.nTtlExpired + 1);
+
+  cleanup(&pKV, path);
+}
+
 /* ========== main ========== */
 int main(void){
   printf("=== TTL tests ===\n");
@@ -910,6 +988,8 @@ int main(void){
   test21_purge_large_batch();
   test22_real_time_expiry();
   test23_exists_expired_key();
+  test24_nttlexpired_via_get();
+  test25_nttlactive_decremented_on_delete();
 
   printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
   return failed > 0 ? 1 : 0;

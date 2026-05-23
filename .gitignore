@@ -1,5 +1,6 @@
 *.o
 tests/*.exe
+examples/*.exe
 bin/
 /snkv
 /snkv.h
