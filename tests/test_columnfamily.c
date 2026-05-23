@@ -428,6 +428,49 @@ static void test_cf_transactions(void) {
 }
 
 /*
+** Test 6: cf_drop rejects reserved "__" names (Bug #1 regression)
+*/
+static void test_cf_drop_reserved_name(void) {
+  TEST("cf_drop rejects names starting with \"__\"");
+  KVStore *kv = NULL;
+  KVColumnFamily *cf = NULL;
+  int rc;
+
+  remove(TEST_DB);
+
+  rc = kvstore_open(TEST_DB, &kv, KVSTORE_JOURNAL_DELETE);
+  ASSERT_OK(rc, "Failed to open database");
+
+  /* Attempting to drop a reserved name must return an error, not succeed. */
+  rc = kvstore_cf_drop(kv, "__internal");
+  if( rc == KVSTORE_OK ){
+    FAIL("cf_drop should reject names starting with \"__\"");
+  }
+  printf("  [OK] cf_drop(\"__internal\") rejected (code=%d)\n", rc);
+
+  /* Also verify a TTL CF name pattern is rejected. */
+  rc = kvstore_cf_drop(kv, "__snkv_ttl_k__mydata");
+  if( rc == KVSTORE_OK ){
+    FAIL("cf_drop should reject TTL CF names starting with \"__\"");
+  }
+  printf("  [OK] cf_drop(\"__snkv_ttl_k__mydata\") rejected (code=%d)\n", rc);
+
+  /* Sanity check: a normal CF can still be dropped without issues. */
+  rc = kvstore_cf_create(kv, "normal", &cf);
+  ASSERT_OK(rc, "Failed to create normal CF");
+  kvstore_cf_close(cf);
+
+  rc = kvstore_cf_drop(kv, "normal");
+  ASSERT_OK(rc, "cf_drop should succeed for a normal CF");
+  printf("  [OK] cf_drop(\"normal\") succeeded\n");
+
+  kvstore_close(kv);
+  remove(TEST_DB);
+
+  PASS();
+}
+
+/*
 ** Main
 */
 int main(void) {
@@ -441,6 +484,7 @@ int main(void) {
   test_cf_list();
   test_cf_iterators();
   test_cf_transactions();
+  test_cf_drop_reserved_name();
   
   printf("\n========================================\n");
   printf("Test Summary\n");
