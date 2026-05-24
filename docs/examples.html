@@ -387,6 +387,7 @@
       <li class="toc-section"><a href="#c-session">Session Store</a></li>
       <li class="toc-section"><a href="#c-checkpoint">Checkpoint</a></li>
       <li class="toc-section"><a href="#c-encryption">Encryption</a></li>
+      <li class="toc-section"><a href="#c-concurrent-rw">Concurrent R/W</a></li>
     </ul>
   </nav>
 
@@ -882,6 +883,85 @@ KVColumnFamily *pCF = <span class="kw">NULL</span>;
 <span class="fn">printf</span>(<span class="str">"%.*s\n"</span>, nVal, (<span class="kw">char</span>*)pVal);   <span class="cm">/* PLAINTEXT_SENTINEL */</span>
 <span class="fn">snkv_free</span>(pVal);
 <span class="fn">kvstore_close</span>(pKV);</pre>
+        </div>
+      </section>
+
+      <!-- Concurrent read/write -->
+      <section class="ex-section" id="c-concurrent-rw">
+        <div class="section-label">Concurrency</div>
+        <h2 class="section-title">Multi-reader / Single-writer</h2>
+        <p class="section-desc">Each thread opens its own <code>KVStore</code> handle with <code>fullMutex=0</code> (the default). WAL byte-range locks in the <code>-shm</code> file enforce single-writer / multi-reader isolation at the OS level — no application mutex is needed. A second writer attempting to begin while one is active receives <code>KVSTORE_BUSY</code> immediately.</p>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">1 writer + N readers — per-thread handles, fullMutex=0</span>
+            <span class="ex-card-file">examples/concurrent_rw.c</span>
+          </div>
+<pre><span class="cm">/* Each thread opens its OWN handle — no shared pointer, no mutex needed */</span>
+<span class="kw">static</span> KVStore *open_store(<span class="kw">int</span> busy_timeout_ms) {
+    KVStoreConfig cfg = {<span class="nm">0</span>};
+    cfg.journalMode = KVSTORE_JOURNAL_WAL;
+    cfg.busyTimeout = busy_timeout_ms;
+    <span class="cm">/* fullMutex stays 0 — WAL handles cross-handle coordination */</span>
+    KVStore *kv = <span class="kw">NULL</span>;
+    <span class="fn">kvstore_open_v2</span>(DB_FILE, &amp;kv, &amp;cfg);
+    <span class="kw">return</span> kv;
+}
+
+<span class="kw">static void</span> *writer_thread(<span class="kw">void</span> *arg) {
+    KVStore *kv = <span class="fn">open_store</span>(<span class="nm">5000</span>);
+    <span class="fn">kvstore_begin</span>(kv, <span class="nm">1</span>);          <span class="cm">/* acquires WAL WRITE_LOCK */</span>
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; N; i++) <span class="fn">kvstore_put</span>(kv, key[i], ...);
+    <span class="fn">kvstore_commit</span>(kv);            <span class="cm">/* releases WRITE_LOCK */</span>
+    <span class="fn">kvstore_close</span>(kv);
+    <span class="kw">return NULL</span>;
+}
+
+<span class="kw">static void</span> *reader_thread(<span class="kw">void</span> *arg) {
+    KVStore *kv = <span class="fn">open_store</span>(<span class="nm">5000</span>);
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; N; i++) {
+        <span class="fn">kvstore_get</span>(kv, key[i], ...); <span class="cm">/* concurrent with writer — safe */</span>
+        <span class="cm">/* KVSTORE_NOTFOUND is fine: writer may not have committed yet */</span>
+    }
+    <span class="fn">kvstore_close</span>(kv);
+    <span class="kw">return NULL</span>;
+}</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">Second writer rejected — KVSTORE_BUSY</span>
+            <span class="ex-card-file">examples/concurrent_rw.c</span>
+          </div>
+<pre><span class="cm">/* Writer 1 holds the write lock */</span>
+KVStore *kv1 = <span class="fn">open_store</span>(<span class="nm">0</span>);
+<span class="fn">kvstore_begin</span>(kv1, <span class="nm">1</span>);   <span class="cm">/* WRITE_LOCK acquired */</span>
+
+<span class="cm">/* Writer 2 tries with busyTimeout=0 — fails immediately */</span>
+KVStore *kv2 = <span class="fn">open_store</span>(<span class="nm">0</span>);
+<span class="kw">int</span> rc = <span class="fn">kvstore_begin</span>(kv2, <span class="nm">1</span>);
+<span class="cm">/* rc == KVSTORE_BUSY — WAL refuses the second writer */</span>
+<span class="fn">kvstore_close</span>(kv2);
+
+<span class="cm">/* Release writer 1; writer 2 can now succeed */</span>
+<span class="fn">kvstore_rollback</span>(kv1);
+<span class="fn">kvstore_close</span>(kv1);</pre>
+        </div>
+
+        <div class="ex-card">
+          <div class="ex-card-header">
+            <span class="ex-card-title">When to use fullMutex=1</span>
+            <span class="ex-card-file">examples/concurrent_rw.c</span>
+          </div>
+<pre><span class="cm">/* Only needed when a SINGLE KVStore* is shared across threads */</span>
+KVStoreConfig cfg = {<span class="nm">0</span>};
+cfg.journalMode = KVSTORE_JOURNAL_WAL;
+cfg.fullMutex   = <span class="nm">1</span>;   <span class="cm">/* serialize all ops — protects the in-memory struct */</span>
+KVStore *shared = <span class="kw">NULL</span>;
+<span class="fn">kvstore_open_v2</span>(<span class="str">"mydb.db"</span>, &amp;shared, &amp;cfg);
+
+<span class="cm">/* Thread A and Thread B can now safely call kvstore_put/get on 'shared' */</span>
+<span class="cm">/* For better throughput, prefer one handle per thread with fullMutex=0  */</span></pre>
         </div>
       </section>
 

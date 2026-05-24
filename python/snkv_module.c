@@ -900,7 +900,8 @@ KVStore_open_v2(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     static char *kwlist[] = {
         "filename", "journal_mode", "sync_level", "cache_size",
-        "page_size", "read_only", "busy_timeout", "wal_size_limit", NULL
+        "page_size", "read_only", "busy_timeout", "wal_size_limit",
+        "full_mutex", NULL
     };
     const char   *filename = NULL;
     KVStoreConfig cfg       = {0};
@@ -908,7 +909,7 @@ KVStore_open_v2(PyTypeObject *type, PyObject *args, PyObject *kwds)
     KVStoreObject *self;
     int            rc;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ziiiiiii", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ziiiiiiii", kwlist,
                                      &filename,
                                      &cfg.journalMode,
                                      &cfg.syncLevel,
@@ -916,7 +917,8 @@ KVStore_open_v2(PyTypeObject *type, PyObject *args, PyObject *kwds)
                                      &cfg.pageSize,
                                      &cfg.readOnly,
                                      &cfg.busyTimeout,
-                                     &cfg.walSizeLimit))
+                                     &cfg.walSizeLimit,
+                                     &cfg.fullMutex))
         return NULL;
 
     Py_BEGIN_ALLOW_THREADS

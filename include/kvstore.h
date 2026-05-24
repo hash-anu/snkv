@@ -164,6 +164,18 @@ struct KVStoreConfig {
   /* Internal flag — set by kvstore_open_encrypted to bypass the plain-open
   ** encryption guard.  Not part of the public API; zero-init leaves it 0. */
   int allowEncrypted;
+
+  /*
+  ** fullMutex — set to 1 to protect all operations with a recursive mutex.
+  **
+  ** Only needed when a single KVStore* is shared across multiple threads.
+  ** The recommended pattern — one handle per thread — does NOT need this:
+  ** WAL byte-range locks in the -shm file enforce single-writer /
+  ** multi-reader isolation at the OS level without any application mutex.
+  **
+  ** Default 0 (no mutex).  kvstore_open() always uses 0.
+  */
+  int fullMutex;
 };
 
 /*
