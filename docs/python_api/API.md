@@ -169,6 +169,7 @@ db = KVStore(
 | `busy_timeout` | `int` | `0` | Milliseconds to retry on `SQLITE_BUSY`. `0` = fail immediately. |
 | `wal_size_limit` | `int` | `0` | Auto-checkpoint after N committed WAL frames. `0` = disabled. |
 | `read_only` | `int` | `0` | `1` to open the database read-only. |
+| `full_mutex` | `int` | `0` | `1` to serialize all operations with a recursive mutex. Only needed when sharing a single `KVStore` instance across threads. The recommended pattern — one `KVStore` per thread — does not need this; WAL handles concurrency at the OS level. |
 
 Always use as a context manager to guarantee proper cleanup:
 

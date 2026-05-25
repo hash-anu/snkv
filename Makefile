@@ -24,17 +24,18 @@ ifeq ($(UNAME_S),Darwin)
   LDFLAGS = -lpthread -lm
 endif
 ifeq ($(UNAME_S),Windows)
-  # Native Windows / MSYS2 / MinGW
+  # Native Windows (MSVC / Git-Bash without uname) — no winpthreads
   LDFLAGS =
   TARGET_EXT = .exe
 endif
-# Fallback for MSYS/Cygwin reporting MINGW/MSYS
+# MSYS2 / MinGW: uname reports MINGW64_NT-... or MSYS_NT-...
+# These toolchains ship winpthreads, so -lpthread is available.
 ifneq (,$(findstring MINGW,$(UNAME_S)))
-  LDFLAGS =
+  LDFLAGS = -lpthread
   TARGET_EXT = .exe
 endif
 ifneq (,$(findstring MSYS,$(UNAME_S)))
-  LDFLAGS =
+  LDFLAGS = -lpthread
   TARGET_EXT = .exe
 endif
 
@@ -78,7 +79,8 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_enc.c \
            tests/test_regressions.c \
            tests/test_fault_inject.c \
-           tests/test_new_gaps.c
+           tests/test_new_gaps.c \
+           tests/test_fullmutex.c
 TEST_BIN := $(TEST_SRC:.c=$(TARGET_EXT))
 
 # test_multiprocess uses fork() — POSIX only (Linux / macOS)

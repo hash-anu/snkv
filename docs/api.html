@@ -757,6 +757,7 @@
   <span class="kw">int</span> readOnly;      <span class="cm">/* 1 = open read-only; default 0 */</span>
   <span class="kw">int</span> busyTimeout;   <span class="cm">/* ms to retry on SQLITE_BUSY (0 = fail immediately) */</span>
   <span class="kw">int</span> walSizeLimit;  <span class="cm">/* auto-checkpoint every N commits in WAL mode (0 = off) */</span>
+  <span class="kw">int</span> fullMutex;     <span class="cm">/* 1 = serialize all ops with a recursive mutex (default 0) */</span>
 };</pre>
         <div class="table-wrap"><table>
           <tr><th>Field</th><th>Default</th><th>Notes</th></tr>
@@ -767,6 +768,7 @@
           <tr><td><code>readOnly</code></td><td>0</td><td></td></tr>
           <tr><td><code>busyTimeout</code></td><td>0 (fail immediately)</td><td>Set &gt; 0 for multi-process workloads.</td></tr>
           <tr><td><code>walSizeLimit</code></td><td>0 (disabled)</td><td>Auto-checkpoint every N committed writes.</td></tr>
+          <tr><td><code>fullMutex</code></td><td>0 (no mutex)</td><td>Set to 1 only when sharing one <code>KVStore*</code> across threads. One handle per thread does not need this — WAL enforces single-writer / multi-reader at the OS level.</td></tr>
         </table></div>
       </section>
 

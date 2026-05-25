@@ -118,6 +118,7 @@ struct KVStoreConfig {
   int readOnly;     /* 1 = open read-only; default 0 */
   int busyTimeout;   /* ms to retry on SQLITE_BUSY (0 = fail immediately; default 0) */
   int walSizeLimit;  /* auto-checkpoint every N commits in WAL mode (0 = disabled) */
+  int fullMutex;     /* 1 = serialize all ops with a recursive mutex (default 0) */
 };
 ```
 
@@ -132,6 +133,7 @@ struct KVStoreConfig {
 | `readOnly` | 0 (read-write) | |
 | `busyTimeout` | 0 (fail immediately) | Set > 0 for multi-process workloads |
 | `walSizeLimit` | 0 (disabled) | Auto-checkpoint every N commits; 0 = no auto-checkpoint |
+| `fullMutex` | 0 (no mutex) | Set to 1 only when sharing one `KVStore*` across threads. One handle per thread does not need this — WAL enforces concurrency at the OS level. |
 
 ---
 

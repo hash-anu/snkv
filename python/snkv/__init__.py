@@ -376,6 +376,9 @@ class KVStore:
           read_only      -- 1 to open read-only (default 0)
           busy_timeout   -- ms to retry on lock (default 0 = fail immediately)
           wal_size_limit -- auto-checkpoint every N committed transactions (0 = off)
+          full_mutex     -- 1 to serialize all ops with a recursive mutex;
+                           only needed when sharing one KVStore across threads
+                           (default 0: one handle per thread is always safe)
 
     Quick start
     -----------

@@ -205,6 +205,29 @@ def test_wal_normal_cache_busy(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# full_mutex
+# ---------------------------------------------------------------------------
+
+def test_full_mutex_roundtrip(tmp_path):
+    """full_mutex=1 must not break basic put/get/delete operations."""
+    path = str(tmp_path / "fullmutex.db")
+    with KVStore(path, full_mutex=1) as db:
+        db[b"k1"] = b"v1"
+        db[b"k2"] = b"v2"
+        assert db[b"k1"] == b"v1"
+        assert db[b"k2"] == b"v2"
+        db.delete(b"k1")
+        assert db.get(b"k1") is None
+
+
+def test_full_mutex_zero_matches_default(tmp_path):
+    """full_mutex=0 (explicit) must behave identically to the default."""
+    path = str(tmp_path / "fullmutex0.db")
+    with KVStore(path, full_mutex=0) as db:
+        _roundtrip(db)
+
+
+# ---------------------------------------------------------------------------
 # In-memory store
 # ---------------------------------------------------------------------------
 

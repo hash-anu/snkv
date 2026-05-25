@@ -25,6 +25,15 @@
 #include "kvstore.h"
 #include "pager.h"
 
+/*
+** Opt-in mutex guards for pKV->pMutex.
+** When fullMutex=0 (default), pMutex is NULL and these expand to nothing.
+** When fullMutex=1, they acquire/release the recursive mutex, serialising
+** all API calls on a shared KVStore* handle.
+*/
+#define KV_ENTER(p) do { if((p)->pMutex) sqlite3_mutex_enter((p)->pMutex); } while(0)
+#define KV_LEAVE(p) do { if((p)->pMutex) sqlite3_mutex_leave((p)->pMutex); } while(0)
+
 /* =========================================================================
 ** Encryption layer — inlined from kvstore_enc.c
 ** ========================================================================= */
@@ -404,13 +413,13 @@ const char *kvstore_errmsg(KVStore *pKV){
     return "no error";
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
   if( pKV->zErrMsg ){
     zMsg = pKV->zErrMsg;
   }else{
     zMsg = "no error";
   }
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   return zMsg;
 }
@@ -945,11 +954,15 @@ int kvstore_open_v2(
     return KVSTORE_NOMEM;
   }
 
-  /* Create main mutex */
-  pKV->pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
-  if( !pKV->pMutex ){
-    sqlite3_free(pKV);
-    return KVSTORE_NOMEM;
+  /* Create main mutex only when the caller opts in to shared-handle safety.
+  ** pMutex stays NULL for the default single-handle-per-thread pattern;
+  ** KV_ENTER/KV_LEAVE check for NULL so they become no-ops in that case. */
+  if( pConfig && pConfig->fullMutex ){
+    pKV->pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_RECURSIVE);
+    if( !pKV->pMutex ){
+      sqlite3_free(pKV);
+      return KVSTORE_NOMEM;
+    }
   }
 
   /* Create a minimal sqlite3 structure (required by btree) */
@@ -1189,7 +1202,7 @@ int kvstore_open_v2(
     snprintf(zKeyName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_KEY_PREFIX, DEFAULT_CF_NAME);
     snprintf(zExpName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_EXP_PREFIX, DEFAULT_CF_NAME);
     KVColumnFamily *pKeyCF = NULL, *pExpCF = NULL;
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     if( kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF) == KVSTORE_OK &&
         kvstoreCfOpenInternal(pKV, zExpName, &pExpCF) == KVSTORE_OK ){
       pKV->pDefaultCF->pTtlKeyCF    = pKeyCF;
@@ -1200,14 +1213,14 @@ int kvstore_open_v2(
       if( pKeyCF ) kvstoreFreeCFStruct(pKeyCF);
       if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
   }
 
   /* Reject plain opens on encrypted stores — caller must use kvstore_open_encrypted.
   ** Skip this check when allowEncrypted is set (used by kvstore_open_encrypted itself). */
   if( !( pConfig && pConfig->allowEncrypted ) ){
     KVColumnFamily *pAuthProbe = NULL;
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     int authRc = kvstoreCfOpenInternal(pKV, SNKV_AUTH_CF_NAME, &pAuthProbe);
     int isEncrypted = 0;
     if( authRc == KVSTORE_OK ){
@@ -1219,7 +1232,7 @@ int kvstore_open_v2(
       if( saltRc == KVSTORE_OK ) isEncrypted = 1;
       kvstoreFreeCFStruct(pAuthProbe);
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     if( isEncrypted ){
       if( pKV->inTrans ){
         sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
@@ -1264,7 +1277,7 @@ int kvstore_close(KVStore *pKV){
   }
 
   /* Acquire mutex and signal closure so racing threads bail out cleanly */
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
   pKV->closing = 1;
 
   /* Rollback any active transaction */
@@ -1330,7 +1343,7 @@ int kvstore_close(KVStore *pKV){
   sqlite3_free(pKV->db);
 
   /* Release and free mutex */
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_free(pKV->pMutex);
 
   sqlite3_free(pKV);
@@ -1348,29 +1361,29 @@ int kvstore_begin(KVStore *pKV, int wrflag){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot begin transaction: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
   if( pKV->inTrans == 2 ){
     /* Write transaction already active — reject */
     kvstoreSetError(pKV, "transaction already active");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( pKV->inTrans == 1 && !wrflag ){
     /* Persistent read is already open; just reuse it */
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_OK;
   }
 
@@ -1395,7 +1408,7 @@ int kvstore_begin(KVStore *pKV, int wrflag){
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -1412,16 +1425,16 @@ int kvstore_commit(KVStore *pKV){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
     kvstoreSetError(pKV, "no active transaction to commit");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -1437,7 +1450,7 @@ int kvstore_commit(KVStore *pKV){
     kvstoreSetError(pKV, "failed to commit transaction: error %d", rc);
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -1451,15 +1464,15 @@ int kvstore_rollback(KVStore *pKV){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_OK; /* No transaction to rollback */
   }
 
@@ -1476,7 +1489,7 @@ int kvstore_rollback(KVStore *pKV){
     kvstoreRestorePersistentRead(pKV);
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -1487,16 +1500,16 @@ int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt){
   int rc;
   if( pKV == NULL ) return KVSTORE_ERROR;
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( pKV->inTrans == 2 ){
     kvstoreSetError(pKV, "commit or rollback the write transaction first");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_BUSY;
   }
 
@@ -1524,7 +1537,7 @@ int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt){
     kvstoreSetError(pKV, "checkpoint failed: error %d", rc);
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -1983,23 +1996,23 @@ int kvstore_cf_get_default(KVStore *pKV, KVColumnFamily **ppCF){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( !pKV->pDefaultCF ){
     kvstoreSetError(pKV, "default column family not initialized");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   pKV->pDefaultCF->refCount++;
   *ppCF = pKV->pDefaultCF;
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return KVSTORE_OK;
 }
 
@@ -2025,17 +2038,17 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   nNameLen = strlen(zName);
   if( nNameLen == 0 || nNameLen > KVSTORE_MAX_CF_NAME ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "invalid column family name length");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   /* Names starting with "__" are reserved for internal use. */
   if( nNameLen >= 2 && zName[0] == '_' && zName[1] == '_' ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -2044,10 +2057,10 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return kvstore_cf_get_default(pKV, ppCF);
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -2059,7 +2072,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     }
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     autoTrans = 1;
@@ -2070,14 +2083,14 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   pCur = kvstoreAllocCursor();
   if( !pCur ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return SQLITE_NOMEM;
   }
   rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -2088,13 +2101,13 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   if( rc != SQLITE_OK ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
   if( found ){
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     kvstoreSetError(pKV, "column family already exists: %s", zName);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -2102,7 +2115,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   rc = sqlite3BtreeCreateTable(pKV->pBt, &pgno, BTREE_BLOBKEY);
   if( rc != SQLITE_OK ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -2126,7 +2139,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
                                      &pEncoded);
     if( nEncoded < 0 ){
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return SQLITE_NOMEM;
     }
 
@@ -2134,7 +2147,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     if( !pCur ){
       if( pEncoded != metaStack ) sqlite3_free(pEncoded);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return SQLITE_NOMEM;
     }
     rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
@@ -2142,7 +2155,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       if( pEncoded != metaStack ) sqlite3_free(pEncoded);
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
 
@@ -2152,7 +2165,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       if( pEncoded != metaStack ) sqlite3_free(pEncoded);
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
 
@@ -2169,7 +2182,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
     if( rc != SQLITE_OK ){
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
   }
@@ -2184,7 +2197,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     rc = sqlite3BtreeCommit(pKV->pBt);
     pKV->inTrans = 0;
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ){
@@ -2195,14 +2208,14 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   /* Create CF structure */
   pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
   if( !pCF ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
   zNameCopy = sqliteStrDup(zName);
   if( !zNameCopy ){
     sqlite3_free(pCF);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
@@ -2216,11 +2229,11 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   if( !pCF->pMutex ){
     sqlite3_free(zNameCopy);
     sqlite3_free(pCF);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   *ppCF = pCF;
   return KVSTORE_OK;
@@ -2240,9 +2253,9 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   if( !pKV || !zName || !ppCF ){
     if( pKV ){
-      sqlite3_mutex_enter(pKV->pMutex);
+      KV_ENTER(pKV);
       kvstoreSetError(pKV, "invalid parameters to cf_open");
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
     }
     return KVSTORE_ERROR;
   }
@@ -2257,16 +2270,16 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
 
   /* Names starting with "__" are reserved for internal use. */
   if( nNameLen >= 2 && zName[0] == '_' && zName[1] == '_' ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -2274,7 +2287,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   if( !pKV->inTrans ){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     autoTrans = 1;
@@ -2285,14 +2298,14 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   pCur = kvstoreAllocCursor();
   if( !pCur ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return SQLITE_NOMEM;
   }
   rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -2302,7 +2315,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
 
@@ -2313,7 +2326,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     if( rc != SQLITE_OK || res != 0 ){
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return KVSTORE_CORRUPT;
     }
   }
@@ -2323,7 +2336,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
@@ -2339,7 +2352,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   }
 
   if( rc != SQLITE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -2349,14 +2362,14 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   /* Create CF structure */
   pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
   if( !pCF ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
   zNameCopy = sqliteStrDup(zName);
   if( !zNameCopy ){
     sqlite3_free(pCF);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
@@ -2370,7 +2383,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   if( !pCF->pMutex ){
     sqlite3_free(zNameCopy);
     sqlite3_free(pCF);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
@@ -2392,7 +2405,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   *ppCF = pCF;
   return KVSTORE_OK;
@@ -2409,14 +2422,14 @@ void kvstore_cf_close(KVColumnFamily *pCF){
 
   pKV = pCF->pKV;
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   pCF->refCount--;
   if( pCF->refCount <= 0 && pCF != pKV->pDefaultCF ){
     shouldFree = 1;
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   if( shouldFree ){
     kvstoreFreeCFStruct(pCF);
@@ -2437,24 +2450,24 @@ static int kvstore_cf_put_internal(
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot put: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
 
   rc = kvstoreValidateKeyValue(pKV, pKey, nKey, pValue, nValue);
   if( rc != KVSTORE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
@@ -2469,7 +2482,7 @@ static int kvstore_cf_put_internal(
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -2480,7 +2493,7 @@ static int kvstore_cf_put_internal(
   pCur = kvstoreAllocCursor();
   if( !pCur ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
@@ -2489,7 +2502,7 @@ static int kvstore_cf_put_internal(
     kvstoreCheckCorruption(pKV, rc);
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
@@ -2505,7 +2518,7 @@ static int kvstore_cf_put_internal(
     if( !pCFEncBuf ){
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return SQLITE_NOMEM;
     }
@@ -2514,7 +2527,7 @@ static int kvstore_cf_put_internal(
       sqlite3_free(pCFEncBuf);
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return KVSTORE_ERROR;
     }
@@ -2534,7 +2547,7 @@ static int kvstore_cf_put_internal(
       if( pCFEncBuf ) sqlite3_free(pCFEncBuf);
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return SQLITE_NOMEM;
     }
@@ -2599,7 +2612,7 @@ static int kvstore_cf_put_internal(
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
 
   return rc;
@@ -2618,9 +2631,9 @@ static int kvstore_cf_get_internal(
   KVStore *pKV = pCF->pKV;
 
   if( !ppValue || !pnValue ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "invalid parameters to get");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -2628,24 +2641,24 @@ static int kvstore_cf_get_internal(
   *pnValue = 0;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot get: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
 
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
@@ -2654,7 +2667,7 @@ static int kvstore_cf_get_internal(
     /* Persistent read transaction normally keeps inTrans>=1; fall back if not. */
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -2664,7 +2677,7 @@ static int kvstore_cf_get_internal(
   /* Use the cached read cursor — no malloc/free per call. */
   pCur = kvstoreGetReadCursor(pCF);
   if( !pCur ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
@@ -2672,7 +2685,7 @@ static int kvstore_cf_get_internal(
   int found = 0;
   rc = kvstoreSeekKey(pCur, pKV->pKeyInfo, pKey, nKey, &found);
   if( rc != SQLITE_OK || !found ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
@@ -2709,7 +2722,7 @@ static int kvstore_cf_get_internal(
           kvstoreAutoCheckpoint(pKV);
           if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
         }
-        sqlite3_mutex_leave(pKV->pMutex);
+        KV_LEAVE(pKV);
         sqlite3_mutex_leave(pCF->pMutex);
         return KVSTORE_NOTFOUND;
       }
@@ -2748,7 +2761,7 @@ static int kvstore_cf_get_internal(
   if( rc == SQLITE_OK && pKV->bEncrypted && pValue && valueLen > 0 ){
     if( valueLen < SNKV_ENC_OVERHEAD ){
       sqlite3_free(pValue);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return KVSTORE_CORRUPT;
     }
@@ -2756,14 +2769,14 @@ static int kvstore_cf_get_internal(
     void *pPlain = sqlite3Malloc(nPlain > 0 ? nPlain : 1);
     if( !pPlain ){
       sqlite3_free(pValue);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return SQLITE_NOMEM;
     }
     if( kvstoreEncDecrypt((uint8_t *)pPlain, pKV->aEncKey,
                           (const uint8_t *)pValue, valueLen) != 0 ){
       sqlite3_free(pPlain); sqlite3_free(pValue);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return KVSTORE_AUTH_FAILED;
     }
@@ -2779,7 +2792,7 @@ static int kvstore_cf_get_internal(
     pKV->stats.nBytesRead += (u64)*pnValue;
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
 
   return rc;
@@ -2798,24 +2811,24 @@ static int kvstore_cf_delete_internal(
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot delete: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
 
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
@@ -2829,7 +2842,7 @@ static int kvstore_cf_delete_internal(
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -2840,7 +2853,7 @@ static int kvstore_cf_delete_internal(
   pCur = kvstoreAllocCursor();
   if( !pCur ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
@@ -2848,7 +2861,7 @@ static int kvstore_cf_delete_internal(
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
@@ -2858,7 +2871,7 @@ static int kvstore_cf_delete_internal(
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
@@ -2912,7 +2925,7 @@ static int kvstore_cf_delete_internal(
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
 
   return rc;
@@ -2931,33 +2944,33 @@ static int kvstore_cf_exists_internal(
   KVStore *pKV = pCF->pKV;
 
   if( !pExists ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "invalid parameters to exists");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   *pExists = 0;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot check existence: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
 
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
@@ -2966,7 +2979,7 @@ static int kvstore_cf_exists_internal(
     /* Persistent read transaction normally keeps inTrans>=1; fall back if not. */
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -2976,7 +2989,7 @@ static int kvstore_cf_exists_internal(
   /* Use the cached read cursor — no malloc/free per call. */
   pCur = kvstoreGetReadCursor(pCF);
   if( !pCur ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
     return SQLITE_NOMEM;
   }
@@ -3020,7 +3033,7 @@ static int kvstore_cf_exists_internal(
           if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
         }
         *pExists = 0;
-        sqlite3_mutex_leave(pKV->pMutex);
+        KV_LEAVE(pKV);
         sqlite3_mutex_leave(pCF->pMutex);
         return KVSTORE_OK;
       }
@@ -3029,7 +3042,7 @@ static int kvstore_cf_exists_internal(
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
 
   return rc;
@@ -3085,23 +3098,23 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
   pKV = pCF->pKV;
   *ppIter = NULL;
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot create iterator: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
   pIter = (KVIterator*)sqlite3MallocZero(sizeof(KVIterator));
   if( !pIter ){
     kvstoreSetError(pKV, "out of memory allocating iterator");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_NOMEM;
   }
 
@@ -3116,7 +3129,7 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
     if( rc != SQLITE_OK ){
       sqlite3_free(pIter);
       pCF->refCount--;
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     pIter->ownsTrans = 1;
@@ -3131,7 +3144,7 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
     }
     pCF->refCount--;
     sqlite3_free(pIter);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return SQLITE_NOMEM;
   }
   rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pIter->pCur);
@@ -3144,7 +3157,7 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
     pCF->refCount--;
     sqlite3_free(pIter->pCur);
     sqlite3_free(pIter);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -3155,7 +3168,7 @@ int kvstore_cf_iterator_create(KVColumnFamily *pCF, KVIterator **ppIter){
   pIter->pNext = pKV->pIterList;
   pKV->pIterList = pIter;
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   *ppIter = pIter;
   return KVSTORE_OK;
@@ -3367,11 +3380,11 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
 
     /* Look up the TTL for this key. */
     sqlite3_mutex_enter(pCF->pMutex);
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     void *pTtlVal = NULL; int nTtlVal = 0;
     kvstoreRawBtreeGetPlain(pKV, pCF->pTtlKeyCF->iTable,
                        pIter->pKeyBuf, keyLen, &pTtlVal, &nTtlVal);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
     if( !pTtlVal || nTtlVal != 8 ){
@@ -3395,7 +3408,7 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
 
     /* Lazy delete from all three CFs inside one write transaction. */
     sqlite3_mutex_enter(pCF->pMutex);
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
       pKV->inTrans = 2;
@@ -3414,16 +3427,16 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
       kvstoreAutoCheckpoint(pKV);
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
     /* Re-open the iterator cursor and seek to the first entry > deleted key. */
     pIter->pCur = kvstoreAllocCursor();
     if( !pIter->pCur ){ sqlite3_free(pDeletedKey); pIter->eof = 1; return SQLITE_NOMEM; }
 
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pIter->pCur);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     if( rc != SQLITE_OK ){
       kvstoreFreeCursor(pIter->pCur); pIter->pCur = NULL;
       sqlite3_free(pDeletedKey);
@@ -3483,11 +3496,11 @@ static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
 
     /* Look up the TTL for this key. */
     sqlite3_mutex_enter(pCF->pMutex);
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     void *pTtlVal = NULL; int nTtlVal = 0;
     kvstoreRawBtreeGetPlain(pKV, pCF->pTtlKeyCF->iTable,
                        pIter->pKeyBuf, keyLen, &pTtlVal, &nTtlVal);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
     if( !pTtlVal || nTtlVal != 8 ){
@@ -3511,7 +3524,7 @@ static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
 
     /* Lazy delete from all three CFs inside one write transaction. */
     sqlite3_mutex_enter(pCF->pMutex);
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
     if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
       pKV->inTrans = 2;
@@ -3530,16 +3543,16 @@ static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
       kvstoreAutoCheckpoint(pKV);
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
     /* Re-open the iterator cursor and seek to the last entry < deleted key. */
     pIter->pCur = kvstoreAllocCursor();
     if( !pIter->pCur ){ sqlite3_free(pDeletedKey); pIter->eof = 1; return SQLITE_NOMEM; }
 
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     rc = sqlite3BtreeCursor(pKV->pBt, pCF->iTable, 0, pKV->pKeyInfo, pIter->pCur);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     if( rc != SQLITE_OK ){
       kvstoreFreeCursor(pIter->pCur); pIter->pCur = NULL;
       sqlite3_free(pDeletedKey);
@@ -3864,7 +3877,7 @@ void kvstore_iterator_close(KVIterator *pIter){
   }
 
   if( pKV ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
 
     /* Commit the read/write transaction this iterator started, but only if
     ** the store is not being torn down (closing=1 means kvstore_close() has
@@ -3884,7 +3897,7 @@ void kvstore_iterator_close(KVIterator *pIter){
     }
     pIter->pNext = NULL;
 
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
   }
 
   /* pCF is nulled by kvstore_close() for force-closed iterators, so this
@@ -4007,10 +4020,10 @@ int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -4028,7 +4041,7 @@ int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
   /* sqlite3BtreeLastPage returns the number of pages in the database file. */
   pStats->nDbPages    = (uint64_t)sqlite3BtreeLastPage(pKV->pBt);
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   return KVSTORE_OK;
 }
@@ -4040,10 +4053,10 @@ int kvstore_stats(KVStore *pKV, KVStoreStats *pStats){
 int kvstore_stats_reset(KVStore *pKV){
   if( !pKV ) return KVSTORE_ERROR;
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -4059,7 +4072,7 @@ int kvstore_stats_reset(KVStore *pKV){
   pKV->stats.nTtlExpired   = 0;
   pKV->stats.nTtlPurged    = 0;
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return KVSTORE_OK;
 }
 
@@ -4082,15 +4095,15 @@ int kvstore_cf_count(KVColumnFamily *pCF, int64_t *pnCount){
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot count: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
 
@@ -4098,7 +4111,7 @@ int kvstore_cf_count(KVColumnFamily *pCF, int64_t *pnCount){
   if( !pKV->inTrans ){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+      KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
     pKV->inTrans = 1;
@@ -4107,7 +4120,7 @@ int kvstore_cf_count(KVColumnFamily *pCF, int64_t *pnCount){
   /* Use the cached read cursor — no extra allocation needed. */
   BtCursor *pCur = kvstoreGetReadCursor(pCF);
   if( !pCur ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
 
@@ -4117,7 +4130,7 @@ int kvstore_cf_count(KVColumnFamily *pCF, int64_t *pnCount){
     *pnCount = (int64_t)nEntries;
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
   return (rc == SQLITE_OK) ? KVSTORE_OK : rc;
 }
@@ -4146,17 +4159,17 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
     *pzErrMsg = NULL;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     hadTrans = 1;
@@ -4174,7 +4187,7 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
     aRoot = (Pgno*)sqlite3MallocZero(nAlloc * sizeof(Pgno));
     if( !aRoot ){
       if( hadTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return KVSTORE_NOMEM;
     }
 
@@ -4256,13 +4269,13 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
     }else{
       sqlite3_free(zErr);
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
   if( zErr ) sqlite3_free(zErr);
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return KVSTORE_OK;
 }
 
@@ -4279,16 +4292,16 @@ int kvstore_sync(KVStore *pKV){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot sync: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
@@ -4303,7 +4316,7 @@ int kvstore_sync(KVStore *pKV){
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -4318,16 +4331,16 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot vacuum: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
@@ -4338,7 +4351,7 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     if( rc != SQLITE_OK ){
       kvstoreCheckCorruption(pKV, rc);
       kvstoreSetError(pKV, "failed to begin transaction for vacuum: error %d", rc);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     pKV->inTrans = 2;
@@ -4349,7 +4362,7 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     if( rc != SQLITE_OK ){
       kvstoreCheckCorruption(pKV, rc);
       kvstoreSetError(pKV, "failed to upgrade transaction for vacuum: error %d", rc);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     pKV->inTrans = 2;
@@ -4379,7 +4392,7 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
       sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
       pKV->inTrans = 0;
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -4392,7 +4405,7 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -4419,10 +4432,10 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
     return KVSTORE_NOMEM;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_free(azNames);
     return KVSTORE_ERROR;
   }
@@ -4430,7 +4443,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   if( !pKV->inTrans ){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_free(azNames);
       return rc;
     }
@@ -4441,7 +4454,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   pCur = kvstoreAllocCursor();
   if( !pCur ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_free(azNames);
     return SQLITE_NOMEM;
   }
@@ -4449,7 +4462,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_free(azNames);
     return rc;
   }
@@ -4503,7 +4516,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
     pKV->inTrans = 0;
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   if( rc != KVSTORE_OK ){
     int i;
@@ -4630,35 +4643,35 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
 
   if( !pKV || !zName ){
     if( pKV ){
-      sqlite3_mutex_enter(pKV->pMutex);
+      KV_ENTER(pKV);
       kvstoreSetError(pKV, "invalid parameters to cf_drop");
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
     }
     return KVSTORE_ERROR;
   }
 
   /* Cannot drop default CF */
   if( strcmp(zName, DEFAULT_CF_NAME) == 0 ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "cannot drop default column family");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   /* Cannot drop internal CFs via the public API */
   if( zName[0]=='_' && zName[1]=='_' ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
   nNameLen = strlen(zName);
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -4671,7 +4684,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
     autoTrans = 1;
@@ -4682,14 +4695,14 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   pCur = kvstoreAllocCursor();
   if( !pCur ){
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return SQLITE_NOMEM;
   }
   rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -4699,7 +4712,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   if( rc != SQLITE_OK || !found ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
 
@@ -4710,7 +4723,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     if( rc != SQLITE_OK || res != 0 ){
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return KVSTORE_CORRUPT;
     }
   }
@@ -4719,7 +4732,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_CORRUPT;
   }
 
@@ -4728,7 +4741,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   if( rc != SQLITE_OK ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0; }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -4746,7 +4759,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
       pKV->inTrans = 0;
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -4759,7 +4772,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
     kvstoreSetError(pKV, "failed to drop table: error %d", rc);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
   kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
@@ -4786,7 +4799,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   return rc;
 }
@@ -4823,20 +4836,20 @@ int kvstore_cf_put_ttl(
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot put_ttl: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
   rc = kvstoreValidateKeyValue(pKV, pKey, nKey, pValue, nValue);
   if( rc != KVSTORE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
 
@@ -4845,7 +4858,7 @@ int kvstore_cf_put_ttl(
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+      KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
     autoTrans = 1;
@@ -4859,7 +4872,7 @@ int kvstore_cf_put_ttl(
       sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0;
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
 
@@ -4929,7 +4942,7 @@ int kvstore_cf_put_ttl(
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
   return rc;
 }
@@ -4964,27 +4977,27 @@ int kvstore_cf_get_ttl(
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot get_ttl: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
   if( !pKey || nKey <= 0 ){
     kvstoreSetError(pKV, "invalid key");
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
 
   if( !pKV->inTrans ){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+      KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
     pKV->inTrans = 1;
@@ -5023,7 +5036,7 @@ int kvstore_cf_get_ttl(
         }
         pKV->stats.nTtlExpired++;
         if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
-        sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+        KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
         return KVSTORE_NOTFOUND;
       }
       remaining = expireMs - nowMs;
@@ -5036,7 +5049,7 @@ int kvstore_cf_get_ttl(
   void *pValue = NULL; int nValue = 0;
   rc = kvstoreRawBtreeGet(pKV, pCF->iTable, pKey, nKey, &pValue, &nValue);
   if( rc != SQLITE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
   pKV->stats.nGets++;
@@ -5044,7 +5057,7 @@ int kvstore_cf_get_ttl(
   *ppValue = pValue; *pnValue = nValue;
   if( pnRemaining ) *pnRemaining = remaining;
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
   return KVSTORE_OK;
 }
@@ -5121,16 +5134,16 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
     int   i, rc = SQLITE_OK;
 
     sqlite3_mutex_enter(pCF->pMutex);
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
 
     if( pKV->closing || !pCF->hasTtl || !pCF->pTtlExpiryCF ){
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       break;
     }
     if( pKV->isCorrupted ){
       kvstoreSetError(pKV, "cannot purge_expired: database is corrupted");
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return KVSTORE_CORRUPT;
     }
@@ -5141,7 +5154,7 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
@@ -5222,7 +5235,7 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
 
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
     if( rc != SQLITE_OK ) return rc;
@@ -5269,20 +5282,20 @@ int kvstore_cf_put_if_absent(
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot put_if_absent: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
   rc = kvstoreValidateKeyValue(pKV, pKey, nKey, pValue, nValue);
   if( rc != KVSTORE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return rc;
   }
 
@@ -5292,7 +5305,7 @@ int kvstore_cf_put_if_absent(
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+      KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
     autoTrans = 1;
@@ -5403,7 +5416,7 @@ pia_done:
   }
 
   if( pInserted ) *pInserted = inserted;
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
   return (rc == SQLITE_OK) ? KVSTORE_OK : rc;
 }
@@ -5442,15 +5455,15 @@ int kvstore_cf_clear(KVColumnFamily *pCF){
   KVStore *pKV = pCF->pKV;
 
   sqlite3_mutex_enter(pCF->pMutex);
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   if( pKV->closing ){
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_ERROR;
   }
   if( pKV->isCorrupted ){
     kvstoreSetError(pKV, "cannot clear: database is corrupted");
-    sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+    KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
     return KVSTORE_CORRUPT;
   }
 
@@ -5460,7 +5473,7 @@ int kvstore_cf_clear(KVColumnFamily *pCF){
     rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
     if( rc != SQLITE_OK ){
       kvstoreRestorePersistentRead(pKV);
-      sqlite3_mutex_leave(pKV->pMutex); sqlite3_mutex_leave(pCF->pMutex);
+      KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
       return rc;
     }
     autoTrans = 1;
@@ -5510,7 +5523,7 @@ clear_done:
     }
   }
 
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   sqlite3_mutex_leave(pCF->pMutex);
   return (rc == SQLITE_OK) ? KVSTORE_OK : rc;
 }
@@ -5749,11 +5762,11 @@ static int kvstoreEncSetupAuth(
   int rc;
   int autoTrans = 0;
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
 
   rc = kvstoreEnsureWrite(pKV, &autoTrans);
   if( rc != KVSTORE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -5762,7 +5775,7 @@ static int kvstoreEncSetupAuth(
   rc = kvstoreCreateOrOpenHiddenCF(pKV, SNKV_AUTH_CF_NAME, &pAuthCF);
   if( rc != KVSTORE_OK ){
     kvstoreFinishWrite(pKV, autoTrans, rc);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -5792,7 +5805,7 @@ static int kvstoreEncSetupAuth(
     if( rc != KVSTORE_OK ){
       kvstoreFreeCFStruct(pAuthCF);
       kvstoreFinishWrite(pKV, autoTrans, rc);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return rc;
     }
   } else {
@@ -5805,7 +5818,7 @@ static int kvstoreEncSetupAuth(
       if( pSaltVal ) sqlite3_free(pSaltVal);
       kvstoreFreeCFStruct(pAuthCF);
       kvstoreFinishWrite(pKV, autoTrans, KVSTORE_AUTH_FAILED);
-      sqlite3_mutex_leave(pKV->pMutex);
+      KV_LEAVE(pKV);
       return KVSTORE_AUTH_FAILED;
     }
     memcpy(aSalt, pSaltVal, SNKV_ENC_SALT_LEN);
@@ -5831,7 +5844,7 @@ static int kvstoreEncSetupAuth(
   if( kvstoreEncDeriveKey(aKey, pPassword, nPassword, aSalt, mCost, tCost) != 0 ){
     kvstoreFreeCFStruct(pAuthCF);
     kvstoreFinishWrite(pKV, autoTrans, KVSTORE_ERROR);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
 
@@ -5871,7 +5884,7 @@ static int kvstoreEncSetupAuth(
   kvstoreEncWipe(aKey, SNKV_ENC_KEY_LEN);
   kvstoreFreeCFStruct(pAuthCF);
   kvstoreFinishWrite(pKV, autoTrans, rc);
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -5906,7 +5919,7 @@ int kvstore_open_encrypted(
   ** - Auth CF absent, no data   → fresh empty file (create encrypted)
   ** - Auth CF absent, has data  → existing plain store → AUTH_FAILED
   */
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
   if( pKV->inTrans == 0 ){
     sqlite3BtreeBeginTrans(pKV->pBt, 0, 0);
     pKV->inTrans = 1;
@@ -5942,7 +5955,7 @@ int kvstore_open_encrypted(
       kvstoreFreeCursor(pCntCur);
     }
   }
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
 
   /* Set up auth CF, derive key, set bEncrypted=1 */
   rc = kvstoreEncSetupAuth(pKV, pPassword, nPassword, isNew);
@@ -5954,7 +5967,7 @@ int kvstore_open_encrypted(
 
   /* If we just set up auth on an existing plain store, encrypt all user data */
   if( isPlainReencrypt ){
-    sqlite3_mutex_enter(pKV->pMutex);
+    KV_ENTER(pKV);
     int autoTrans = 0;
     int enc_rc = kvstoreEnsureWrite(pKV, &autoTrans);
     if( enc_rc == KVSTORE_OK ){
@@ -5963,7 +5976,7 @@ int kvstore_open_encrypted(
         enc_rc = kvstoreForEachUserCF(pKV, kvstoreEncryptCFCb, (void*)pKV->aEncKey, 1);
       kvstoreFinishWrite(pKV, autoTrans, enc_rc);
     }
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     if( enc_rc != KVSTORE_OK ){
       kvstore_close(pKV);
       *ppKV = NULL;
@@ -6158,12 +6171,12 @@ int kvstore_reencrypt(
     return KVSTORE_ERROR;
   }
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
   int autoTrans = 0;
   int rc = kvstoreEnsureWrite(pKV, &autoTrans);
   if( rc != KVSTORE_OK ){
     kvstoreEncWipe(aNewKey, SNKV_ENC_KEY_LEN);
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -6211,7 +6224,7 @@ int kvstore_reencrypt(
 reenc_done:
   kvstoreEncWipe(aNewKey, SNKV_ENC_KEY_LEN);
   kvstoreFinishWrite(pKV, autoTrans, rc);
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }
 
@@ -6363,11 +6376,11 @@ int kvstore_remove_encryption(KVStore *pKV){
   if( !pKV ) return KVSTORE_ERROR;
   if( !pKV->bEncrypted ) return KVSTORE_ERROR;
 
-  sqlite3_mutex_enter(pKV->pMutex);
+  KV_ENTER(pKV);
   int autoTrans = 0;
   int rc = kvstoreEnsureWrite(pKV, &autoTrans);
   if( rc != KVSTORE_OK ){
-    sqlite3_mutex_leave(pKV->pMutex);
+    KV_LEAVE(pKV);
     return rc;
   }
 
@@ -6401,6 +6414,6 @@ int kvstore_remove_encryption(KVStore *pKV){
 
 remenc_done:
   kvstoreFinishWrite(pKV, autoTrans, rc);
-  sqlite3_mutex_leave(pKV->pMutex);
+  KV_LEAVE(pKV);
   return rc;
 }

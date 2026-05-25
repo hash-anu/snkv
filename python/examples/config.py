@@ -120,6 +120,70 @@ def wal_size_limit():
         print(f"  Final checkpoint: nLog={nlog}, nCkpt={nckpt}")
 
 
+def full_mutex_shared_handle():
+    print("\n--- full_mutex=1: Single Handle Shared Across Threads ---")
+    # full_mutex=1 adds a recursive mutex around every API call.
+    # Use this ONLY when one KVStore instance is shared between threads.
+    # The recommended pattern is one handle per thread (full_mutex=0).
+    import threading
+
+    with KVStore(DB_FILE, full_mutex=1) as db:
+        errors = []
+
+        def worker(tid):
+            try:
+                db[f"thread_{tid}"] = str(tid)
+                val = db[f"thread_{tid}"]
+                if val != str(tid).encode():
+                    errors.append(f"thread {tid}: wrong value")
+            except Exception as e:
+                errors.append(str(e))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        if errors:
+            for e in errors:
+                print(f"  ERROR: {e}")
+        else:
+            print(f"  8 threads wrote and read back correctly with full_mutex=1")
+
+
+def full_mutex_per_thread_handles():
+    print("\n--- full_mutex=0 (default): One Handle per Thread ---")
+    # The recommended concurrency pattern: each thread opens its own KVStore.
+    # WAL byte-range locks handle cross-handle coordination at the OS level.
+    # No application mutex is needed — full_mutex=0 (the default) is correct.
+    import threading
+
+    errors = []
+
+    def worker(tid):
+        try:
+            with KVStore(DB_FILE, busy_timeout=5000) as db:   # full_mutex=0 by default
+                db[f"per_thread_{tid}"] = str(tid)
+                val = db[f"per_thread_{tid}"]
+                if val != str(tid).encode():
+                    errors.append(f"thread {tid}: wrong value")
+        except Exception as e:
+            errors.append(str(e))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    if errors:
+        for e in errors:
+            print(f"  ERROR: {e}")
+    else:
+        print(f"  8 threads each opened their own handle — no mutex needed")
+
+
 def open_v2_full_example():
     print("\n--- open_v2: All Options at Once ---")
     with KVStore(
@@ -144,6 +208,8 @@ if __name__ == "__main__":
     busy_timeout()
     read_only_mode()
     wal_size_limit()
+    full_mutex_shared_handle()
+    full_mutex_per_thread_handles()
     open_v2_full_example()
 
     # Cleanup
