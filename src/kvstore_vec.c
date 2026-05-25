@@ -784,6 +784,22 @@ int kvstore_vec_put_batch(
                             it->pVec, pVS->dim * (int)sizeof(float));
         if (rc != KVSTORE_OK) goto batch_rollback;
 
+        /* If this key was already written earlier in this batch, delete the
+        ** stale CF_IDI entry for that intra-batch label before overwriting. */
+        {
+            void *pPrevId = NULL; int nPrevId = 0;
+            if( kvstore_cf_get(pVS->pIdkCF, it->pKey, it->nKey,
+                               &pPrevId, &nPrevId) == KVSTORE_OK
+                    && nPrevId == 8 ){
+                int64_t prevLabel = unpackI64((const unsigned char*)pPrevId);
+                if( prevLabel >= baseId ){
+                    unsigned char prevBuf[8]; packI64(prevBuf, prevLabel);
+                    kvstore_cf_delete(pVS->pIdiCF, prevBuf, 8);
+                }
+            }
+            snkv_free(pPrevId);
+        }
+
         rc = kvstore_cf_put(pVS->pIdkCF, it->pKey, it->nKey, idBuf, 8);
         if (rc != KVSTORE_OK) goto batch_rollback;
 
