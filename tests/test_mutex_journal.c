@@ -402,6 +402,18 @@ static void* thread_worker(void *arg) {
 }
 
 /*
+** Helper: open a shared handle with fullMutex=1 (required when one KVStore*
+** is shared across threads; the default fullMutex=0 only works with
+** per-thread handles).
+*/
+static int open_shared(const char *path, KVStore **ppKV) {
+    KVStoreConfig cfg = {0};
+    cfg.journalMode = KVSTORE_JOURNAL_DELETE;
+    cfg.fullMutex   = 1;
+    return kvstore_open_v2(path, ppKV, &cfg);
+}
+
+/*
 ** Test 9: Concurrent access with multiple threads
 */
 static void test_concurrent_access(void) {
@@ -410,10 +422,10 @@ static void test_concurrent_access(void) {
     WorkerThreadData thread_data[NUM_THREADS];
     int rc, i;
     int passed = 0;
-    
+
     cleanup_test_files();
-    
-    rc = kvstore_open(TEST_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
+
+    rc = open_shared(TEST_DB_FILE, &pKV);
     if (rc == KVSTORE_OK) {
         /* Initialize thread data */
         for (i = 0; i < NUM_THREADS; i++) {
@@ -527,10 +539,10 @@ static void test_transaction_isolation(void) {
     WorkerThreadData thread_data[5];
     int rc, i;
     int passed = 0;
-    
+
     cleanup_test_files();
-    
-    rc = kvstore_open(TEST_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
+
+    rc = open_shared(TEST_DB_FILE, &pKV);
     if (rc == KVSTORE_OK) {
         /* Initialize thread data */
         for (i = 0; i < 5; i++) {
@@ -582,10 +594,10 @@ static void test_mutex_data_integrity(void) {
     WorkerThreadData thread_data[NUM_THREADS];
     int rc, i;
     int passed = 0;
-    
+
     cleanup_test_files();
-    
-    rc = kvstore_open(TEST_DB_FILE, &pKV, KVSTORE_JOURNAL_DELETE);
+
+    rc = open_shared(TEST_DB_FILE, &pKV);
     if (rc == KVSTORE_OK) {
         /* All threads will write different keys */
         for (i = 0; i < NUM_THREADS; i++) {
