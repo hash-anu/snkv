@@ -204,4 +204,5 @@ ext = Extension(
 setup(
     ext_modules=[ext],
     cmdclass={"build_ext": BuildExtWithHeader},
+    entry_points={"console_scripts": ["snkvctl=snkv.snkvctl:main"]},
 )

@@ -20,6 +20,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.scripts]
+snkvctl = "snkv.snkvctl:main"
+
 [project.optional-dependencies]
 vector = ["usearch>=2.9", "numpy>=1.21"]
 

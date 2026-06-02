@@ -13,6 +13,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 
 ## Features
 
+- **snkvctl CLI** — installed automatically; full command-line access to every SNKV API (`put`, `get`, `scan`, `txn`, `stats`, `cf`, `encrypt`, and more)
 - **Dict-style API** — `db["key"] = value`, `val = db["key"]`, `del db["key"]`, `"key" in db`
 - **Context managers** — `with KVStore(...) as db` and `with db.create_column_family(...) as cf` for guaranteed cleanup
 - **Prefix iterators** — efficient namespace scans with `db.prefix_iterator(b"user:")`
@@ -660,6 +661,110 @@ PYTHONPATH=. python3 examples/basic.py
 PYTHONPATH=. python3 examples/transactions.py
 # ... same pattern for all examples
 ```
+
+---
+
+## snkvctl CLI
+
+`snkvctl` is a command-line interface for SNKV databases, installed automatically alongside the Python package. It gives you shell-level access to every SNKV API — useful for inspecting databases, debugging, scripting, and administration.
+
+```bash
+pip install snkv          # snkvctl is included; no separate install needed
+snkvctl --help
+```
+
+### Usage
+
+```
+snkvctl --db PATH [options] COMMAND [args]
+```
+
+**Global flags**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--db PATH` | — | Database file (required) |
+| `--cf NAME` | default CF | Target column family |
+| `--password PASS` | — | Open as encrypted store |
+| `--timeout MS` | 3000 | Busy-retry timeout in ms |
+| `--format text\|json` | text | Output format |
+| `--journal wal\|delete` | wal | Journal mode |
+| `--sync off\|normal\|full` | normal | fsync level |
+| `--cache-size N` | 2000 | Page cache size (pages) |
+| `--page-size N` | 4096 | DB page size (new DBs only) |
+| `--read-only` | off | Open read-only |
+| `--wal-limit N` | 0 | Auto-checkpoint every N commits |
+| `--full-mutex` | off | Recursive mutex (shared-handle threading) |
+
+### Commands
+
+| Command | Description |
+|---|---|
+| `put KEY VALUE [--ttl S]` | Insert or update |
+| `get KEY` | Fetch value |
+| `del KEY` | Delete key (exit 2 if missing) |
+| `exists KEY` | Check existence (exit 0=found, 2=missing) |
+| `list [--prefix P] [--reverse] [--limit N]` | Print keys |
+| `scan [--prefix P] [--reverse] [--limit N]` | Print key+value pairs |
+| `count [--prefix P]` | Count entries |
+| `clear` | Delete all keys in store or CF |
+| `set-if-absent KEY VALUE [--ttl S]` | Insert only if key is absent |
+| `ttl KEY` | Remaining TTL in seconds |
+| `purge` | Delete all expired keys |
+| `txn [--dry-run]` | Atomic batch (put/del ops from stdin) |
+| `sync` | Flush to disk (fsync) |
+| `cf list\|create\|drop [NAME]` | Column family management |
+| `stats [--reset]` | Operation statistics |
+| `checkpoint [--mode passive\|full\|restart\|truncate]` | WAL checkpoint |
+| `vacuum [--pages N]` | Reclaim unused pages |
+| `check` | Integrity check |
+| `info` | Path, encryption status, CF list, size |
+| `encrypt --new-password PASS` | Migrate plaintext → encrypted (in-place) |
+| `decrypt` | Remove encryption (requires `--password`) |
+| `rekey --new-password NEW` | Change encryption password |
+
+### Examples
+
+```bash
+# Basic round-trip
+snkvctl --db mydb.db put hello world
+snkvctl --db mydb.db get hello          # → world
+
+# Prefix scan with JSON output
+snkvctl --db mydb.db scan --prefix user: --format json
+
+# TTL
+snkvctl --db mydb.db put session tok --ttl 300
+snkvctl --db mydb.db ttl session        # → 299.987s remaining
+
+# Column families
+snkvctl --db mydb.db cf create users
+snkvctl --db mydb.db --cf users put alice admin
+snkvctl --db mydb.db --cf users scan
+
+# Atomic multi-key update
+printf 'put counter 42\nput flag on\ndel old_key\n' \
+  | snkvctl --db mydb.db txn
+
+# Encrypted store
+snkvctl --db enc.db encrypt --new-password s3cr3t
+snkvctl --db enc.db --password s3cr3t put k v
+snkvctl --db enc.db --password s3cr3t get k
+
+# Admin
+snkvctl --db mydb.db stats --format json
+snkvctl --db mydb.db check
+snkvctl --db mydb.db info
+snkvctl --db mydb.db checkpoint --mode full
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Error (I/O, bad args, wrong password, corruption) |
+| 2 | Not found (key missing — useful in shell `if` checks) |
 
 ---
 
