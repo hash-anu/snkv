@@ -523,7 +523,10 @@ def cmd_txn(db: KVStore, args: argparse.Namespace) -> int:
                     raise ValueError(
                         f"line {lineno}: '{verb}' requires KEY"
                     )
-                target.delete(parts[1])
+                try:
+                    target.delete(parts[1])
+                except NotFoundError:
+                    pass  # deleting a non-existent key is a no-op in batch mode
             else:
                 raise ValueError(
                     f"line {lineno}: unknown op {verb!r} "
@@ -729,15 +732,27 @@ def _cmd_rekey(args: argparse.Namespace) -> int:
 
 # ── Argument parser ───────────────────────────────────────────────────────────
 
+class _Parser(argparse.ArgumentParser):
+    """ArgumentParser that exits with code 1 (error) on bad arguments.
+
+    argparse's default is to exit 2 for usage errors, which would collide with
+    our exit code 2 meaning "key not found". We remap to 1 so the three-code
+    contract (0=ok, 1=error, 2=not-found) is unambiguous in shell scripts.
+    """
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(1, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Shared parent so --format can appear after the subcommand name.
     # SUPPRESS default means: don't overwrite the global default when omitted.
-    _fmt = argparse.ArgumentParser(add_help=False)
+    _fmt = _Parser(add_help=False)
     _fmt.add_argument("--format", choices=["text", "json"],
                       default=argparse.SUPPRESS,
                       help="output format: text (default) or json")
 
-    p = argparse.ArgumentParser(
+    p = _Parser(
         prog="snkvctl",
         description="Command-line interface for SNKV embedded key-value stores.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -30,7 +30,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Key count** — `db.count()` / `cf.count()` returns entry count in O(pages); CF counts are fully isolated
 - **Extended stats** — `db.stats()` exposes 12 counters including `bytes_read`, `bytes_written`, `wal_commits`, `ttl_expired`, `db_pages`; reset with `db.stats_reset()`
 - **Vector search** — integrated HNSW approximate nearest-neighbour index via `snkv[vector]`; sidecar persistence, quantization (f32/f16/i8), metadata filtering, exact rerank, TTL on vectors, and encryption support
-- **471 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, encryption, and vector search
+- **599 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, encryption, and vector search
 
 ---
 
@@ -610,7 +610,7 @@ cd python
 PYTHONPATH=. python3 -m pytest tests/ -v
 ```
 
-All 471 tests should pass.
+All 599 tests should pass.
 
 ---
 
@@ -702,16 +702,17 @@ snkvctl --db PATH [options] COMMAND [args]
 |---|---|
 | `put KEY VALUE [--ttl S]` | Insert or update |
 | `get KEY` | Fetch value |
-| `del KEY` | Delete key (exit 2 if missing) |
+| `del KEY` | Delete single key (exit 2 if missing) |
+| `del --prefix P` | Delete all keys with prefix (commits every 10K keys; not a single atomic op for very large sets) |
 | `exists KEY` | Check existence (exit 0=found, 2=missing) |
-| `list [--prefix P] [--reverse] [--limit N]` | Print keys |
-| `scan [--prefix P] [--reverse] [--limit N]` | Print key+value pairs |
+| `list [--prefix P] [--seek KEY] [--reverse] [--limit N]` | Print keys |
+| `scan [--prefix P] [--seek KEY] [--reverse] [--limit N]` | Print key+value pairs |
 | `count [--prefix P]` | Count entries |
 | `clear` | Delete all keys in store or CF |
 | `set-if-absent KEY VALUE [--ttl S]` | Insert only if key is absent |
 | `ttl KEY` | Remaining TTL in seconds |
 | `purge` | Delete all expired keys |
-| `txn [--dry-run]` | Atomic batch (put/del ops from stdin) |
+| `txn [--dry-run] [--cf NAME]` | Atomic batch (put/del ops from stdin) |
 | `sync` | Flush to disk (fsync) |
 | `cf list\|create\|drop [NAME]` | Column family management |
 | `stats [--reset]` | Operation statistics |
@@ -763,7 +764,7 @@ snkvctl --db mydb.db checkpoint --mode full
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Error (I/O, bad args, wrong password, corruption) |
+| 1 | Error (I/O, bad args, wrong password, corruption, busy timeout) |
 | 2 | Not found (key missing — useful in shell `if` checks) |
 
 ---

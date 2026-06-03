@@ -591,9 +591,14 @@ snkvctl --db mydb.db get missing_key || echo "not found"</pre>
 
       <h3 class="cmd-name" id="cmd-del">del</h3>
       <div class="cmd-entry">
-        <div class="cmd-sig">snkvctl --db PATH del KEY</div>
-        <p class="cmd-desc">Delete KEY. Exits 2 if the key does not exist.</p>
+        <div class="cmd-sig">snkvctl --db PATH del KEY
+snkvctl --db PATH del --prefix P</div>
+        <p class="cmd-desc">Delete a single KEY (exits 2 if missing), or delete all keys whose names start with the given prefix. Prefix deletes run inside a transaction and commit every 10,000 keys to keep WAL size bounded — not a single atomic operation for very large prefix sets.</p>
       </div>
+      <pre>snkvctl --db mydb.db del user:alice
+snkvctl --db mydb.db del --prefix tmp:        <span class="cm"># → 42 key(s) deleted</span>
+snkvctl --db mydb.db del --prefix tmp: --format json
+<span class="cm"># → {"deleted": 42, "prefix": "tmp:"}</span></pre>
 
       <h3 class="cmd-name" id="cmd-exists">exists</h3>
       <div class="cmd-entry">
@@ -606,19 +611,21 @@ snkvctl --db mydb.db get missing_key || echo "not found"</pre>
 
       <h3 class="cmd-name" id="cmd-list">list</h3>
       <div class="cmd-entry">
-        <div class="cmd-sig">snkvctl --db PATH list [--prefix P] [--reverse] [--limit N]</div>
-        <p class="cmd-desc">Print keys only (no values), one per line. Supports prefix filtering, reverse (descending) order, and an entry limit.</p>
+        <div class="cmd-sig">snkvctl --db PATH list [--prefix P] [--seek KEY] [--reverse] [--limit N]</div>
+        <p class="cmd-desc">Print keys only (no values), one per line. Supports prefix filtering, seek (start at first key ≥ KEY), reverse (descending) order, and an entry limit.</p>
       </div>
       <pre>snkvctl --db mydb.db list --prefix user: --limit 50
-snkvctl --db mydb.db list --reverse</pre>
+snkvctl --db mydb.db list --reverse
+snkvctl --db mydb.db list --seek user:bob      <span class="cm"># starts at user:bob inclusive</span></pre>
 
       <h3 class="cmd-name" id="cmd-scan">scan</h3>
       <div class="cmd-entry">
-        <div class="cmd-sig">snkvctl --db PATH scan [--prefix P] [--reverse] [--limit N]</div>
-        <p class="cmd-desc">Print key+value pairs. Text mode prints alternating key/value lines; JSON mode prints one <code>{"key":…,"value":…}</code> object per line.</p>
+        <div class="cmd-sig">snkvctl --db PATH scan [--prefix P] [--seek KEY] [--reverse] [--limit N]</div>
+        <p class="cmd-desc">Print key+value pairs. Text mode prints alternating key/value lines; JSON mode prints one <code>{"key":…,"value":…}</code> object per line. <code>--seek KEY</code> positions the iterator at the first key ≥ KEY before streaming begins.</p>
       </div>
       <pre>snkvctl --db mydb.db scan --prefix order: --format json | jq .
-snkvctl --db mydb.db --cf sessions scan --limit 10</pre>
+snkvctl --db mydb.db --cf sessions scan --limit 10
+snkvctl --db mydb.db scan --seek user:bob      <span class="cm"># start from user:bob onwards</span></pre>
 
       <h3 class="cmd-name" id="cmd-count">count</h3>
       <div class="cmd-entry">

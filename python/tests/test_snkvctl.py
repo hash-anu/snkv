@@ -654,9 +654,9 @@ class TestExitCodes:
         rc, _, _ = run(db, "ttl", "missing")
         assert rc == 2
 
-    def test_bad_args_is_2(self, db):
+    def test_bad_args_is_1(self, db):
         proc = snkvctl("--db", db, "put")  # missing KEY VALUE
-        assert proc.returncode == 2
+        assert proc.returncode == 1
 
     def test_wrong_password_is_1(self, enc_db):
         run(enc_db, "encrypt", "--new-password", "pw")
@@ -954,21 +954,19 @@ class TestSetIfAbsentTTL:
 
 class TestTxnEdgeCases:
     def test_txn_del_nonexistent_key(self, db):
-        # Deleting a nonexistent key inside txn should error and roll back
+        # Deleting a nonexistent key inside txn is a no-op (not an error)
         run(db, "put", "safe", "val")
-        rc, _, err = run(db, "txn", stdin="del nokey\n")
-        assert rc == 1
-        # safe key must be untouched (transaction rolled back)
-        _, val, _ = run(db, "get", "safe")
-        assert val == "val"
+        rc, out, _ = run(db, "txn", stdin="del nokey\n")
+        assert rc == 0
+        assert "1 op(s) committed" in out
 
-    def test_txn_partial_failure_rolls_back(self, db):
+    def test_txn_del_nonexistent_does_not_rollback_batch(self, db):
+        # del of missing key must not roll back other ops in the same batch
         run(db, "put", "counter", "1")
         rc, _, _ = run(db, "txn", stdin="put counter 2\ndel nonexistent\n")
-        assert rc == 1
-        # counter must still be 1 (rolled back)
+        assert rc == 0
         _, val, _ = run(db, "get", "counter")
-        assert val == "1"
+        assert val == "2"
 
 
 # ---------------------------------------------------------------------------
