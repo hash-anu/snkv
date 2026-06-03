@@ -15,7 +15,7 @@ A simple, crash-safe embedded key-value store
 [![Build](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
 [![Memory Leaks](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/hash-anu/snkv/badges/valgrind.json)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
 [![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/hash-anu/snkv/badges/tests.json)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
-[![kvstore coverage](https://img.shields.io/badge/kvstore-77.7%25-yellow)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
+[![kvstore coverage](https://img.shields.io/badge/kvstore-77.8%25-yellow)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
 [![kvstore-vec coverage](https://img.shields.io/badge/kvstore_vec-86.0%25-brightgreen)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
 [![Peak Memory](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/hash-anu/snkv/badges/memory.json)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
 [![GitHub Issues](https://img.shields.io/github/issues/hash-anu/snkv?label=open%20issues&color=orange)](https://github.com/hash-anu/snkv/issues)
