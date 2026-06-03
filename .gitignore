@@ -1,4 +1,5 @@
 *.o
+*.db
 tests/*.exe
 examples/*.exe
 bin/

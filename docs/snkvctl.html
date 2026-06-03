@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>snkvctl — SNKV Command-Line Interface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #0f0f0f;
+    --ink-2:     #2a2a2a;
+    --ink-3:     #4a4a4a;
+    --ink-4:     #767676;
+    --paper:     #f9f7f4;
+    --paper-2:   #f1ede8;
+    --paper-3:   #e6e0d8;
+    --accent:    #c8401a;
+    --accent-2:  #e85d35;
+    --code-bg:   #13100e;
+    --code-fg:   #e8ddd0;
+    --code-com:  #7a6a58;
+    --code-key:  #e0845a;
+    --code-str:  #8ab87a;
+    --code-num:  #7aabd4;
+    --divider:   #d4cdc4;
+    --rule:      1px solid var(--divider);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 17px; scroll-behavior: smooth; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Lora', Georgia, serif;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── SITE HEADER ─────────────────────────────────────────── */
+  .site-header {
+    border-bottom: var(--rule);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+  .site-header .logo {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .site-header .logo span { color: var(--accent); }
+  .site-header nav {
+    display: flex;
+    gap: 2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  .site-header nav a {
+    color: inherit;
+    text-decoration: none;
+    letter-spacing: 0.04em;
+    transition: color 0.15s;
+  }
+  .site-header nav a:hover { color: var(--accent); }
+  .site-header nav a.active { color: var(--accent); font-weight: 500; }
+  .github-star {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--ink);
+    color: var(--paper) !important;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: none !important;
+    transition: background 0.15s;
+  }
+  .github-star:hover { background: var(--accent) !important; color: var(--paper) !important; }
+
+  /* ── HERO ───────────────────────────────────────────────── */
+  .hero {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 4rem 2rem 2rem;
+    border-bottom: var(--rule);
+  }
+  .hero .category {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .hero .category::before {
+    content: '';
+    display: block;
+    width: 20px;
+    height: 1px;
+    background: var(--accent);
+  }
+  .hero h1 {
+    font-family: 'Lora', serif;
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 1rem;
+  }
+  .hero .subtitle {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1.05rem;
+    color: var(--ink-3);
+    font-weight: 300;
+    line-height: 1.6;
+    max-width: 620px;
+    margin-bottom: 2rem;
+  }
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    color: var(--ink-4);
+    flex-wrap: wrap;
+  }
+  .meta-row .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 2px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ── LAYOUT ──────────────────────────────────────────────── */
+  .content-wrap {
+    display: grid;
+    grid-template-columns: 230px 1fr;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── SIDEBAR TOC ──────────────────────────────────────────── */
+  .toc {
+    position: sticky;
+    top: 56px;
+    height: calc(100vh - 56px);
+    overflow-y: auto;
+    padding: 2rem 1.5rem 2rem 2rem;
+    border-right: var(--rule);
+    font-family: 'DM Sans', sans-serif;
+  }
+  .toc::-webkit-scrollbar { width: 4px; }
+  .toc::-webkit-scrollbar-track { background: transparent; }
+  .toc::-webkit-scrollbar-thumb { background: var(--paper-3); border-radius: 2px; }
+  .toc-title {
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 1rem;
+  }
+  .toc ul { list-style: none; }
+  .toc li { margin-bottom: 0.1rem; }
+  .toc a {
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    text-decoration: none;
+    display: block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    line-height: 1.4;
+    transition: color 0.12s, background 0.12s;
+  }
+  .toc a:hover { color: var(--ink); background: var(--paper-2); }
+  .toc a.active { color: var(--accent); background: #fde8e0; }
+  .toc .toc-section { margin-top: 1rem; }
+  .toc .toc-section > a { font-weight: 500; font-size: 0.8rem; color: var(--ink-2); }
+  .toc .toc-sub { padding-left: 0.75rem; margin-top: 0.1rem; }
+  .toc .toc-sub a { font-size: 0.76rem; color: var(--ink-4); }
+
+  /* ── MAIN CONTENT ──────────────────────────────────────── */
+  .main-content { padding: 3rem 3rem 5rem 3.5rem; min-width: 0; }
+
+  /* ── SECTION HEADINGS ──────────────────────────────────── */
+  .api-section { margin-bottom: 3.5rem; padding-top: 1rem; }
+  .section-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+  }
+  h2.section-title {
+    font-family: 'Lora', serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 0.8rem;
+    letter-spacing: -0.01em;
+  }
+  h3.cmd-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--ink-2);
+    margin: 2rem 0 0.5rem;
+    padding-top: 1.5rem;
+    border-top: var(--rule);
+  }
+  h3.cmd-name:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+
+  /* ── CMD ENTRY ──────────────────────────────────────── */
+  .cmd-entry {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 6px;
+    padding: 1.2rem 1.4rem 1rem;
+    margin-bottom: 1.2rem;
+  }
+  .cmd-sig {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: var(--code-fg);
+    background: var(--code-bg);
+    padding: 0.8rem 1.1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.65;
+    margin-bottom: 0.8rem;
+  }
+  .cmd-desc {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    color: var(--ink-3);
+    line-height: 1.65;
+    margin-bottom: 0.6rem;
+  }
+  .cmd-flag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--accent);
+  }
+
+  /* ── TABLES ──────────────────────────────────────────── */
+  .table-wrap { overflow-x: auto; margin: 0.75rem 0; }
+  table { width: 100%; border-collapse: collapse; font-family: 'DM Sans', sans-serif; font-size: 0.82rem; }
+  th {
+    text-align: left;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    border-bottom: var(--rule);
+    background: var(--paper-3);
+  }
+  td {
+    padding: 0.45rem 0.75rem;
+    border-bottom: var(--rule);
+    color: var(--ink-2);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code, th code { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--accent); }
+
+  /* ── CODE BLOCKS ──────────────────────────────────── */
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1rem 1.2rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    margin: 0.75rem 0;
+    tab-size: 2;
+  }
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82em;
+    background: var(--paper-3);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; border-radius: 0; }
+  .kw  { color: var(--code-key); }
+  .str { color: var(--code-str); }
+  .cm  { color: var(--code-com); font-style: italic; }
+  .nm  { color: var(--code-num); }
+
+  /* ── CALLOUT ──────────────────────────────────────── */
+  .note {
+    border-left: 3px solid var(--accent);
+    background: #fde8e0;
+    padding: 0.7rem 1rem;
+    border-radius: 0 4px 4px 0;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.84rem;
+    color: var(--ink-2);
+    margin: 0.75rem 0;
+    line-height: 1.6;
+  }
+  .note strong { color: var(--accent); }
+  .note-info { border-left-color: #3a8a6a; background: #e6f5ee; }
+  .note-info strong { color: #2a6a4a; }
+
+  /* ── EXIT CODE BADGE ──────────────────────────────── */
+  .exit-ok  { color: #2a6a4a; font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+  .exit-nf  { color: #a05020; font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+  .exit-err { color: var(--accent); font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+
+  /* ── SECTION DIVIDER ─────────────────────────────── */
+  .section-divider { border: none; border-top: var(--rule); margin: 3rem 0; }
+
+  /* ── OVERVIEW GRID ───────────────────────────────── */
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .overview-card {
+    background: var(--paper-2);
+    border: var(--rule);
+    border-radius: 5px;
+    padding: 1.1rem 1.2rem;
+  }
+  .overview-card .card-icon {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
+    margin-bottom: 0.4rem;
+    letter-spacing: 0.06em;
+  }
+  .overview-card .card-title {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--ink);
+    margin-bottom: 0.35rem;
+  }
+  .overview-card .card-body {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    line-height: 1.5;
+  }
+
+  /* ── RESPONSIVE ──────────────────────────────────── */
+  @media (max-width: 860px) {
+    .content-wrap { grid-template-columns: 1fr; }
+    .toc { display: none; }
+    .main-content { padding: 2rem 1.5rem 4rem; }
+    .site-header nav { gap: 1rem; font-size: 0.78rem; }
+  }
+  @media (max-width: 500px) {
+    .site-header nav a:not(.github-star):not(:last-child) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SITE HEADER ──────────────────────────────────────────────── -->
+<header class="site-header">
+  <a href="index.html" class="logo">SNKV <span>/</span> Docs</a>
+  <nav>
+    <a href="index.html">Internals</a>
+    <a href="ttl.html">TTL</a>
+    <a href="api.html">API</a>
+    <a href="examples.html">Examples</a>
+    <a href="snkvctl.html" class="active">CLI</a>
+    <a href="benchmark.html">Benchmarks</a>
+    <a href="https://github.com/hash-anu/snkv" target="_blank" rel="noopener" class="github-star">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </nav>
+</header>
+
+<!-- ── HERO ─────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="category">Command-Line Interface</div>
+  <h1>snkvctl</h1>
+  <p class="subtitle">
+    A full-featured CLI for SNKV databases — inspect, query, administer, and script
+    against any SNKV store without writing code. Installed automatically with
+    <code>pip install snkv</code>.
+  </p>
+  <div class="meta-row">
+    <span class="tag">Python 3.8+</span>
+    <span class="tag">Zero extra deps</span>
+    <span class="tag">text + JSON output</span>
+    <span class="tag">exit codes 0 / 1 / 2</span>
+  </div>
+</div>
+
+<!-- ── BODY ─────────────────────────────────────────────────────── -->
+<div class="content-wrap">
+
+  <!-- sidebar TOC -->
+  <aside class="toc">
+    <div class="toc-title">Contents</div>
+    <ul>
+      <li class="toc-section"><a href="#install">Installation</a></li>
+      <li class="toc-section"><a href="#global-flags">Global Flags</a></li>
+      <li class="toc-section"><a href="#kvstore-config">KVStoreConfig Flags</a></li>
+      <li class="toc-section"><a href="#crud">CRUD</a>
+        <ul class="toc-sub">
+          <li><a href="#cmd-put">put</a></li>
+          <li><a href="#cmd-get">get</a></li>
+          <li><a href="#cmd-del">del</a></li>
+          <li><a href="#cmd-exists">exists</a></li>
+          <li><a href="#cmd-list">list</a></li>
+          <li><a href="#cmd-scan">scan</a></li>
+          <li><a href="#cmd-count">count</a></li>
+          <li><a href="#cmd-clear">clear</a></li>
+          <li><a href="#cmd-sia">set-if-absent</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#ttl">TTL</a>
+        <ul class="toc-sub">
+          <li><a href="#cmd-ttl">ttl</a></li>
+          <li><a href="#cmd-purge">purge</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#txn">Transactions</a>
+        <ul class="toc-sub">
+          <li><a href="#cmd-txn">txn</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#sync-cmd">Sync</a></li>
+      <li class="toc-section"><a href="#cf">Column Families</a></li>
+      <li class="toc-section"><a href="#admin">Administration</a>
+        <ul class="toc-sub">
+          <li><a href="#cmd-stats">stats</a></li>
+          <li><a href="#cmd-checkpoint">checkpoint</a></li>
+          <li><a href="#cmd-vacuum">vacuum</a></li>
+          <li><a href="#cmd-check">check</a></li>
+          <li><a href="#cmd-info">info</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#encryption">Encryption</a>
+        <ul class="toc-sub">
+          <li><a href="#cmd-encrypt">encrypt</a></li>
+          <li><a href="#cmd-decrypt">decrypt</a></li>
+          <li><a href="#cmd-rekey">rekey</a></li>
+        </ul>
+      </li>
+      <li class="toc-section"><a href="#output">Output &amp; Exit Codes</a></li>
+    </ul>
+  </aside>
+
+  <!-- main content -->
+  <main class="main-content">
+
+    <!-- ── Installation ── -->
+    <section class="api-section" id="install">
+      <div class="section-label">01 — Getting Started</div>
+      <h2 class="section-title">Installation</h2>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.95rem;color:var(--ink-3);margin-bottom:1rem;">
+        <code>snkvctl</code> is bundled inside the <code>snkv</code> Python package.
+        Installing the package also installs the <code>snkvctl</code> executable via
+        a <code>console_scripts</code> entry point — no separate install step needed.
+      </p>
+      <pre>pip install snkv
+snkvctl --help</pre>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-top:1rem;">
+        Build from source:
+      </p>
+      <pre>git clone https://github.com/hash-anu/snkv
+pip install -e snkv/python/</pre>
+      <div class="note note-info">
+        <strong>No extra dependencies.</strong>
+        <code>snkvctl</code> uses only Python's standard library (<code>argparse</code>, <code>json</code>,
+        <code>os</code>, <code>sys</code>) plus the <code>snkv</code> C extension that is already installed.
+      </div>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Global flags ── -->
+    <section class="api-section" id="global-flags">
+      <div class="section-label">02 — Invocation</div>
+      <h2 class="section-title">Global Flags</h2>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-bottom:1rem;">
+        All commands share these flags. They must appear <em>before</em> the subcommand name.
+      </p>
+      <pre>snkvctl --db PATH [global flags] COMMAND [command args]</pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Flag</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>--db PATH</code></td><td>—</td><td>Database file path <strong>(required)</strong></td></tr>
+            <tr><td><code>--cf NAME</code></td><td>default CF</td><td>Target column family for all read/write commands</td></tr>
+            <tr><td><code>--password PASS</code></td><td>—</td><td>Open as encrypted store; required for <code>decrypt</code> and <code>rekey</code></td></tr>
+            <tr><td><code>--timeout MS</code></td><td>3000</td><td>Busy-retry timeout in milliseconds before returning an error</td></tr>
+            <tr><td><code>--format text|json</code></td><td>text</td><td>Output format; JSON is newline-delimited (one object per line)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── KVStoreConfig flags ── -->
+    <section class="api-section" id="kvstore-config">
+      <div class="section-label">03 — Store Configuration</div>
+      <h2 class="section-title">KVStoreConfig Flags</h2>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-bottom:1rem;">
+        These flags map directly to <code>KVStoreConfig</code> fields and are forwarded to
+        <code>kvstore_open_v2</code> on every invocation. Defaults match <code>kvstore_open</code>.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Flag</th><th>Default</th><th>KVStoreConfig field</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>--journal wal|delete</code></td><td>wal</td><td><code>journalMode</code></td><td>WAL (recommended) or rollback-journal mode</td></tr>
+            <tr><td><code>--sync off|normal|full</code></td><td>normal</td><td><code>syncLevel</code></td><td>fsync aggressiveness; <code>full</code> = power-safe, <code>off</code> = fastest</td></tr>
+            <tr><td><code>--cache-size N</code></td><td>2000</td><td><code>cacheSize</code></td><td>Page cache in pages (~4 KB each); 2000 ≈ 8 MB</td></tr>
+            <tr><td><code>--page-size N</code></td><td>4096</td><td><code>pageSize</code></td><td>Database page size in bytes; new databases only</td></tr>
+            <tr><td><code>--read-only</code></td><td>off</td><td><code>readOnly</code></td><td>Open read-only; any write command will error</td></tr>
+            <tr><td><code>--wal-limit N</code></td><td>0</td><td><code>walSizeLimit</code></td><td>Auto-checkpoint every N committed write transactions (0 = disabled)</td></tr>
+            <tr><td><code>--full-mutex</code></td><td>off</td><td><code>fullMutex</code></td><td>Recursive mutex around every API call; only needed for shared-handle multi-threading</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── CRUD ── -->
+    <section class="api-section" id="crud">
+      <div class="section-label">04 — Core Operations</div>
+      <h2 class="section-title">CRUD</h2>
+
+      <h3 class="cmd-name" id="cmd-put">put</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH put KEY VALUE [--ttl SECS]</div>
+        <p class="cmd-desc">Insert or update a key. With <code>--ttl</code>, the key expires after the given number of seconds (float precision).</p>
+      </div>
+      <pre>snkvctl --db mydb.db put hello world
+snkvctl --db mydb.db put session:abc tok123 --ttl 300
+snkvctl --db mydb.db --cf users put alice admin</pre>
+
+      <h3 class="cmd-name" id="cmd-get">get</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH get KEY</div>
+        <p class="cmd-desc">Print the value for KEY. Exits 2 if the key is missing or expired. Text mode prints the raw value; JSON mode prints <code>{"value": "…"}</code>.</p>
+      </div>
+      <pre><span class="cm"># capture value in a shell variable</span>
+VAL=$(snkvctl --db mydb.db get hello)
+echo "$VAL"   <span class="cm"># world</span>
+
+<span class="cm"># check exit code</span>
+snkvctl --db mydb.db get missing_key || echo "not found"</pre>
+
+      <h3 class="cmd-name" id="cmd-del">del</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH del KEY
+snkvctl --db PATH del --prefix P</div>
+        <p class="cmd-desc">Delete a single KEY (exits 2 if missing), or delete all keys whose names start with the given prefix. Prefix deletes run inside a transaction and commit every 10,000 keys to keep WAL size bounded — not a single atomic operation for very large prefix sets.</p>
+      </div>
+      <pre>snkvctl --db mydb.db del user:alice
+snkvctl --db mydb.db del --prefix tmp:        <span class="cm"># → 42 key(s) deleted</span>
+snkvctl --db mydb.db del --prefix tmp: --format json
+<span class="cm"># → {"deleted": 42, "prefix": "tmp:"}</span></pre>
+
+      <h3 class="cmd-name" id="cmd-exists">exists</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH exists KEY</div>
+        <p class="cmd-desc">Check whether KEY exists. Exits 0 if found, 2 if not found. Useful in shell <code>if</code> statements.</p>
+      </div>
+      <pre><span class="kw">if</span> snkvctl --db mydb.db exists flag; <span class="kw">then</span>
+  echo "flag is set"
+<span class="kw">fi</span></pre>
+
+      <h3 class="cmd-name" id="cmd-list">list</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH list [--prefix P] [--seek KEY] [--reverse] [--limit N]</div>
+        <p class="cmd-desc">Print keys only (no values), one per line. Supports prefix filtering, seek (start at first key ≥ KEY), reverse (descending) order, and an entry limit.</p>
+      </div>
+      <pre>snkvctl --db mydb.db list --prefix user: --limit 50
+snkvctl --db mydb.db list --reverse
+snkvctl --db mydb.db list --seek user:bob      <span class="cm"># starts at user:bob inclusive</span></pre>
+
+      <h3 class="cmd-name" id="cmd-scan">scan</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH scan [--prefix P] [--seek KEY] [--reverse] [--limit N]</div>
+        <p class="cmd-desc">Print key+value pairs. Text mode prints alternating key/value lines; JSON mode prints one <code>{"key":…,"value":…}</code> object per line. <code>--seek KEY</code> positions the iterator at the first key ≥ KEY before streaming begins.</p>
+      </div>
+      <pre>snkvctl --db mydb.db scan --prefix order: --format json | jq .
+snkvctl --db mydb.db --cf sessions scan --limit 10
+snkvctl --db mydb.db scan --seek user:bob      <span class="cm"># start from user:bob onwards</span></pre>
+
+      <h3 class="cmd-name" id="cmd-count">count</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH count [--prefix P]</div>
+        <p class="cmd-desc">Print the number of entries. With <code>--prefix</code>, counts only matching keys (iterates; O(matches)). Without prefix, uses the O(pages) native counter.</p>
+      </div>
+      <pre>snkvctl --db mydb.db count
+snkvctl --db mydb.db count --prefix user: --format json</pre>
+
+      <h3 class="cmd-name" id="cmd-clear">clear</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH clear</div>
+        <p class="cmd-desc">Delete every key in the store or column family (including TTL index entries) in O(pages). Non-reversible.</p>
+      </div>
+
+      <h3 class="cmd-name" id="cmd-sia">set-if-absent</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH set-if-absent KEY VALUE [--ttl SECS]</div>
+        <p class="cmd-desc">Atomically insert KEY only if it does not already exist. Prints <code>inserted</code> or <code>already exists (not modified)</code>. Safe for distributed locks and deduplication.</p>
+      </div>
+      <pre>snkvctl --db mydb.db set-if-absent lock owner:proc1 --ttl 30</pre>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── TTL ── -->
+    <section class="api-section" id="ttl">
+      <div class="section-label">05 — TTL</div>
+      <h2 class="section-title">Native Key Expiry</h2>
+
+      <h3 class="cmd-name" id="cmd-ttl">ttl</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH ttl KEY</div>
+        <p class="cmd-desc">Print the remaining lifetime of KEY in seconds. Outputs <code>no ttl</code> if the key has no expiry, <code>expired</code> if it has already passed, or <code>N.NNNs remaining</code>.</p>
+      </div>
+      <pre>snkvctl --db mydb.db ttl session:abc          <span class="cm"># → 284.312s remaining</span>
+snkvctl --db mydb.db ttl no_expiry_key         <span class="cm"># → no ttl</span>
+snkvctl --db mydb.db ttl session:abc --format json
+<span class="cm"># → {"key": "session:abc", "ttl": 284.312, "status": "284.312s remaining"}</span></pre>
+
+      <h3 class="cmd-name" id="cmd-purge">purge</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH purge</div>
+        <p class="cmd-desc">Scan and permanently delete all expired keys. Returns the count of keys removed. Call before <code>count</code> for an accurate live-key tally.</p>
+      </div>
+      <pre>snkvctl --db mydb.db purge            <span class="cm"># → 12 expired key(s) purged</span>
+snkvctl --db mydb.db purge --format json
+<span class="cm"># → {"purged": 12}</span></pre>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Transactions ── -->
+    <section class="api-section" id="txn">
+      <div class="section-label">06 — Transactions</div>
+      <h2 class="section-title">Atomic Batch (txn)</h2>
+
+      <h3 class="cmd-name" id="cmd-txn">txn</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH txn [--dry-run]
+  [--cf NAME]</div>
+        <p class="cmd-desc">
+          Read <code>put KEY VALUE</code> and <code>del KEY</code> lines from <strong>stdin</strong>.
+          All operations are executed inside a single <code>begin → commit</code> transaction.
+          Any parse error or write failure rolls back the entire batch. Lines starting with
+          <code>#</code> are comments and are ignored.
+        </p>
+        <p class="cmd-desc">
+          <code>--dry-run</code> validates all operations but issues a rollback instead of a
+          commit — useful for testing batch scripts.
+        </p>
+      </div>
+      <div class="note note-info">
+        <strong>Why stdin?</strong>
+        A CLI process is stateless — each invocation opens a fresh connection.
+        Piping operations through stdin lets a single process execute an arbitrarily large
+        batch atomically within one open/begin/commit/close lifecycle.
+      </div>
+      <pre><span class="cm"># Inline heredoc</span>
+snkvctl --db mydb.db txn <span class="str">&lt;&lt;EOF
+put counter 42
+put flag enabled
+del old_key
+EOF</span>
+<span class="cm"># → 3 op(s) committed</span>
+
+<span class="cm"># Pipeline from another command</span>
+generate_ops.sh | snkvctl --db mydb.db txn
+
+<span class="cm"># Target a column family</span>
+printf <span class="str">'put alice 30\nput bob 25\n'</span> | snkvctl --db mydb.db --cf users txn
+
+<span class="cm"># Dry run — validate without persisting</span>
+printf <span class="str">'put x 1\ndel y\n'</span> | snkvctl --db mydb.db txn --dry-run
+<span class="cm"># → dry-run: 2 op(s) validated, rolled back</span>
+
+<span class="cm"># JSON output</span>
+printf <span class="str">'put a 1\nput b 2\n'</span> | snkvctl --db mydb.db txn --format json
+<span class="cm"># → {"committed": 2}</span></pre>
+
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.88rem;color:var(--ink-3);margin-top:0.5rem;">
+        Supported op keywords: <code>put KEY VALUE</code>, <code>del KEY</code>
+        (aliases: <code>delete</code>, <code>rm</code>).
+      </p>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Sync ── -->
+    <section class="api-section" id="sync-cmd">
+      <div class="section-label">07 — Durability</div>
+      <h2 class="section-title">sync</h2>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH sync</div>
+        <p class="cmd-desc">Flush all pending writes to disk (fsync). Equivalent to calling <code>db.sync()</code>. If a write transaction is active, performs a commit-and-reopen cycle first.</p>
+      </div>
+      <pre>snkvctl --db mydb.db sync
+<span class="cm"># → sync complete</span></pre>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Column families ── -->
+    <section class="api-section" id="cf">
+      <div class="section-label">08 — Namespacing</div>
+      <h2 class="section-title">Column Families</h2>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-bottom:1rem;">
+        Column families are logical namespaces within a single <code>.db</code> file.
+        Manage them with the <code>cf</code> subcommand; target one for CRUD operations
+        with the global <code>--cf NAME</code> flag.
+      </p>
+
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH cf list
+snkvctl --db PATH cf create NAME
+snkvctl --db PATH cf drop   NAME</div>
+        <p class="cmd-desc"><code>list</code> — print all user column family names.<br>
+        <code>create</code> — create a new column family.<br>
+        <code>drop</code> — permanently delete a column family and all its data.</p>
+      </div>
+      <pre>snkvctl --db mydb.db cf list
+snkvctl --db mydb.db cf create users
+snkvctl --db mydb.db --cf users put alice admin
+snkvctl --db mydb.db --cf users scan
+snkvctl --db mydb.db cf drop users</pre>
+
+      <div class="note">
+        <strong>Note:</strong> Internal column families (TTL index, encryption metadata) are
+        hidden from <code>cf list</code> and cannot be targeted with <code>--cf</code>.
+      </div>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Administration ── -->
+    <section class="api-section" id="admin">
+      <div class="section-label">09 — Administration</div>
+      <h2 class="section-title">Maintenance &amp; Stats</h2>
+
+      <h3 class="cmd-name" id="cmd-stats">stats</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH stats [--reset]</div>
+        <p class="cmd-desc">Print 12 operation counters: <code>puts</code>, <code>gets</code>, <code>deletes</code>, <code>iterations</code>, <code>errors</code>, <code>bytes_read</code>, <code>bytes_written</code>, <code>wal_commits</code>, <code>checkpoints</code>, <code>ttl_expired</code>, <code>ttl_purged</code>, <code>db_pages</code>. With <code>--reset</code>, clears cumulative counters after printing (<code>db_pages</code> is always live).</p>
+      </div>
+      <pre>snkvctl --db mydb.db stats
+snkvctl --db mydb.db stats --reset --format json</pre>
+
+      <h3 class="cmd-name" id="cmd-checkpoint">checkpoint</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH checkpoint [--mode passive|full|restart|truncate]</div>
+        <p class="cmd-desc">Copy WAL frames back to the main database file. Prints <code>nlog</code> (total WAL frames) and <code>nckpt</code> (frames written to the DB file).</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mode</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>passive</code> (default)</td><td>Copy frames without blocking readers or writers</td></tr>
+            <tr><td><code>full</code></td><td>Wait for all readers then flush all frames</td></tr>
+            <tr><td><code>restart</code></td><td>Like <code>full</code>, then reset the WAL write position</td></tr>
+            <tr><td><code>truncate</code></td><td>Like <code>restart</code>, then truncate the WAL file to zero bytes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre>snkvctl --db mydb.db checkpoint --mode full</pre>
+
+      <h3 class="cmd-name" id="cmd-vacuum">vacuum</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH vacuum [--pages N]</div>
+        <p class="cmd-desc">Incrementally reclaim unused pages. <code>--pages 0</code> (default) frees all available pages. Runs inside an automatic transaction.</p>
+      </div>
+      <pre>snkvctl --db mydb.db vacuum
+snkvctl --db mydb.db vacuum --pages 100</pre>
+
+      <h3 class="cmd-name" id="cmd-check">check</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH check</div>
+        <p class="cmd-desc">Run a full integrity check. Exits 0 on success; exits 1 and prints the corruption detail on failure.</p>
+      </div>
+      <pre>snkvctl --db mydb.db check || echo "database is corrupt!"</pre>
+
+      <h3 class="cmd-name" id="cmd-info">info</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH info</div>
+        <p class="cmd-desc">Print a summary: file path, encryption status, column family count and names, page count, and file size in bytes.</p>
+      </div>
+      <pre>snkvctl --db mydb.db info
+<span class="cm"># path         mydb.db
+# encrypted    no
+# cf_count     2
+# cfs          users, sessions
+# db_pages     128
+# size_bytes   524288</span>
+
+snkvctl --db mydb.db info --format json</pre>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Encryption ── -->
+    <section class="api-section" id="encryption">
+      <div class="section-label">10 — Security</div>
+      <h2 class="section-title">Encryption</h2>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-bottom:1.2rem;">
+        SNKV uses XChaCha20-Poly1305 per-value encryption with an Argon2id KDF.
+        Encrypted stores are transparent to all read/write commands when
+        <code>--password</code> is provided.
+      </p>
+
+      <h3 class="cmd-name" id="cmd-encrypt">encrypt</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH encrypt --new-password PASS</div>
+        <p class="cmd-desc">Migrate a plaintext store to encrypted in-place. Creates a temporary encrypted copy, copies all default-CF and user-CF data, then atomically replaces the original file.</p>
+      </div>
+      <div class="note">
+        <strong>TTL metadata is not migrated.</strong>
+        Key data and values are fully preserved, but per-key expiry times are lost.
+        Keys will remain in the encrypted store but will not auto-expire.
+      </div>
+      <pre>snkvctl --db mydb.db encrypt --new-password s3cr3t
+<span class="cm"># All subsequent access requires --password</span>
+snkvctl --db mydb.db --password s3cr3t get hello</pre>
+
+      <h3 class="cmd-name" id="cmd-decrypt">decrypt</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH --password PASS decrypt</div>
+        <p class="cmd-desc">Remove encryption from a store. Re-writes all values as plaintext. After this operation the store can be opened without <code>--password</code>.</p>
+      </div>
+      <pre>snkvctl --db mydb.db --password s3cr3t decrypt
+snkvctl --db mydb.db get hello   <span class="cm"># works without --password now</span></pre>
+
+      <h3 class="cmd-name" id="cmd-rekey">rekey</h3>
+      <div class="cmd-entry">
+        <div class="cmd-sig">snkvctl --db PATH --password OLD rekey --new-password NEW</div>
+        <p class="cmd-desc">Change the encryption password. Re-encrypts all values atomically inside a single transaction. The old password no longer works after this call.</p>
+      </div>
+      <pre>snkvctl --db mydb.db --password old_pass rekey --new-password new_pass</pre>
+    </section>
+
+    <hr class="section-divider">
+
+    <!-- ── Output & exit codes ── -->
+    <section class="api-section" id="output">
+      <div class="section-label">11 — Output</div>
+      <h2 class="section-title">Output Formats &amp; Exit Codes</h2>
+
+      <h3 class="cmd-name" style="border-top:none;padding-top:0;margin-top:0;">Text format (default)</h3>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-bottom:0.75rem;">
+        Human-readable output. Keys and values are printed as UTF-8 text.
+        Non-UTF-8 bytes are shown as <code>&lt;hex:AABBCC&gt;</code>.
+      </p>
+      <pre><span class="cm"># get — bare value</span>
+world
+
+<span class="cm"># scan — alternating key / value lines</span>
+user:alice
+admin
+user:bob
+viewer
+
+<span class="cm"># list — one key per line</span>
+user:alice
+user:bob
+
+<span class="cm"># stats — aligned key: value</span>
+puts            1024
+gets            8192
+bytes_written   102400</pre>
+
+      <h3 class="cmd-name">JSON format (<code>--format json</code>)</h3>
+      <p style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);margin-bottom:0.75rem;">
+        Newline-delimited JSON (NDJSON). Each record is one JSON object per line,
+        suitable for piping to <code>jq</code>.
+      </p>
+      <pre><span class="cm"># scan</span>
+{"key": "user:alice", "value": "admin"}
+{"key": "user:bob",   "value": "viewer"}
+
+<span class="cm"># get</span>
+{"value": "world"}
+
+<span class="cm"># stats</span>
+{"puts": 1024, "gets": 8192, "bytes_written": 102400, ...}
+
+<span class="cm"># info</span>
+{"path": "mydb.db", "encrypted": "no", "cf_count": 2, ...}</pre>
+
+      <h3 class="cmd-name">Exit codes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Meaning</th><th>Triggered by</th></tr></thead>
+          <tbody>
+            <tr><td><span class="exit-ok">0</span></td><td>Success</td><td>All commands on success</td></tr>
+            <tr><td><span class="exit-err">1</span></td><td>Error</td><td>I/O failure, bad arguments, wrong password, database corruption, busy timeout exceeded</td></tr>
+            <tr><td><span class="exit-nf">2</span></td><td>Not found</td><td><code>get</code>, <code>del</code>, <code>exists</code>, <code>ttl</code> when the key is absent or expired</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre><span class="cm"># Shell script pattern using exit codes</span>
+<span class="kw">if</span> ! snkvctl --db mydb.db get config_key > /dev/null <span class="nm">2</span>&gt;&amp;<span class="nm">1</span>; <span class="kw">then</span>
+  snkvctl --db mydb.db put config_key default_value
+<span class="kw">fi</span></pre>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Highlight active TOC entry on scroll
+  const headings = document.querySelectorAll('section[id]');
+  const tocLinks  = document.querySelectorAll('.toc a[href^="#"]');
+  const observer  = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        tocLinks.forEach(a => {
+          a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id);
+        });
+      }
+    });
+  }, { rootMargin: '-56px 0px -60% 0px' });
+  headings.forEach(h => observer.observe(h));
+</script>
+</body>
+</html>
