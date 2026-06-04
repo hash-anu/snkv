@@ -917,6 +917,11 @@ static void kvstoreAutoCheckpoint(KVStore *pKV){
 /* Early forward declarations needed by kvstore_open_v2. */
 static int kvstoreCfOpenInternal(KVStore*, const char*, KVColumnFamily**);
 static int kvstoreRawBtreeGet(KVStore*, int, const void*, int, void**, int*);
+static void kvstoreRegisterCF(KVStore*, KVColumnFamily*);
+static void kvstoreUnregisterCF(KVStore*, KVColumnFamily*);
+static void kvstoreDropHiddenCFNoLock(KVStore*, const char*);
+int kvstoreGetOrCreateInternalCF(KVStore*, const char*, KVColumnFamily**);
+int kvstoreRenameHiddenCF(KVStore*, const char*, const char*);
 
 /*
 ** Open a key-value store with full configuration control.
@@ -1835,7 +1840,7 @@ static int kvstoreCfOpenInternal(
 **
 ** Returns KVSTORE_OK and sets *ppCF on success.
 ** ====================================================================== */
-static int kvstoreCreateOrOpenHiddenCF(
+int kvstoreCreateOrOpenHiddenCF(
   KVStore *pKV,
   const char *zName,
   KVColumnFamily **ppCF
@@ -1912,6 +1917,120 @@ static int kvstoreCreateOrOpenHiddenCF(
 
   *ppCF = pCF;
   return KVSTORE_OK;
+}
+
+/*
+** Open or create an internal CF, managing the write transaction internally.
+** For use by subsystems (vector store) that need reserved-name CFs.
+*/
+int kvstoreGetOrCreateInternalCF(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
+  KV_ENTER(pKV);
+  int rc = kvstoreCfOpenInternal(pKV, zName, ppCF);
+  if( rc != KVSTORE_NOTFOUND ){ KV_LEAVE(pKV); return rc; }
+  if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+  rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
+  if( rc != SQLITE_OK ){
+    kvstoreRestorePersistentRead(pKV);
+    KV_LEAVE(pKV);
+    return rc;
+  }
+  pKV->inTrans = 2;
+  rc = kvstoreCreateOrOpenHiddenCF(pKV, zName, ppCF);
+  if( rc == KVSTORE_OK ){
+    sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+  }else{
+    sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0;
+  }
+  if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0)==SQLITE_OK ) pKV->inTrans = 1;
+  KV_LEAVE(pKV);
+  return rc;
+}
+
+/*
+** Rename a hidden CF in the metadata table, managing its own transaction.
+** Tombstones the old entry and writes a new entry with the same B-tree root.
+** Returns KVSTORE_OK (no-op) if the old CF does not exist.
+*/
+int kvstoreRenameHiddenCF(KVStore *pKV, const char *zOld, const char *zNew){
+  int nOld = (int)strlen(zOld);
+  int nNew = (int)strlen(zNew);
+  BtCursor *pCur = NULL;
+
+  KV_ENTER(pKV);
+
+  /* Check old CF exists and get its root page */
+  KVColumnFamily *pProbe = NULL;
+  int rc = kvstoreCfOpenInternal(pKV, zOld, &pProbe);
+  if( rc == KVSTORE_NOTFOUND ){ KV_LEAVE(pKV); return KVSTORE_OK; }
+  if( rc != KVSTORE_OK ){ KV_LEAVE(pKV); return rc; }
+  int iTable = pProbe->iTable;
+  kvstoreFreeCFStruct(pProbe);
+
+  /* Open write transaction */
+  if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+  rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
+  if( rc != SQLITE_OK ){
+    kvstoreRestorePersistentRead(pKV);
+    KV_LEAVE(pKV);
+    return rc;
+  }
+  pKV->inTrans = 2;
+
+  pCur = kvstoreAllocCursor();
+  if( !pCur ){ rc = KVSTORE_NOMEM; goto rename_fail; }
+  rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
+  if( rc != SQLITE_OK ) goto rename_fail;
+
+  /* Tombstone old entry */
+  int found = 0; i64 foundRowid = 0;
+  rc = kvstoreMetaSeekKey(pCur, zOld, nOld, &found, &foundRowid);
+  if( rc != SQLITE_OK ) goto rename_fail;
+  if( found ){
+    int res = 0;
+    rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
+    if( rc != SQLITE_OK || res != 0 ) goto rename_fail;
+    rc = kvstoreMetaWriteTombstone(pCur, foundRowid);
+    if( rc != SQLITE_OK ) goto rename_fail;
+  }
+
+  /* Write new entry with same root page */
+  {
+    unsigned char rootBytes[4];
+    rootBytes[0] = (iTable >> 24) & 0xFF;
+    rootBytes[1] = (iTable >> 16) & 0xFF;
+    rootBytes[2] = (iTable >>  8) & 0xFF;
+    rootBytes[3] =  iTable        & 0xFF;
+    unsigned char stackBuf[280];
+    unsigned char *pEncoded = NULL;
+    int nEncoded = kvstoreEncodeBlob(zNew, nNew, rootBytes, 4,
+                                     stackBuf, (int)sizeof(stackBuf), &pEncoded);
+    if( nEncoded < 0 ){ rc = KVSTORE_NOMEM; goto rename_fail; }
+    i64 newSlot = 0;
+    rc = kvstoreMetaFindSlot(pCur, zNew, nNew, &newSlot);
+    if( rc == SQLITE_OK ){
+      BtreePayload payload;
+      memset(&payload, 0, sizeof(payload));
+      payload.nKey  = newSlot;
+      payload.pData = pEncoded;
+      payload.nData = nEncoded;
+      rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+    }
+    if( pEncoded != stackBuf ) sqlite3_free(pEncoded);
+    if( rc != SQLITE_OK ) goto rename_fail;
+  }
+
+  kvstoreFreeCursor(pCur);
+  sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+  if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0)==SQLITE_OK ) pKV->inTrans = 1;
+  KV_LEAVE(pKV);
+  return KVSTORE_OK;
+
+rename_fail:
+  if( pCur ) kvstoreFreeCursor(pCur);
+  sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0); pKV->inTrans = 0;
+  if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0)==SQLITE_OK ) pKV->inTrans = 1;
+  KV_LEAVE(pKV);
+  return rc;
 }
 
 /* ======================================================================
@@ -2044,10 +2163,11 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return KVSTORE_ERROR;
   }
 
-  /* Names starting with "__" are reserved for internal use. */
-  if( nNameLen >= 2 && zName[0] == '_' && zName[1] == '_' ){
+  /* Names starting with "__" or "_snkv_" are reserved for internal use. */
+  if( (nNameLen >= 2 && zName[0]=='_' && zName[1]=='_') ||
+      strncmp(zName, "_snkv_", 6)==0 ){
     KV_ENTER(pKV);
-    kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
+    kvstoreSetError(pKV, "column family names starting with \"__\" or \"_snkv_\" are reserved");
     KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
@@ -2233,6 +2353,7 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return KVSTORE_NOMEM;
   }
 
+  kvstoreRegisterCF(pKV, pCF);
   KV_LEAVE(pKV);
 
   *ppCF = pCF;
@@ -2268,10 +2389,11 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return kvstore_cf_get_default(pKV, ppCF);
   }
 
-  /* Names starting with "__" are reserved for internal use. */
-  if( nNameLen >= 2 && zName[0] == '_' && zName[1] == '_' ){
+  /* Names starting with "__" or "_snkv_" are reserved for internal use. */
+  if( (nNameLen >= 2 && zName[0]=='_' && zName[1]=='_') ||
+      strncmp(zName, "_snkv_", 6)==0 ){
     KV_ENTER(pKV);
-    kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
+    kvstoreSetError(pKV, "column family names starting with \"__\" or \"_snkv_\" are reserved");
     KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
@@ -2393,22 +2515,51 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     snprintf(zKeyName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_KEY_PREFIX, zName);
     snprintf(zExpName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_EXP_PREFIX, zName);
     KVColumnFamily *pKeyCF2 = NULL, *pExpCF2 = NULL;
-    if( kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF2) == KVSTORE_OK &&
-        kvstoreCfOpenInternal(pKV, zExpName, &pExpCF2) == KVSTORE_OK ){
+    int rcKey = kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF2);
+    int rcExp = kvstoreCfOpenInternal(pKV, zExpName, &pExpCF2);
+    if( rcKey == KVSTORE_OK && rcExp == KVSTORE_OK ){
       pCF->pTtlKeyCF    = pKeyCF2;
       pCF->pTtlExpiryCF = pExpCF2;
       pCF->hasTtl       = 1;
       pCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF2);
     } else {
-      if( pKeyCF2 ) kvstoreFreeCFStruct(pKeyCF2);
-      if( pExpCF2 ) kvstoreFreeCFStruct(pExpCF2);
+      if( pKeyCF2 ){ kvstoreFreeCFStruct(pKeyCF2); pKeyCF2 = NULL; }
+      if( pExpCF2 ){ kvstoreFreeCFStruct(pExpCF2); pExpCF2 = NULL; }
+      /* One CF exists without the other — partial-write orphan. Drop it. */
+      if( rcKey == KVSTORE_OK || rcExp == KVSTORE_OK ){
+        if( pKV->inTrans == 1 ){ sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0; }
+        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+          pKV->inTrans = 2;
+          if( rcKey == KVSTORE_OK ) kvstoreDropHiddenCFNoLock(pKV, zKeyName);
+          if( rcExp == KVSTORE_OK ) kvstoreDropHiddenCFNoLock(pKV, zExpName);
+          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+        }
+        if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+      }
     }
   }
 
+  kvstoreRegisterCF(pKV, pCF);
   KV_LEAVE(pKV);
 
   *ppCF = pCF;
   return KVSTORE_OK;
+}
+
+static void kvstoreRegisterCF(KVStore *pKV, KVColumnFamily *pCF){
+  if( pKV->nCF >= pKV->nCFAlloc ){
+    int n = pKV->nCFAlloc ? pKV->nCFAlloc*2 : 4;
+    KVColumnFamily **a = sqlite3_realloc(pKV->apCF, n*sizeof(*a));
+    if( !a ) return;
+    pKV->apCF = a; pKV->nCFAlloc = n;
+  }
+  pKV->apCF[pKV->nCF++] = pCF;
+}
+
+static void kvstoreUnregisterCF(KVStore *pKV, KVColumnFamily *pCF){
+  for( int i = 0; i < pKV->nCF; i++ ){
+    if( pKV->apCF[i]==pCF ){ pKV->apCF[i]=pKV->apCF[--pKV->nCF]; return; }
+  }
 }
 
 /*
@@ -2426,6 +2577,7 @@ void kvstore_cf_close(KVColumnFamily *pCF){
 
   pCF->refCount--;
   if( pCF->refCount <= 0 && pCF != pKV->pDefaultCF ){
+    kvstoreUnregisterCF(pKV, pCF);
     shouldFree = 1;
   }
 
@@ -4310,6 +4462,7 @@ int kvstore_sync(KVStore *pKV){
     rc = sqlite3BtreeCommit(pKV->pBt);
     if( rc == SQLITE_OK ){
       pKV->inTrans = 0;
+      if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0)==SQLITE_OK ) pKV->inTrans = 1;
     }else{
       kvstoreCheckCorruption(pKV, rc);
       kvstoreSetError(pKV, "failed to sync database: error %d", rc);
@@ -4487,8 +4640,9 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
         if( rc != SQLITE_OK ){ sqlite3_free(name); break; }
         name[nameLen] = '\0';
 
-        /* Skip internal reserved CFs (names starting with "__"). */
-        if( nameLen >= 2 && name[0] == '_' && name[1] == '_' ){
+        /* Skip internal reserved CFs (names starting with "__" or "_snkv_"). */
+        if( (nameLen >= 2 && name[0]=='_' && name[1]=='_') ||
+            strncmp(name, "_snkv_", 6)==0 ){
           sqlite3_free(name);
         } else {
           if( nCount >= nAlloc ){
@@ -4659,9 +4813,9 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   }
 
   /* Cannot drop internal CFs via the public API */
-  if( zName[0]=='_' && zName[1]=='_' ){
+  if( (zName[0]=='_' && zName[1]=='_') || strncmp(zName, "_snkv_", 6)==0 ){
     KV_ENTER(pKV);
-    kvstoreSetError(pKV, "column family names starting with \"__\" are reserved");
+    kvstoreSetError(pKV, "column family names starting with \"__\" or \"_snkv_\" are reserved");
     KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
@@ -4673,6 +4827,15 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
   if( pKV->closing ){
     KV_LEAVE(pKV);
     return KVSTORE_ERROR;
+  }
+
+  /* Refuse to drop a CF that still has open handles. */
+  for( int i = 0; i < pKV->nCF; i++ ){
+    if( pKV->apCF[i] && strcmp(pKV->apCF[i]->zName, zName)==0 ){
+      kvstoreSetError(pKV, "cannot drop \"%s\": handle still open", zName);
+      KV_LEAVE(pKV);
+      return KVSTORE_BUSY;
+    }
   }
 
   /* Start write transaction (release persistent read first if active). */

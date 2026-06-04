@@ -22,6 +22,9 @@
 #include "kvstore_vec.h"
 #include "usearch.h"
 
+extern int kvstoreGetOrCreateInternalCF(KVStore*, const char*, KVColumnFamily**);
+extern int kvstoreRenameHiddenCF(KVStore*, const char*, const char*);
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -44,11 +47,11 @@ int goFilteredSearchCallback(usearch_key_t key, void *state) {
 /* -----------------------------------------------------------------------
 ** Internal CF names
 ** ----------------------------------------------------------------------- */
-#define CF_VEC   "_snkv_vec_"
-#define CF_IDK   "_snkv_vec_idk_"
-#define CF_IDI   "_snkv_vec_idi_"
-#define CF_META  "_snkv_vec_meta_"
-#define CF_TAGS  "_snkv_vec_tags_"
+#define CF_VEC   "__snkv_vec__"
+#define CF_IDK   "__snkv_vec_idk__"
+#define CF_IDI   "__snkv_vec_idi__"
+#define CF_META  "__snkv_vec_meta__"
+#define CF_TAGS  "__snkv_vec_tags__"
 
 /* Meta keys */
 static const char META_NDIM[]    = "ndim";
@@ -172,11 +175,7 @@ static const char *dtypeToStr(int dtype) {
 ** Open-or-create a column family
 ** ----------------------------------------------------------------------- */
 static int getOrCreateCF(KVStore *pKV, const char *zName, KVColumnFamily **ppCF) {
-    int rc = kvstore_cf_open(pKV, zName, ppCF);
-    if (rc == KVSTORE_NOTFOUND) {
-        rc = kvstore_cf_create(pKV, zName, ppCF);
-    }
-    return rc;
+    return kvstoreGetOrCreateInternalCF(pKV, zName, ppCF);
 }
 
 /* -----------------------------------------------------------------------
@@ -488,6 +487,18 @@ int kvstore_vec_open(
         if (!pVS->zSidecarPath) { rc = KVSTORE_NOMEM; goto fail; }
         memcpy(pVS->zSidecarPath, zPath, pathLen);
         memcpy(pVS->zSidecarPath + pathLen, ".usearch", 9); /* includes NUL */
+    }
+
+    /* Migrate old single-underscore CF names to double-underscore (one-time, no-op if done). */
+    {
+        static const char *apOld[] = {
+            "_snkv_vec_", "_snkv_vec_idk_", "_snkv_vec_idi_",
+            "_snkv_vec_meta_", "_snkv_vec_tags_"
+        };
+        static const char *apNew[] = { CF_VEC, CF_IDK, CF_IDI, CF_META, CF_TAGS };
+        for( int i = 0; i < 5; i++ ){
+            kvstoreRenameHiddenCF(pVS->pKV, apOld[i], apNew[i]);
+        }
     }
 
     /* Open four core CFs */
