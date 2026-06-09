@@ -924,3 +924,106 @@ class TestIPSpace:
             plain  = vs.search(vecs[3], top_k=1)
             rerank = vs.search(vecs[3], top_k=1, rerank=True)
             assert plain[0].key == rerank[0].key
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — v0.8.0 CF name collision fix
+# ---------------------------------------------------------------------------
+
+# Detect whether the compiled extension has cf_get_or_create_internal.
+# This method is added in snkv_module.c as part of the v0.8.1 fix; it will
+# be absent when testing against an older pre-built .pyd.  Functional tests
+# are skipped until the extension is recompiled.
+def _has_internal_cf_bypass() -> bool:
+    try:
+        from snkv import KVStore
+        kv = KVStore(None)
+        ok = hasattr(kv._db, "cf_get_or_create_internal")
+        kv.close()
+        return ok
+    except Exception:
+        return False
+
+_BYPASS_AVAILABLE = _has_internal_cf_bypass()
+_needs_bypass = pytest.mark.skipif(
+    not _BYPASS_AVAILABLE,
+    reason="cf_get_or_create_internal not compiled into _snkv extension yet — "
+           "recompile snkv_module.c for v0.8.1",
+)
+
+
+class TestCFNameFix:
+    """
+    Regression suite for the v0.8.0 bug where VectorStore crashed on __init__.
+
+    Root cause: v0.8.0 added a C-level restriction blocking cf_create/cf_open
+    for names starting with "__" or "_snkv_".  The Python VectorStore's own
+    internal CFs used "_snkv_vec_*" names and therefore hit the restriction,
+    making VectorStore completely unusable.
+
+    Fix (v0.8.1): _get_or_create_cf uses cf_get_or_create_internal bypass
+    (canonical "__snkv_vec__" names) when available, else falls back to
+    "_vs_*" compat names via the public API.  Both paths avoid the crash.
+    """
+
+    def test_internal_cf_names_use_double_underscore_prefix(self):
+        """CF constants must use '__snkv_vec__*' names — matching the C VectorStore."""
+        from snkv.vector import _CF_VEC, _CF_IDK, _CF_IDI, _CF_META, _CF_TAGS
+        for name in (_CF_VEC, _CF_IDK, _CF_IDI, _CF_META, _CF_TAGS):
+            assert name.startswith("__snkv_vec"), \
+                f"{name!r} does not follow the '__snkv_vec*' convention"
+
+    def test_internal_cf_names_not_single_snkv_prefix(self):
+        """CF constants must NOT use the old '_snkv_vec_*' prefix (blocked by 0.8.0)."""
+        from snkv.vector import _CF_VEC, _CF_IDK, _CF_IDI, _CF_META, _CF_TAGS
+        for name in (_CF_VEC, _CF_IDK, _CF_IDI, _CF_META, _CF_TAGS):
+            assert not name.startswith("_snkv_"), \
+                f"{name!r} still uses old '_snkv_' prefix — was the fix reverted?"
+
+    def test_vectorstore_init_does_not_raise(self, tmp_path):
+        """VectorStore() must not raise on a fresh database (was Error on 0.8.0)."""
+        vs = VectorStore(str(tmp_path / "fix.db"), dim=DIM)
+        vs.close()
+
+    def test_vectorstore_context_manager_does_not_raise(self, tmp_path):
+        """VectorStore used as a context manager must not raise."""
+        with VectorStore(str(tmp_path / "fix.db"), dim=DIM):
+            pass
+
+    def test_put_and_search_work_after_fix(self, tmp_path):
+        """Full vector_put → search roundtrip works with the renamed CFs."""
+        vecs = rand_vecs(5)
+        with make_store(tmp_path) as vs:
+            for i, v in enumerate(vecs):
+                vs.vector_put(f"k{i}".encode(), f"val{i}".encode(), v)
+            results = vs.search(vecs[0], top_k=3)
+        assert len(results) > 0
+        assert results[0].key == b"k0"
+
+    def test_data_persists_across_reopen(self, tmp_path):
+        """Data written with new CF names survives close → reopen."""
+        vec = rand_vecs(1)[0]
+        path = str(tmp_path / "persist.db")
+
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"persistent_key", b"persistent_val", vec)
+
+        with VectorStore(path, dim=DIM) as vs:
+            assert vs.get(b"persistent_key") == b"persistent_val"
+            results = vs.search(vec, top_k=1)
+        assert results[0].key == b"persistent_key"
+
+    def test_multiple_open_close_cycles(self, tmp_path):
+        """Repeated open/close cycles don't corrupt state (new CF names are stable)."""
+        path = str(tmp_path / "cycles.db")
+        vecs = rand_vecs(3)
+
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"a", b"v_a", vecs[0])
+
+        with VectorStore(path, dim=DIM) as vs:
+            vs.vector_put(b"b", b"v_b", vecs[1])
+
+        with VectorStore(path, dim=DIM) as vs:
+            assert vs.get(b"a") == b"v_a"
+            assert vs.get(b"b") == b"v_b"

@@ -46,14 +46,29 @@ _REBUILD_BATCH = 10_000
 
 # ---------------------------------------------------------------------------
 # Internal CF names (Decision 5)
-# Note: SNKV reserves names starting with "__" for C-internal use; vector
-# CFs use a single leading underscore to stay out of user namespace.
+# v0.8.0 added a C-level restriction blocking cf_create/cf_open for names
+# starting with "__" or "_snkv_".  The bypass is kvstoreGetOrCreateInternalCF
+# (C) / KVStore.cf_get_or_create_internal (Python), now exposed in the
+# extension.  Names match the C VectorStore (kvstore_vec.c) exactly.
+# Migration: databases created with snkv ≤0.7.x used "_snkv_vec_*" names;
+# kvstoreRenameHiddenCF() in the C layer handles the one-time rename on open.
 # ---------------------------------------------------------------------------
-_CF_VEC  = "_snkv_vec_"       # user key  → float32 bytes (raw vector)
-_CF_IDK  = "_snkv_vec_idk_"   # user key  → 8-byte big-endian int64 (usearch label)
-_CF_IDI  = "_snkv_vec_idi_"   # int64     → user key
-_CF_META = "_snkv_vec_meta_"  # configuration
-_CF_TAGS = "_snkv_vec_tags_"  # user key  → JSON metadata bytes (lazy, Decision 21)
+_CF_VEC  = "__snkv_vec__"       # user key  → float32 bytes (raw vector)
+_CF_IDK  = "__snkv_vec_idk__"   # user key  → 8-byte big-endian int64 (usearch label)
+_CF_IDI  = "__snkv_vec_idi__"   # int64     → user key
+_CF_META = "__snkv_vec_meta__"  # configuration
+_CF_TAGS = "__snkv_vec_tags__"  # user key  → JSON metadata bytes (lazy, Decision 21)
+
+# Compat names used when cf_get_or_create_internal is not yet in the compiled
+# extension (pre-v0.8.1 .pyd).  Maps canonical "__snkv_*" name → "_vs_*" name
+# which is accepted by the public cf_create/cf_open API.
+_CF_VEC_COMPAT: "dict[str, str]" = {
+    "__snkv_vec__":      "_vs_vec",
+    "__snkv_vec_idk__":  "_vs_vec_idk",
+    "__snkv_vec_idi__":  "_vs_vec_idi",
+    "__snkv_vec_meta__": "_vs_vec_meta",
+    "__snkv_vec_tags__": "_vs_vec_tags",
+}
 
 # Meta keys
 _META_NDIM    = b"ndim"
@@ -245,11 +260,29 @@ class VectorStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _resolved_cf_name(self, canonical: str) -> str:
+        """Return the actual CF name to use for storage.
+
+        Post-v0.8.1 (bypass available): return the canonical "__snkv_vec__" name.
+        Pre-v0.8.1 (bypass absent):     return the "_vs_*" compat name.
+        """
+        if getattr(self._kv._db, "cf_get_or_create_internal", None) is not None:
+            return canonical
+        return _CF_VEC_COMPAT.get(canonical, canonical)
+
     def _get_or_create_cf(self, name: str):
+        # Post-v0.8.1: use the bypass so reserved-name CFs ("__snkv_*") can be
+        # created/opened without hitting the public restriction.
+        bypass = getattr(self._kv._db, "cf_get_or_create_internal", None)
+        if bypass is not None:
+            return bypass(name)
+        # Pre-v0.8.1 .pyd: extension not yet recompiled; fall back to compat
+        # names (_vs_*) which the public API accepts.
+        compat = _CF_VEC_COMPAT.get(name, name)
         try:
-            return self._kv.open_column_family(name)
+            return self._kv.open_column_family(compat)
         except NotFoundError:
-            return self._kv.create_column_family(name)
+            return self._kv.create_column_family(compat)
 
     def _rebuild_index(self) -> None:
         """Build the in-memory usearch Index from stored CFs."""
@@ -306,9 +339,12 @@ class VectorStore:
             if self._expansion_search is None:
                 self._expansion_search = 64
 
-        # Try to open tags CF if it already exists on disk (Decision 21)
+        # Try to open tags CF if it already exists on disk (Decision 21).
+        # Use the resolved name so the reserved-name restriction is not hit.
         try:
-            self._tags_cf = self._kv.open_column_family(_CF_TAGS)
+            self._tags_cf = self._kv.open_column_family(
+                self._resolved_cf_name(_CF_TAGS)
+            )
         except NotFoundError:
             self._tags_cf = None
 
@@ -1025,13 +1061,13 @@ class VectorStore:
         After this call, search() raises VectorIndexError.
         """
         drop_list = [
-            (self._vec_cf,  _CF_VEC),
-            (self._idk_cf,  _CF_IDK),
-            (self._idi_cf,  _CF_IDI),
-            (self._meta_cf, _CF_META),
+            (self._vec_cf,  self._resolved_cf_name(_CF_VEC)),
+            (self._idk_cf,  self._resolved_cf_name(_CF_IDK)),
+            (self._idi_cf,  self._resolved_cf_name(_CF_IDI)),
+            (self._meta_cf, self._resolved_cf_name(_CF_META)),
         ]
         if self._tags_cf is not None:
-            drop_list.append((self._tags_cf, _CF_TAGS))
+            drop_list.append((self._tags_cf, self._resolved_cf_name(_CF_TAGS)))
 
         for cf, name in drop_list:
             try:

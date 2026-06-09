@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snkv"
-version = "0.8.0"
+version = "0.8.1"
 requires-python = ">=3.8"
 description = "Crash-safe embedded key-value store — encryption (XChaCha20-Poly1305), TTL, reverse iterators, iterator seek, put_if_absent, column families, ACID transactions, vector search (HNSW), snkvctl CLI"
 readme = "README.md"

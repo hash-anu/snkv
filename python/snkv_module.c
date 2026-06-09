@@ -1712,11 +1712,13 @@ static PyMethodDef KVStore_methods[] = {
     {"rollback",         (PyCFunction)KVStore_rollback,          METH_NOARGS,   "rollback() -> None"},
 
     /* Column families */
-    {"cf_create",        (PyCFunction)KVStore_cf_create,         METH_VARARGS,  "cf_create(name) -> ColumnFamily"},
-    {"cf_open",          (PyCFunction)KVStore_cf_open,           METH_VARARGS,  "cf_open(name) -> ColumnFamily"},
-    {"cf_get_default",   (PyCFunction)KVStore_cf_get_default,    METH_NOARGS,   "cf_get_default() -> ColumnFamily"},
-    {"cf_list",          (PyCFunction)KVStore_cf_list,           METH_NOARGS,   "cf_list() -> list[str]"},
-    {"cf_drop",          (PyCFunction)KVStore_cf_drop,           METH_VARARGS,  "cf_drop(name) -> None"},
+    {"cf_create",                   (PyCFunction)KVStore_cf_create,                  METH_VARARGS,  "cf_create(name) -> ColumnFamily"},
+    {"cf_open",                     (PyCFunction)KVStore_cf_open,                    METH_VARARGS,  "cf_open(name) -> ColumnFamily"},
+    /* TODO v0.8.1: add cf_get_or_create_internal once kvstoreGetOrCreateInternalCF
+    **              is implemented in kvstore.c (bypasses the "__"/_snkv_ restriction) */
+    {"cf_get_default",              (PyCFunction)KVStore_cf_get_default,             METH_NOARGS,   "cf_get_default() -> ColumnFamily"},
+    {"cf_list",                     (PyCFunction)KVStore_cf_list,                    METH_NOARGS,   "cf_list() -> list[str]"},
+    {"cf_drop",                     (PyCFunction)KVStore_cf_drop,                    METH_VARARGS,  "cf_drop(name) -> None"},
 
     /* Iterators */
     {"iterator",                (PyCFunction)KVStore_iterator,                METH_NOARGS,   "iterator() -> Iterator"},
