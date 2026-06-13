@@ -133,7 +133,7 @@ def assert_ttl(db):
     assert val == b"alive"
     remaining = db.ttl(b"ttl:live")
     assert remaining is not None
-    assert 0 < remaining <= 60.0 + 0.01  # allow ~10ms for timestamp rounding in C layer
+    assert 0 < remaining <= 60.1  # allow 100ms for Windows clock quantization (~15ms buckets)
 
     # Expired key via direct C-level timestamp (epoch + 1 ms = always past)
     db._db.put_ttl(b"ttl:dead", b"ghost", 1)

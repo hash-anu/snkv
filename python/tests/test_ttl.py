@@ -107,7 +107,7 @@ def test_ttl_positive_for_live_key(db):
     db.put(b"k", b"v", ttl=10)
     remaining = db.ttl(b"k")
     assert remaining is not None
-    assert 0 < remaining <= 10 + 0.01  # allow ~10ms for timestamp rounding in C layer
+    assert 0 < remaining <= 10.1  # allow 100ms for Windows clock quantization (~15ms buckets)
 
 
 def test_ttl_none_for_permanent_key(db):
@@ -271,7 +271,7 @@ def test_ttl_survives_store_reopen(db_path):
     with KVStore(db_path) as db:
         assert db.get(b"persistent") == b"value"
         remaining = db.ttl(b"persistent")
-        assert remaining is not None and 0 < remaining <= 60
+        assert remaining is not None and 0 < remaining <= 60.1
 
 
 def test_expired_key_gone_after_reopen(db_path):
