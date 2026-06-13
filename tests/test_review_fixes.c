@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include "include/kvstore.h"
+#include "kvstore.h"
 
 static int nPass = 0, nFail = 0;
 #define CHECK(cond, msg) do{ \

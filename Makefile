@@ -80,7 +80,8 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_regressions.c \
            tests/test_fault_inject.c \
            tests/test_new_gaps.c \
-           tests/test_fullmutex.c
+           tests/test_fullmutex.c \
+	   tests/test_review_fixes.c
 TEST_BIN := $(TEST_SRC:.c=$(TARGET_EXT))
 
 # test_multiprocess uses fork() — POSIX only (Linux / macOS)
