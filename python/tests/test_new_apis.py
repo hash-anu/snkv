@@ -207,7 +207,7 @@ def test_put_if_absent_with_ttl(db):
     assert result is True
     remaining = db.ttl(b"key")
     assert remaining is not None
-    assert 0 < remaining <= 3600 + 0.01  # allow ~10ms for timestamp rounding in C layer
+    assert 0 < remaining <= 3600.1  # allow 100ms for Windows clock quantization (~15ms buckets)
 
 
 def test_put_if_absent_existing_ttl(db):
