@@ -2905,27 +2905,33 @@ static int kvstore_cf_get_internal(
         /* Expired — invalidate cached cursor, upgrade tx, lazy-delete. */
         kvstoreFreeCursor(pCF->pReadCur);
         pCF->pReadCur = NULL;
-        if( pKV->inTrans == 1 ){
-          kvstoreInvalidateReadCursors(pKV);
-          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
-          pKV->inTrans = 2;
-          kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
-          kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
-          unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
-          unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
-          if( pExpKey ){
-            memcpy(pExpKey, expBuf, 8);
-            memcpy(pExpKey + 8, pKey, nKey);
-            kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
-            sqlite3_free(pExpKey);
+        if( pKV->inTrans == 2 ){
+          /* Caller owns this write transaction (via kvstore_begin) — do not
+          ** commit or mutate it here. Defer reclamation to a later get or
+          ** an explicit purge once the caller's transaction has ended. */
+        }else{
+          if( pKV->inTrans == 1 ){
+            kvstoreInvalidateReadCursors(pKV);
+            sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
           }
-          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
-          pKV->stats.nTtlExpired++;
-          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-          kvstoreAutoCheckpoint(pKV);
-          if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+          if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+            pKV->inTrans = 2;
+            kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
+            kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+            unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
+            unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
+            if( pExpKey ){
+              memcpy(pExpKey, expBuf, 8);
+              memcpy(pExpKey + 8, pKey, nKey);
+              kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
+              sqlite3_free(pExpKey);
+            }
+            if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+            pKV->stats.nTtlExpired++;
+            sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+            kvstoreAutoCheckpoint(pKV);
+            if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+          }
         }
         KV_LEAVE(pKV);
         sqlite3_mutex_leave(pCF->pMutex);
@@ -3219,27 +3225,32 @@ static int kvstore_cf_exists_internal(
       if( kvstore_now_ms() >= expireMs ){
         kvstoreFreeCursor(pCF->pReadCur);
         pCF->pReadCur = NULL;
-        if( pKV->inTrans == 1 ){
-          kvstoreInvalidateReadCursors(pKV);
-          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
-          pKV->inTrans = 2;
-          kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
-          kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
-          unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
-          unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
-          if( pExpKey ){
-            memcpy(pExpKey, expBuf, 8);
-            memcpy(pExpKey + 8, pKey, nKey);
-            kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
-            sqlite3_free(pExpKey);
+        if( pKV->inTrans == 2 ){
+          /* Caller owns this write transaction — defer reclamation, see
+          ** kvstore_cf_get_internal for the same guard and rationale. */
+        }else{
+          if( pKV->inTrans == 1 ){
+            kvstoreInvalidateReadCursors(pKV);
+            sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
           }
-          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
-          pKV->stats.nTtlExpired++;
-          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-          kvstoreAutoCheckpoint(pKV);
-          if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+          if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+            pKV->inTrans = 2;
+            kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
+            kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+            unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
+            unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
+            if( pExpKey ){
+              memcpy(pExpKey, expBuf, 8);
+              memcpy(pExpKey + 8, pKey, nKey);
+              kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
+              sqlite3_free(pExpKey);
+            }
+            if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
+            pKV->stats.nTtlExpired++;
+            sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+            kvstoreAutoCheckpoint(pKV);
+            if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+          }
         }
         *pExists = 0;
         KV_LEAVE(pKV);
@@ -4414,15 +4425,14 @@ int kvstore_sync(KVStore *pKV){
   }
 
   if( pKV->inTrans == 2 ){
-    /* Write transaction active – commit and re-open */
-    rc = sqlite3BtreeCommit(pKV->pBt);
-    if( rc == SQLITE_OK ){
-      pKV->inTrans = 0;
-      if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0)==SQLITE_OK ) pKV->inTrans = 1;
-    }else{
-      kvstoreCheckCorruption(pKV, rc);
-      kvstoreSetError(pKV, "failed to sync database: error %d", rc);
-    }
+    /* An explicit write transaction (opened via kvstore_begin) is active.
+    ** It belongs to the caller — committing it here to "sync" would make
+    ** their in-progress writes durable and unrollbackable behind their
+    ** back. Require them to commit or rollback first. */
+    kvstoreSetError(pKV, "cannot sync: an explicit transaction is active; "
+                          "commit or rollback first");
+    KV_LEAVE(pKV);
+    return KVSTORE_ERROR;
   }
 
   KV_LEAVE(pKV);
@@ -5140,28 +5150,33 @@ int kvstore_cf_get_ttl(
         /* Expired: lazy-delete from data CF, key CF, and expiry CF. */
         if( pCF->pReadCur ){ kvstoreFreeCursor(pCF->pReadCur); pCF->pReadCur = NULL; }
         if( pnRemaining ) *pnRemaining = 0;
-        if( pKV->inTrans == 1 ){
-          kvstoreInvalidateReadCursors(pKV);
-          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
-          pKV->inTrans = 2;
-          kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
-          kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
-          unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
-          unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
-          if( pExpKey ){
-            memcpy(pExpKey, expBuf, 8);
-            memcpy(pExpKey + 8, pKey, nKey);
-            kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
-            sqlite3_free(pExpKey);
+        if( pKV->inTrans == 2 ){
+          /* Caller owns this write transaction — defer reclamation, see
+          ** kvstore_cf_get_internal for the same guard and rationale. */
+        }else{
+          if( pKV->inTrans == 1 ){
+            kvstoreInvalidateReadCursors(pKV);
+            sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
           }
-          sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
-          kvstoreAutoCheckpoint(pKV);
-          if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+          if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
+            pKV->inTrans = 2;
+            kvstoreRawBtreeDelete(pKV, pCF->iTable, pKey, nKey);
+            kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pKey, nKey);
+            unsigned char expBuf[8]; kvstoreEncodeBE64(expBuf, expireMs);
+            unsigned char *pExpKey = (unsigned char*)sqlite3Malloc(8 + nKey);
+            if( pExpKey ){
+              memcpy(pExpKey, expBuf, 8);
+              memcpy(pExpKey + 8, pKey, nKey);
+              kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable, pExpKey, 8 + nKey);
+              sqlite3_free(pExpKey);
+            }
+            sqlite3BtreeCommit(pKV->pBt); pKV->inTrans = 0;
+            kvstoreAutoCheckpoint(pKV);
+            if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+          }
+          pKV->stats.nTtlExpired++;
+          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
         }
-        pKV->stats.nTtlExpired++;
-        if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
         KV_LEAVE(pKV); sqlite3_mutex_leave(pCF->pMutex);
         return KVSTORE_NOTFOUND;
       }
