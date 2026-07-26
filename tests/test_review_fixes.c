@@ -207,12 +207,94 @@ static void test_errmsg_stability(void){
   cleanup(db);
 }
 
+/* ----------------------------------------------------------------------
+** Test 5 (fix: caller-owned write transaction protected from internal
+** commits):
+** get()/exists()/get_ttl()'s lazy TTL-expiry cleanup, and kvstore_sync(),
+** used to manage pKV->inTrans as if they always owned it. If the CALLER
+** had an explicit write transaction open (kvstore_begin(kv,1)), touching
+** an expired key — or just calling sync() — silently committed the
+** caller's in-flight, uncommitted writes and reset the transaction state
+** out from under them. A later kvstore_rollback() then had nothing left
+** to undo. Verify: uncommitted writes made alongside an expired-key
+** touch, or alongside a sync() call, are still rolled back correctly.
+** -------------------------------------------------------------------- */
+static void test_txn_owner_protected(void){
+  const char *db = "t_rf_txn.db";
+  printf("Test 5: expired-key access / sync() must not commit caller's open txn\n");
+  cleanup(db);
+
+  KVStore *kv = NULL;
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL) == KVSTORE_OK, "open");
+
+  int64_t now = kvstore_now_ms();
+  CHECK(kvstore_put_ttl(kv, "expA", 4, "old", 3, now - 5000) == KVSTORE_OK,
+        "seed key A already expired");
+  CHECK(kvstore_put_ttl(kv, "expB", 4, "old", 3, now - 5000) == KVSTORE_OK,
+        "seed key B already expired");
+  CHECK(kvstore_put_ttl(kv, "expC", 4, "old", 3, now - 5000) == KVSTORE_OK,
+        "seed key C already expired");
+
+  /* --- 5a: get() touching an expired key must not commit the txn --- */
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "5a begin write txn");
+  CHECK(kvstore_put(kv, "dirtyA", 6, "uncommitted", 11) == KVSTORE_OK,
+        "5a put uncommitted value");
+  void *v = NULL; int n = 0;
+  int rc = kvstore_get(kv, "expA", 4, &v, &n);
+  CHECK(rc == KVSTORE_NOTFOUND, "5a get(expired) returns NOTFOUND");
+  if( v ) snkv_free(v);
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "5a rollback");
+  rc = kvstore_get(kv, "dirtyA", 6, &v, &n);
+  CHECK(rc == KVSTORE_NOTFOUND, "5a rollback discarded the uncommitted put");
+  if( v ) snkv_free(v);
+
+  /* --- 5b: exists() touching an expired key must not commit the txn --- */
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "5b begin write txn");
+  CHECK(kvstore_put(kv, "dirtyB", 6, "uncommitted", 11) == KVSTORE_OK,
+        "5b put uncommitted value");
+  int exists = -1;
+  rc = kvstore_exists(kv, "expB", 4, &exists);
+  CHECK(rc == KVSTORE_OK && exists == 0, "5b exists(expired) returns false");
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "5b rollback");
+  rc = kvstore_get(kv, "dirtyB", 6, &v, &n);
+  CHECK(rc == KVSTORE_NOTFOUND, "5b rollback discarded the uncommitted put");
+  if( v ) snkv_free(v);
+
+  /* --- 5c: get_ttl() touching an expired key must not commit the txn --- */
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "5c begin write txn");
+  CHECK(kvstore_put(kv, "dirtyC", 6, "uncommitted", 11) == KVSTORE_OK,
+        "5c put uncommitted value");
+  int64_t remaining = -2;
+  rc = kvstore_get_ttl(kv, "expC", 4, &v, &n, &remaining);
+  CHECK(rc == KVSTORE_NOTFOUND, "5c get_ttl(expired) returns NOTFOUND");
+  if( v ) snkv_free(v);
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "5c rollback");
+  rc = kvstore_get(kv, "dirtyC", 6, &v, &n);
+  CHECK(rc == KVSTORE_NOTFOUND, "5c rollback discarded the uncommitted put");
+  if( v ) snkv_free(v);
+
+  /* --- 5d: sync() must refuse instead of committing the caller's txn --- */
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "5d begin write txn");
+  CHECK(kvstore_put(kv, "dirtyD", 6, "uncommitted", 11) == KVSTORE_OK,
+        "5d put uncommitted value");
+  rc = kvstore_sync(kv);
+  CHECK(rc != KVSTORE_OK, "5d sync() refuses while an explicit txn is open");
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "5d rollback");
+  rc = kvstore_get(kv, "dirtyD", 6, &v, &n);
+  CHECK(rc == KVSTORE_NOTFOUND, "5d rollback discarded the uncommitted put");
+  if( v ) snkv_free(v);
+
+  kvstore_close(kv);
+  cleanup(db);
+}
+
 int main(void){
   printf("=== test_review_fixes ===\n");
   test_encrypt_user_cf_only();
   test_checkpoint_after_get();
   test_iterator_ttl_skip();
   test_errmsg_stability();
+  test_txn_owner_protected();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
