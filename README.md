@@ -256,7 +256,6 @@ make test
 > standard Unix tools that are only available inside the MSYS2 environment.
 
 ---
----
 
 ### 10 GB Crash-Safety Stress Test
 
