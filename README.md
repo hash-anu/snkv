@@ -20,8 +20,7 @@ A simple, crash-safe embedded key-value store
 [![Peak Memory](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/hash-anu/snkv/badges/memory.json)](https://github.com/hash-anu/snkv/actions/workflows/c-cpp.yml)
 [![GitHub Issues](https://img.shields.io/github/issues/hash-anu/snkv?label=open%20issues&color=orange)](https://github.com/hash-anu/snkv/issues)
 [![GitHub Closed Issues](https://img.shields.io/github/issues-closed/hash-anu/snkv?label=closed%20issues&color=green)](https://github.com/hash-anu/snkv/issues?q=is%3Aissue+is%3Aclosed)
-[![PyPI Downloads](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/hash-anu/snkv/badges/pypi-downloads.json)](https://pypistats.org/packages/snkv)
-[![Launched](https://img.shields.io/badge/launched-Feb%202026-informational)](https://pypi.org/project/snkv/#history)
+[![Launched](https://img.shields.io/badge/launched-Feb%202026-informational)](https://github.com/hash-anu/snkv)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/EUb4Y5qE)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/hash-anu/snkv/blob/master/LICENSE)
 
@@ -83,20 +82,7 @@ int n;
 kvstore_purge_expired(db, &n);  /* bulk-delete all expired keys */
 ```
 
-```python
-# Python API
-db.put(b"session", b"tok123", ttl=60)      # expires in 60 seconds
-db[b"token", 30] = b"bearer-xyz"           # dict-style TTL
-
-val = db.get(b"session")                   # None if expired
-try:
-    remaining = db.ttl(b"session")         # seconds remaining, or None if no expiry
-except NotFoundError:
-    remaining = None                        # key does not exist
-n = db.purge_expired()                     # bulk-delete expired keys
-```
-
-TTL is supported on both the default store and on column families. Expired keys are lazily deleted on `get()` and `exists()` — consistent results without a background thread.
+TTL is supported on both the default store and on column families. Expired keys are lazily deleted on `kvstore_get()` and `kvstore_exists()` — consistent results without a background thread.
 
 ---
 
@@ -119,15 +105,7 @@ kvstore_reencrypt(db, "new-pass", 8);              /* change password in-place *
 kvstore_close(db);
 ```
 
-```python
-# Python API
-with KVStore.open_encrypted("mydb.db", b"hunter2") as db:
-    db[b"secret"] = b"classified"       # encrypted transparently
-    print(db[b"secret"])                # b"classified" — decrypted on read
-    db.reencrypt(b"new-pass")           # change password in-place
-```
-
-**Cryptographic details:** XChaCha20-Poly1305 per value · Argon2id KDF (64 MB, 3 iterations) · 40-byte overhead per value · encryption key wiped from memory on close · wrong password returns `KVSTORE_AUTH_FAILED` / raises `AuthError`.
+**Cryptographic details:** XChaCha20-Poly1305 per value · Argon2id KDF (64 MB, 3 iterations) · 40-byte overhead per value · encryption key wiped from memory on close · wrong password returns `KVSTORE_AUTH_FAILED`.
 
 ---
 
@@ -279,38 +257,13 @@ make test
 
 ---
 
-### Python Bindings
+### Python Bindings (unmaintained)
 
-Available on PyPI — no compiler needed:
-
-```bash
-pip install snkv           # KV store, TTL, encryption, column families
-pip install snkv[vector]   # + HNSW vector search (usearch + numpy)
-```
-
-```python
-from snkv import KVStore
-
-with KVStore("mydb.db") as db:
-    db["hello"] = "world"
-    print(db["hello"].decode())   # world
-```
-
-**Vector search** — integrated HNSW approximate nearest-neighbour index backed by [usearch](https://github.com/unum-cloud/usearch). Vectors and KV data share the same `.db` file. Supports metadata filtering, exact rerank, TTL on vectors, quantization (f32/f16/i8), sidecar index persistence, and encryption. Available in both C and Python.
-
-```python
-from snkv.vector import VectorStore
-import numpy as np
-
-with VectorStore("store.db", dim=128, space="cosine") as vs:
-    vs.vector_put(b"doc:1", b"hello world", np.random.rand(128).astype("f4"))
-    results = vs.search(np.random.rand(128).astype("f4"), top_k=5)
-    for r in results:
-        print(r.key, r.distance, r.value)
-```
-
-Full documentation — installation, API reference, examples, and thread-safety notes — is in
-**[python/README.md](python/README.md)**.
+The `master` branch contains only the C library. The Python bindings (`snkv` on PyPI,
+the `snkvctl` CLI, and the Python vector-search layer) are no longer maintained here.
+Their last version is kept on the
+**[`python_bindings`](https://github.com/hash-anu/snkv/tree/python_bindings)** branch — use
+that branch if you need them.
 
 ---
 
@@ -427,9 +380,7 @@ If you want to benchmark SNKV against LMDB or RocksDB, the benchmark harnesses a
 - **Single-header** — drop `snkv.h` into any C/C++ project
 - **Zero memory leaks** — verified with Valgrind
 - **SSD-friendly** — WAL appends sequentially, reducing random writes
-- **Python Bindings** — idiomatic Python 3.8+ API with dict-style access, TTL, encryption, column families, iterators, and typed exceptions — see [python/README.md](python/README.md)
-- **Vector Search (C)** — native HNSW index via `make vector`; ANN search, exact rerank, TTL, sidecar persistence, encryption, batch insert — see [examples/vector.c](examples/vector.c)
-- **Vector Search (Python)** — `pip install snkv[vector]`; metadata filtering, exact rerank, TTL on vectors, quantization (f32/f16/i8), sidecar persistence — see [python/README.md#vector-search](python/README.md#vector-search)
+- **Vector Search** — native HNSW index via `make vector`; ANN search, exact rerank, TTL, sidecar persistence, encryption, batch insert — see [examples/vector.c](examples/vector.c)
 - **Can be cross compiled for Android devices** - snkv is embedded database with vector support which has all required features so it can be cross compiled for Android platforms
 - **Ideal for AI workloads** - SNKV built solely on top of battle tested b-tree engine of sqlite, additionally by default read transaction is enabled, so read operations are faster as well as since it bypass sql layer it removed overhead of row metadata write operations and directly write data to b-tree, Which improves 1.5x speed improvement in mixed workloads.
 
@@ -470,7 +421,7 @@ SNKV embeds the following third-party libraries:
 |---------|---------|---------|-------|
 | [SQLite](https://www.sqlite.org/) | 3.x (amalgamation subset) | [Public Domain](https://www.sqlite.org/copyright.html) | B-tree, pager, WAL, OS layer |
 | [Monocypher](https://monocypher.org/) | 4.x | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) (Public Domain) | XChaCha20-Poly1305 + Argon2id |
-| [usearch](https://github.com/unum-cloud/usearch) | ≥ 2.9 | [Apache 2.0](https://github.com/unum-cloud/usearch/blob/main/LICENSE) | HNSW vector index (optional — C: `make vector`, Python: `pip install snkv[vector]`) |
+| [usearch](https://github.com/unum-cloud/usearch) | ≥ 2.9 | [Apache 2.0](https://github.com/unum-cloud/usearch/blob/main/LICENSE) | HNSW vector index (optional — `make vector`) |
 
 SQLite and Monocypher are statically compiled into `libsnkv` and `snkv.h`. No dynamic linking or separate installation is required.
 

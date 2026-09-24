@@ -346,69 +346,6 @@ Every existing kvstore API works on an encrypted store with no changes:
 
 ---
 
-## 10. Python API
-
-```python
-from snkv import KVStore, AuthError, CorruptError
-
-# Create or open encrypted store
-db = KVStore("secure.db", password="my-secret-password")
-db = KVStore("secure.db", password=b"raw bytes password")
-
-# All existing operations work transparently — no API changes
-db.put(b"session:abc", b'{"user_id": 42}', ttl=3600)
-val = db.get(b"session:abc")
-
-# Iterators, prefix, seek — all work (keys are plaintext)
-for key, val in db.iterator(prefix=b"session:"):
-    print(key, val)
-
-# Wrong password
-try:
-    db2 = KVStore("secure.db", password="wrong")
-except AuthError:
-    print("Wrong password")
-
-# Change password
-db.reencrypt("new-password")
-
-# Remove encryption
-db.remove_encryption()
-
-# Check status
-db.is_encrypted()   # True / False
-
-# Close — encryption key zeroed from memory
-db.close()
-```
-
-### 10.1 Updated `KVStore.__init__` signature
-
-```python
-class KVStore:
-    def __init__(self, path,
-                 password=None,       # str or bytes; None = no encryption (unchanged)
-                 journal_mode="wal",
-                 cache_size=2000,
-                 read_only=False,
-                 wal_size_limit=None,
-                 busy_timeout=0):
-```
-
-`password=None` is the default — all existing code is fully backwards-compatible.
-
-### 10.2 New exceptions
-
-```python
-class AuthError(Exception):
-    """Raised when opening an encrypted store with the wrong password."""
-
-class CorruptError(Exception):
-    """Raised when an AEAD tag fails — data was tampered or the file is corrupt."""
-```
-
----
-
 ## 11. Argon2id Parameters
 
 | Parameter | Default | Meaning |
@@ -484,18 +421,9 @@ src/
 tests/
   test_enc.c             (new — 20 C tests)
 
-python/
-  snkv_module.c          (updated — password param, AuthError/CorruptError types, ~100 lines)
-  snkv/
-    __init__.py          (updated — password= param, AuthError, CorruptError,
-                                    reencrypt(), remove_encryption(), is_encrypted(), ~60 lines)
-  tests/
-    test_enc.py          (new — 25 Python tests)
-  examples/
-    encryption.py        (new — encrypted session store demo)
 ```
 
-Total new code: ~380 lines C + ~160 lines Python (excluding vendored Monocypher ~3000 lines).
+Total new code: ~380 lines C (excluding vendored Monocypher ~3000 lines).
 
 ---
 
@@ -526,57 +454,9 @@ Total new code: ~380 lines C + ~160 lines Python (excluding vendored Monocypher 
 | 19 | `kvstore_begin` / `kvstore_commit` with encrypted puts (atomic) |
 | 20 | `aEncKey` all-zeros after `kvstore_close` |
 
-### 16.2 Python tests (`python/tests/test_enc.py`) — 25 tests
-
-| # | Test |
-|---|------|
-| 1–9 | Mirror C tests 1–9 at Python layer |
-| 10 | `AuthError` raised on wrong password |
-| 11 | `CorruptError` raised on tampered value |
-| 12 | All iterator types work: forward, reverse, prefix |
-| 13 | Seek works on encrypted store |
-| 14 | `password=None` → plain store (backwards compatible) |
-| 15 | `password=str` and `password=bytes` both accepted |
-| 16 | `reencrypt()` → new password works |
-| 17 | `remove_encryption()` → accessible as plain |
-| 18 | `is_encrypted()` returns correct bool |
-| 19 | `with KVStore("x.db", password="pw") as db:` |
-| 20 | `db[key]`, `key in db`, `del db[key]` all work |
-| 21 | Column family on encrypted store |
-| 22 | `put(k, v, ttl=1)` → expired value not returned |
-| 23 | `purge_expired()` on encrypted store |
-| 24 | `stats()` accessible on encrypted store |
-| 25 | 1000 keys put/get — all values correct after reopen |
-
----
-
 ## 17. Example
 
-```python
-# python/examples/encryption.py
-from snkv import KVStore, AuthError
-
-# Create encrypted store — all APIs work as normal
-with KVStore("sessions.db", password="super-secret-123") as db:
-    db.put(b"session:abc", b'{"user_id": 42, "role": "admin"}', ttl=3600)
-    db.put(b"session:xyz", b'{"user_id": 7,  "role": "viewer"}', ttl=3600)
-
-    # Prefix iteration works — keys are plaintext
-    print("All sessions:")
-    for key, val in db.iterator(prefix=b"session:"):
-        print(f"  {key.decode()} → {val.decode()}")
-
-# Reopen — values decrypted transparently
-with KVStore("sessions.db", password="super-secret-123") as db:
-    val = db.get(b"session:abc")
-    print(f"Retrieved: {val}")
-
-# Wrong password
-try:
-    KVStore("sessions.db", password="wrong")
-except AuthError:
-    print("AuthError: wrong password — values protected")
-```
+See [examples/encryption.c](../../examples/encryption.c) for a runnable encrypted session store demo (create, reopen, prefix iteration, wrong-password handling).
 
 ---
 
@@ -586,5 +466,4 @@ except AuthError:
 |---|---|---|
 | 1 | Vendor Monocypher; `kvstore_enc.c`: `open_encrypted`, `is_encrypted`, `close` zeroing; encrypt/decrypt at `kvstoreRawBtreePut`/`kvstoreRawBtreeGet` | 0.7.0 |
 | 2 | `kvstore_reencrypt`, `kvstore_remove_encryption` | 0.7.0 |
-| 3 | Python bindings: `password=` param, `AuthError`, `CorruptError` | 0.7.0 |
-| 4 | Custom Argon2 params via `KVStoreConfig` | 0.8.0 |
+| 3 | Custom Argon2 params via `KVStoreConfig` | 0.8.0 |
