@@ -256,15 +256,6 @@ make test
 > standard Unix tools that are only available inside the MSYS2 environment.
 
 ---
-
-### Python Bindings (unmaintained)
-
-The `master` branch contains only the C library. The Python bindings (`snkv` on PyPI,
-the `snkvctl` CLI, and the Python vector-search layer) are no longer maintained here.
-Their last version is kept on the
-**[`python_bindings`](https://github.com/hash-anu/snkv/tree/python_bindings)** branch — use
-that branch if you need them.
-
 ---
 
 ### 10 GB Crash-Safety Stress Test
