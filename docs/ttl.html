@@ -1013,40 +1013,6 @@
           </tbody>
         </table>
       </div>
-
-      <h3>Python API</h3>
-
-      <div class="code-block">
-        <div class="code-block-header">
-          <span class="code-block-label">Python — TTL usage</span>
-          <div class="code-block-dots"><span></span><span></span><span></span></div>
-        </div>
-        <pre><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, NotFoundError
-
-<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="st">"mydb.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Put with TTL — seconds (float precision)</span>
-    db.<span class="fn">put</span>(<span class="st">b"session"</span>, <span class="st">b"tok123"</span>, ttl=<span class="nm">60</span>)
-
-    <span class="cm"># Dict-style shorthand: db[key, ttl] = value</span>
-    db[<span class="st">b"token"</span>, <span class="nm">30</span>] = <span class="st">b"bearer-xyz"</span>
-
-    <span class="cm"># Get — expired keys raise NotFoundError</span>
-    val = db.<span class="fn">get</span>(<span class="st">b"session"</span>)
-
-    <span class="cm"># Check remaining lifetime</span>
-    <span class="kw">try</span>:
-        remaining = db.<span class="fn">ttl</span>(<span class="st">b"session"</span>)   <span class="cm"># float seconds</span>
-    <span class="kw">except</span> NotFoundError:
-        remaining = <span class="kw">None</span>
-
-    <span class="cm"># Purge all expired keys (returns count removed)</span>
-    n = db.<span class="fn">purge_expired</span>()
-
-    <span class="cm"># Column families support TTL identically</span>
-    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="st">"cache"</span>) <span class="kw">as</span> cf:
-        cf[<span class="st">b"item"</span>, <span class="nm">10</span>] = <span class="st">b"data"</span>
-        n = cf.<span class="fn">purge_expired</span>()</pre>
-      </div>
     </div>
 
     <hr class="section-divider">

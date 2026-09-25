@@ -56,8 +56,7 @@ missing or cannot be emulated efficiently with the existing API:
 3. `kvstore_clear` / `kvstore_cf_clear` — O(pages) bulk delete including TTL indexes from any session.
 4. Extended `KVStoreStats` — bytes, WAL, checkpoint, TTL, and storage counters + reset API.
 5. `kvstore_count` / `kvstore_cf_count` — O(pages) entry count per CF.
-6. Full Python binding for all new APIs.
-7. Test coverage for all new APIs.
+6. Test coverage for all new APIs.
 
 ---
 
@@ -147,16 +146,6 @@ kvstore_iterator_seek(pIter, pKey, nKey):
 This is distinct from `kvstoreSeekAfter` (strictly `>`) and `kvstoreSeekBefore`
 (strictly `<`). Forward seek is `>=`; reverse seek is `<=`.
 
-### Python — flag reset requirement
-
-`IteratorObject` tracks `started` and `needs_first` flags used by `__next__`.
-After `seek()` in the C binding:
-- Set `self->started = 1`
-- Set `self->needs_first = 0`
-
-This prevents the next `__next__` call from overriding the seeked position by
-calling `first()` or `last()` again.
-
 ### Usage Example
 
 ```c
@@ -183,27 +172,6 @@ if (!kvstore_iterator_eof(rev)) {
 }
 kvstore_iterator_close(rev);
 ```
-
-### Python
-
-```python
-# Forward range scan
-it = db.iterator()
-it.seek(b"order:1000")
-while not it.eof:
-    if it.key > b"order:2000":
-        break
-    print(it.key, it.value)
-    it.next()
-
-# Reverse seek — last key <= target
-it = db.reverse_iterator()
-it.seek(b"ts:1000")   # positions at <= b"ts:1000"
-if not it.eof:
-    print(it.key, it.value)
-```
-
----
 
 ## Feature 2 — `kvstore_put_if_absent`
 
@@ -334,23 +302,6 @@ if (inserted) {
 kvstore_put_if_absent(db, "config:init", 11, "done", 4, 0, NULL);
 ```
 
-### Python
-
-```python
-# No TTL
-inserted = db.put_if_absent(b"key", b"value")
-
-# With TTL — 30 second lock
-inserted = db.put_if_absent(b"lock:resource", b"owner-A", ttl=30.0)
-
-# CF variant
-inserted = cf.put_if_absent(b"slot:42", b"claimed", ttl=60.0)
-```
-
-`put_if_absent` returns `True` if inserted, `False` if key already existed.
-
----
-
 ## Feature 3 — `kvstore_clear` / `kvstore_cf_clear`
 
 ### Problem
@@ -450,15 +401,6 @@ kvstore_clear(db);
 /* Clear one namespace without affecting others */
 kvstore_cf_clear(sessions_cf);
 ```
-
-### Python
-
-```python
-db.clear()        # default CF
-cf.clear()        # specific CF
-```
-
----
 
 ## Feature 4 — Extended `KVStoreStats`
 
@@ -567,27 +509,6 @@ struct {
 } stats;
 ```
 
-### Python
-
-```python
-s = db.stats()
-# Existing
-s["puts"], s["gets"], s["deletes"], s["iterations"], s["errors"]
-# New
-s["bytes_read"], s["bytes_written"]
-s["wal_commits"], s["checkpoints"]
-s["ttl_expired"], s["ttl_purged"]
-s["db_pages"]
-
-# Rate measurement
-db.stats_reset()
-time.sleep(1)
-s = db.stats()
-print(f"puts/sec: {s['puts']}, bytes_written/sec: {s['bytes_written']}")
-```
-
----
-
 ## Feature 5 — `kvstore_count` / `kvstore_cf_count`
 
 ### Problem
@@ -680,19 +601,6 @@ kvstore_count(db, &n);
 printf("live keys: %lld\n", n);
 ```
 
-### Python
-
-```python
-print(db.count())          # default CF
-print(cf.count())          # specific CF
-
-# Accurate live count
-db.purge_expired()
-print(db.count())
-```
-
----
-
 ## Production Readiness Review
 
 All issues identified during design review and their resolutions:
@@ -705,8 +613,7 @@ All issues identified during design review and their resolutions:
 | 4 | `nFreePages` — no verified B-tree API for per-connection free page count | Critical | Removed from `KVStoreStats`; documented rationale; may be added in future version |
 | 5 | `put_if_absent` in caller-managed write transaction — autoTrans would double-commit | Critical | Explicit `inTrans == 2` check; joins existing transaction without issuing nested commit |
 | 6 | No `kvstore_stats_reset()` — no way to measure rates over a time window | Should fix | Added `kvstore_stats_reset()` API |
-| 7 | Python `Iterator.seek()` — `started`/`needs_first` flags not reset | Should fix | C binding explicitly sets `started=1`, `needs_first=0` after successful seek |
-| 8 | `kvstore_count` during uncommitted write transaction may miss pending puts | Document | Documented in API comment — commit first for accurate count |
+| 7 | `kvstore_count` during uncommitted write transaction may miss pending puts | Document | Documented in API comment — commit first for accurate count |
 
 ---
 
@@ -716,8 +623,6 @@ All issues identified during design review and their resolutions:
 |---|---|
 | `include/kvstore.h` | New declarations for all 5 features + `kvstore_stats_reset`; extended `KVStoreStats` |
 | `src/kvstore.c` | Implementations; new stat fields in `struct KVStore`; tracking at call sites |
-| `python/snkv_module.c` | New C methods: `seek`, `put_if_absent`, `clear`, `count`, `stats_reset`; extended `stats` dict |
-| `python/snkv/__init__.py` | `Iterator.seek()`, `KVStore/ColumnFamily.put_if_absent/clear/count`, `KVStore.stats_reset()` |
 | `tests/test_new_apis.c` | New test file — 35 tests |
 | `Makefile` | Add `tests/test_new_apis.c` to `TEST_SRC` |
 
@@ -798,7 +703,5 @@ All issues identified during design review and their resolutions:
   for callers that zero-initialize the struct before calling `kvstore_stats`.
 - All new functions are additive — no existing function signatures change.
 - `kvstore_stats_reset` is a new function — no existing callers affected.
-- Python `stats()` dict gains new keys — existing code accessing only known keys
-  is unaffected.
 - `kvstore_clear` is a destructive operation with no accidental call risk — requires
   explicit invocation.

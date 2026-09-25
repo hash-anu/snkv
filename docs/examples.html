@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SNKV Examples — C/C++ and Python</title>
+<title>SNKV Examples — C/C++</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
@@ -26,7 +26,6 @@
     --code-num:  #7aabd4;
     --divider:   #d4cdc4;
     --rule:      1px solid var(--divider);
-    --py-accent: #3572A5;
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -349,7 +348,6 @@
     <a href="index.html">Overview</a>
     <a href="api.html">API Reference</a>
     <a href="examples.html" class="active">Examples</a>
-    <a href="snkvctl.html">CLI</a>
     <a href="benchmark.html">Benchmark</a>
     <a href="https://github.com/hash-anu/snkv" class="github-star">★ Star</a>
   </nav>
@@ -359,16 +357,13 @@
 <div class="hero">
   <div class="category">Code Examples</div>
   <h1>SNKV Examples</h1>
-  <p class="subtitle">Runnable examples for every major feature — CRUD, transactions, column families, iterators, TTL, seek, conditional insert, bulk clear, and more. Switch tabs to see the C or Python version side by side.</p>
+  <p class="subtitle">Runnable examples for every major feature — CRUD, transactions, column families, iterators, TTL, seek, conditional insert, bulk clear, and more.</p>
 </div>
 
 <!-- Language tabs -->
 <div class="lang-tabs">
   <div class="lang-tab active" onclick="switchLang('c')">
     C / C++ <span class="lang-badge">C99</span>
-  </div>
-  <div class="lang-tab" onclick="switchLang('py')">
-    Python <span class="lang-badge">3.8+</span>
   </div>
 </div>
 
@@ -391,24 +386,6 @@
       <li class="toc-section"><a href="#c-concurrent-rw">Concurrent R/W</a></li>
     </ul>
   </nav>
-
-  <!-- ── Python sidebar ────────────────────────────────────── -->
-  <nav class="toc" id="toc-py" style="display:none;">
-    <div class="toc-title">Python Examples</div>
-    <ul>
-      <li class="toc-section"><a href="#py-basic">Basic CRUD</a></li>
-      <li class="toc-section"><a href="#py-transactions">Transactions</a></li>
-      <li class="toc-section"><a href="#py-cf">Column Families</a></li>
-      <li class="toc-section"><a href="#py-iterators">Iterators</a></li>
-      <li class="toc-section"><a href="#py-reverse">Reverse Iterators</a></li>
-      <li class="toc-section"><a href="#py-ttl">TTL / Expiry</a></li>
-      <li class="toc-section"><a href="#py-new-apis">New APIs</a></li>
-      <li class="toc-section"><a href="#py-session">Session Store</a></li>
-      <li class="toc-section"><a href="#py-multiprocess">Multiprocess</a></li>
-      <li class="toc-section"><a href="#py-encryption">Encryption</a></li>
-    </ul>
-  </nav>
-
   <main class="main-content">
 
     <!-- ════════════════════════════════════════════════ C PANEL -->
@@ -967,476 +944,6 @@ KVStore *shared = <span class="kw">NULL</span>;
       </section>
 
     </div><!-- /panel-c -->
-
-    <!-- ════════════════════════════════════════════════ PYTHON PANEL -->
-    <div class="lang-panel" id="panel-py">
-
-      <!-- Basic CRUD -->
-      <section class="ex-section" id="py-basic">
-        <div class="section-label">Getting Started</div>
-        <h2 class="section-title">Basic CRUD</h2>
-        <p class="section-desc">Open a store with a context manager, write and read with a dict-like API, handle errors, and use in-memory databases.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Hello World + CRUD</span>
-            <span class="ex-card-file">python/examples/basic.py</span>
-          </div>
-<pre><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, NotFoundError
-
-<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"mydb.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Write</span>
-    db[<span class="str">"user:1"</span>] = <span class="str">"Alice"</span>
-    db.put(<span class="str">b"user:2"</span>, <span class="str">b"Bob"</span>)
-
-    <span class="cm"># Read</span>
-    print(db[<span class="str">"user:1"</span>].decode())       <span class="cm"># Alice</span>
-    print(db.get(<span class="str">"user:2"</span>).decode())   <span class="cm"># Bob</span>
-    print(db.get(<span class="str">"missing"</span>, <span class="str">b"n/a"</span>))   <span class="cm"># b'n/a'</span>
-
-    <span class="cm"># Update</span>
-    db[<span class="str">"user:1"</span>] = <span class="str">"Alice Smith"</span>
-
-    <span class="cm"># Delete</span>
-    <span class="kw">del</span> db[<span class="str">"user:1"</span>]
-
-    <span class="cm"># Existence</span>
-    print(<span class="str">"user:2"</span> <span class="kw">in</span> db)   <span class="cm"># True</span>
-    print(db.exists(<span class="str">"user:1"</span>))  <span class="cm"># False</span></pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Binary data + In-memory store</span>
-            <span class="ex-card-file">python/examples/basic.py</span>
-          </div>
-<pre>><span class="cm"># Arbitrary binary keys and values</span>
-db.put(bytes([<span class="nm">0x00</span>, <span class="nm">0x01</span>, <span class="nm">0xFF</span>]), bytes(range(<span class="nm">256</span>)))
-
-<span class="cm"># In-memory store — no file created, data gone after close</span>
-<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="kw">None</span>) <span class="kw">as</span> db:
-    db[<span class="str">"temp"</span>] = <span class="str">"ephemeral"</span>
-    print(db[<span class="str">"temp"</span>])   <span class="cm"># b'ephemeral'</span></pre>
-        </div>
-      </section>
-
-      <!-- Transactions -->
-      <section class="ex-section" id="py-transactions">
-        <div class="section-label">ACID</div>
-        <h2 class="section-title">Transactions</h2>
-        <p class="section-desc">Batch writes into a single atomic commit. Without an explicit transaction each <code>put</code> auto-commits.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Batch write + rollback on error</span>
-            <span class="ex-card-file">python/examples/transactions.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"bank.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Atomic batch — all writes commit together</span>
-    db.begin(write=<span class="kw">True</span>)
-    <span class="kw">try</span>:
-        db[<span class="str">"account:alice"</span>] = <span class="str">"800"</span>
-        db[<span class="str">"account:bob"</span>]   = <span class="str">"700"</span>
-        db.commit()
-    <span class="kw">except</span> Exception:
-        db.rollback()   <span class="cm"># both writes discarded</span>
-        <span class="kw">raise</span>
-
-    <span class="cm"># Large batch — 1000 writes in one transaction</span>
-    db.begin(write=<span class="kw">True</span>)
-    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nm">1000</span>):
-        db[<span class="str">f"item:{i:05d}"</span>] = <span class="str">f"value_{i}"</span>
-    db.commit()</pre>
-        </div>
-      </section>
-
-      <!-- Column Families -->
-      <section class="ex-section" id="py-cf">
-        <div class="section-label">Namespaces</div>
-        <h2 class="section-title">Column Families</h2>
-        <p class="section-desc">Logical namespaces inside one file. Each CF is a separate B-tree — the same key in two CFs holds independent values.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Create, isolate, list, drop</span>
-            <span class="ex-card-file">python/examples/column_families.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Create namespaces</span>
-    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> users:
-        users[<span class="str">"alice"</span>] = <span class="str">"alice@example.com"</span>
-        users[<span class="str">"bob"</span>]   = <span class="str">"bob@example.com"</span>
-
-    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"products"</span>) <span class="kw">as</span> products:
-        products[<span class="str">"prod:100"</span>] = <span class="str">"Laptop:$999"</span>
-
-    <span class="cm"># Same key, different values per CF</span>
-    ns_a = db.<span class="fn">create_column_family</span>(<span class="str">"ns_a"</span>)
-    ns_b = db.<span class="fn">create_column_family</span>(<span class="str">"ns_b"</span>)
-    ns_a[<span class="str">"key"</span>] = <span class="str">"from_a"</span>
-    ns_b[<span class="str">"key"</span>] = <span class="str">"from_b"</span>
-    ns_a.close(); ns_b.close()
-
-    <span class="cm"># List and drop</span>
-    print(db.<span class="fn">list_column_families</span>())   <span class="cm"># ['users', 'products', 'ns_a', 'ns_b']</span>
-    db.<span class="fn">drop_column_family</span>(<span class="str">"ns_a"</span>)
-    db.<span class="fn">drop_column_family</span>(<span class="str">"ns_b"</span>)</pre>
-        </div>
-      </section>
-
-      <!-- Iterators -->
-      <section class="ex-section" id="py-iterators">
-        <div class="section-label">Ordered Scan</div>
-        <h2 class="section-title">Iterators</h2>
-        <p class="section-desc">Iterate all keys in B-tree order, scan a prefix, or drive the cursor manually.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Full scan + prefix scan</span>
-            <span class="ex-card-file">python/examples/iterators.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Full scan — for loop uses iterator() under the hood</span>
-    <span class="kw">for</span> key, value <span class="kw">in</span> db:
-        print(key.decode(), <span class="str">"->"</span>, value.decode())
-
-    <span class="cm"># Prefix scan — only keys starting with "user:"</span>
-    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">prefix_iterator</span>(<span class="str">b"user:"</span>):
-        print(key, value)
-
-    <span class="cm"># Manual control</span>
-    it = db.<span class="fn">iterator</span>()
-    it.<span class="fn">first</span>()
-    <span class="kw">while not</span> it.eof:
-        print(it.key, it.value)
-        it.<span class="fn">next</span>()
-    it.<span class="fn">close</span>()</pre>
-        </div>
-      </section>
-
-      <!-- Reverse Iterators -->
-      <section class="ex-section" id="py-reverse">
-        <div class="section-label">Descending Scan</div>
-        <h2 class="section-title">Reverse Iterators</h2>
-        <p class="section-desc">Walk keys in descending order — pure B-tree traversal, no sort step.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Reverse full + reverse prefix + seek</span>
-            <span class="ex-card-file">python/examples/iterator_reverse.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Reverse full scan — largest key first</span>
-    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">reverse_iterator</span>():
-        print(key, value)
-
-    <span class="cm"># Reverse prefix scan — only "score:" keys, descending</span>
-    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">reverse_prefix_iterator</span>(<span class="str">b"score:"</span>):
-        print(key, value)
-
-    <span class="cm"># Unified API — reverse=True on iterator()</span>
-    <span class="kw">for</span> key, value <span class="kw">in</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>, prefix=<span class="str">b"user:"</span>):
-        print(key, value)
-
-    <span class="cm"># Seek in reverse — positions at last key <= target</span>
-    <span class="kw">with</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>) <span class="kw">as</span> it:
-        it.<span class="fn">last</span>()
-        it.<span class="fn">seek</span>(<span class="str">b"user:m"</span>)   <span class="cm"># jump to last key <= "user:m"</span>
-        <span class="kw">while not</span> it.eof:
-            print(it.key)
-            it.<span class="fn">prev</span>()</pre>
-        </div>
-      </section>
-
-      <!-- TTL -->
-      <section class="ex-section" id="py-ttl">
-        <div class="section-label">Key Expiry</div>
-        <h2 class="section-title">TTL — Time-To-Live</h2>
-        <p class="section-desc">Per-key expiry via <code>ttl=seconds</code> on <code>put()</code>. Expired keys are lazily deleted on read; bulk cleanup via <code>purge_expired()</code>.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Basic TTL, lazy expiry, purge</span>
-            <span class="ex-card-file">python/examples/ttl.py</span>
-          </div>
-<pre>><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, NotFoundError, NO_TTL
-
-<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Put with TTL — expires in 60 seconds</span>
-    db.put(<span class="str">b"session"</span>, <span class="str">b"tok123"</span>, ttl=<span class="nm">60</span>)
-    db[<span class="str">b"token"</span>, <span class="nm">30</span>] = <span class="str">b"bearer-xyz"</span>   <span class="cm"># dict-style shorthand</span>
-
-    <span class="cm"># Inspect remaining TTL</span>
-    remaining = db.ttl(<span class="str">b"session"</span>)   <span class="cm"># e.g. 59.98 (float seconds)</span>
-    print(<span class="str">f"{remaining:.2f}s remaining"</span>)
-
-    <span class="cm"># Lazy expiry — get() returns None if expired</span>
-    val = db.get(<span class="str">b"session"</span>)   <span class="cm"># None if expired, bytes if alive</span>
-
-    <span class="cm"># Bulk purge — deletes all expired keys, returns count</span>
-    n = db.<span class="fn">purge_expired</span>()
-    print(<span class="str">f"Removed {n} expired keys"</span>)</pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Rate limiter — real-world TTL pattern</span>
-            <span class="ex-card-file">python/examples/ttl.py</span>
-          </div>
-<pre>><span class="kw">class</span> RateLimiter:
-    <span class="kw">def</span> <span class="fn">__init__</span>(self, db, limit, window_s):
-        self._cf = db.<span class="fn">create_column_family</span>(<span class="str">"rl"</span>)
-        self._limit = limit; self._window = window_s
-
-    <span class="kw">def</span> <span class="fn">is_allowed</span>(self, user_id):
-        key = user_id.encode()
-        raw = self._cf.<span class="fn">get</span>(key)
-        <span class="kw">if</span> raw <span class="kw">is None</span>:
-            self._cf.<span class="fn">put</span>(key, <span class="str">b"1"</span>, ttl=self._window)
-            <span class="kw">return True</span>
-        count = int(raw)
-        <span class="kw">if</span> count >= self._limit: <span class="kw">return False</span>
-        ttl = self._cf.<span class="fn">ttl</span>(key) <span class="kw">or</span> self._window
-        self._cf.<span class="fn">put</span>(key, str(count+<span class="nm">1</span>).encode(), ttl=ttl)
-        <span class="kw">return True</span>
-
-rl = RateLimiter(db, limit=<span class="nm">5</span>, window_s=<span class="nm">60</span>)
-print(rl.<span class="fn">is_allowed</span>(<span class="str">"alice"</span>))   <span class="cm"># True (1/5)</span></pre>
-        </div>
-      </section>
-
-      <!-- New APIs -->
-      <section class="ex-section" id="py-new-apis">
-        <div class="section-label">New APIs</div>
-        <h2 class="section-title">Seek · put_if_absent · clear · count · stats</h2>
-        <p class="section-desc">O(log N) positional seek, atomic conditional insert, bulk truncation, page-level entry count, and extended diagnostics with reset.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Iterator seek — forward, reverse, prefix, chaining</span>
-            <span class="ex-card-file">python/examples/new_apis.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Forward seek — first key >= target</span>
-    <span class="kw">with</span> db.<span class="fn">iterator</span>() <span class="kw">as</span> it:
-        it.<span class="fn">seek</span>(<span class="str">b"cherry"</span>)
-        <span class="kw">while not</span> it.eof:
-            print(it.key); it.<span class="fn">next</span>()
-
-    <span class="cm"># Reverse seek — last key <= target</span>
-    <span class="kw">with</span> db.<span class="fn">iterator</span>(reverse=<span class="kw">True</span>) <span class="kw">as</span> it:
-        it.<span class="fn">last</span>()
-        it.<span class="fn">seek</span>(<span class="str">b"bbc"</span>)   <span class="cm"># lands on b"bbb"</span>
-        print(it.key)
-
-    <span class="cm"># Prefix iterator + seek — boundary enforced</span>
-    <span class="kw">with</span> db.<span class="fn">iterator</span>(prefix=<span class="str">b"user:"</span>) <span class="kw">as</span> it:
-        it.<span class="fn">seek</span>(<span class="str">b"user:m"</span>)   <span class="cm"># skip to "user:m..."</span>
-        <span class="kw">while not</span> it.eof:
-            print(it.key); it.<span class="fn">next</span>()
-
-    <span class="cm"># Chaining — seek() returns self</span>
-    key = db.<span class="fn">iterator</span>().<span class="fn">seek</span>(<span class="str">b"target"</span>).key</pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">put_if_absent — distributed lock + deduplication</span>
-            <span class="ex-card-file">python/examples/new_apis.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Absent → inserted=True</span>
-    inserted = db.<span class="fn">put_if_absent</span>(<span class="str">b"lock"</span>, <span class="str">b"owner:alice"</span>)
-    print(inserted)   <span class="cm"># True</span>
-
-    <span class="cm"># Present → inserted=False, value unchanged</span>
-    inserted = db.<span class="fn">put_if_absent</span>(<span class="str">b"lock"</span>, <span class="str">b"owner:bob"</span>)
-    print(inserted)   <span class="cm"># False</span>
-    print(db.get(<span class="str">b"lock"</span>))   <span class="cm"># b'owner:alice'</span>
-
-    <span class="cm"># With TTL — auto-releasing lock</span>
-    db.<span class="fn">put_if_absent</span>(<span class="str">b"job:1"</span>, <span class="str">b"worker-A"</span>, ttl=<span class="nm">30</span>)
-
-    <span class="cm"># CF variant — message deduplication</span>
-    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"dedup"</span>) <span class="kw">as</span> cf:
-        <span class="kw">if</span> cf.<span class="fn">put_if_absent</span>(<span class="str">b"msg:001"</span>, <span class="str">b"hello"</span>):
-            process()   <span class="cm"># only first caller</span></pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">clear · count · stats + stats_reset</span>
-            <span class="ex-card-file">python/examples/new_apis.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="cm"># count — O(pages) via sqlite3BtreeCount</span>
-    print(db.<span class="fn">count</span>())   <span class="cm"># e.g. 10000</span>
-
-    <span class="cm"># clear — O(pages) bulk truncation; TTL index cleared atomically</span>
-    db.<span class="fn">clear</span>()
-    print(db.<span class="fn">count</span>())   <span class="cm"># 0</span>
-
-    <span class="cm"># Extended stats — 12 counters</span>
-    db.put(<span class="str">b"k"</span>, <span class="str">b"v"</span>); db.get(<span class="str">b"k"</span>)
-    st = db.<span class="fn">stats</span>()
-    print(st[<span class="str">"puts"</span>], st[<span class="str">"gets"</span>],
-          st[<span class="str">"bytes_written"</span>], st[<span class="str">"db_pages"</span>])
-
-    <span class="cm"># Reset cumulative counters; db_pages stays live</span>
-    db.<span class="fn">stats_reset</span>()
-    st = db.<span class="fn">stats</span>()
-    print(st[<span class="str">"puts"</span>])      <span class="cm"># 0</span>
-    print(st[<span class="str">"db_pages"</span>])  <span class="cm"># still > 0</span></pre>
-        </div>
-      </section>
-
-      <!-- Session Store -->
-      <section class="ex-section" id="py-session">
-        <div class="section-label">Real-World Pattern</div>
-        <h2 class="section-title">Session Store</h2>
-        <p class="section-desc">A practical session store using a column family with TTL and <code>put_if_absent</code> for idempotent job scheduling.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Session store + job scheduler</span>
-            <span class="ex-card-file">python/examples/session_store.py · new_apis.py</span>
-          </div>
-<pre>><span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"store.db"</span>) <span class="kw">as</span> db:
-    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"sessions"</span>) <span class="kw">as</span> cf:
-        <span class="cm"># Create — expires in 30 minutes</span>
-        cf.put(<span class="str">b"sess:abc"</span>, <span class="str">b"user_id=42"</span>, ttl=<span class="nm">1800</span>)
-
-        <span class="cm"># Validate</span>
-        data = cf.get(<span class="str">b"sess:abc"</span>)   <span class="cm"># None if expired</span>
-
-        <span class="cm"># Idempotent job scheduler via put_if_absent + TTL</span>
-        claimed = cf.<span class="fn">put_if_absent</span>(<span class="str">b"job:001"</span>, <span class="str">b"worker-A"</span>, ttl=<span class="nm">30</span>)
-        <span class="kw">if</span> claimed:
-            run_job()   <span class="cm"># only one worker proceeds</span></pre>
-        </div>
-      </section>
-
-      <!-- Multiprocess -->
-      <section class="ex-section" id="py-multiprocess">
-        <div class="section-label">Concurrency</div>
-        <h2 class="section-title">Multiprocess</h2>
-        <p class="section-desc">Multiple processes sharing one WAL-mode database. Each process opens its own <code>KVStore</code>; WAL serialises writers and <code>busy_timeout</code> retries on contention.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">5 concurrent worker processes</span>
-            <span class="ex-card-file">python/examples/multiprocess.py</span>
-          </div>
-<pre>><span class="kw">import</span> multiprocessing
-<span class="kw">from</span> snkv <span class="kw">import</span> KVStore, JOURNAL_WAL
-
-<span class="kw">def</span> <span class="fn">worker</span>(db_path, worker_id):
-    <span class="cm"># Each process opens its own connection</span>
-    <span class="kw">with</span> <span class="fn">KVStore</span>(db_path, journal_mode=JOURNAL_WAL,
-                busy_timeout=<span class="nm">5000</span>) <span class="kw">as</span> db:
-        <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nm">100</span>):
-            db.put(<span class="str">f"w{worker_id}:key:{i}"</span>.encode(), <span class="str">b"value"</span>)
-
-procs = [multiprocessing.<span class="fn">Process</span>(
-             target=worker, args=(<span class="str">"shared.db"</span>, i))
-         <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nm">5</span>)]
-<span class="kw">for</span> p <span class="kw">in</span> procs: p.<span class="fn">start</span>()
-<span class="kw">for</span> p <span class="kw">in</span> procs: p.<span class="fn">join</span>()
-<span class="cm"># All 500 keys durable on disk</span></pre>
-        </div>
-      </section>
-
-      <!-- Encryption -->
-      <section class="ex-section" id="py-encryption">
-        <div class="section-label">Security</div>
-        <h2 class="section-title">Encryption</h2>
-        <p class="section-desc">XChaCha20-Poly1305 AEAD encryption with Argon2id key derivation. Use <code>KVStore.open_encrypted()</code> to create or open an encrypted store. All reads and writes are transparently encrypted/decrypted. Wrong password raises <code>AuthError</code>.</p>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Open encrypted store + read/write</span>
-            <span class="ex-card-file">python/examples/enc.py</span>
-          </div>
-<pre>><span class="kw">from</span> snkv <span class="kw">import</span> KVStore, AuthError
-
-<span class="cm"># Create or open an encrypted store</span>
-<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"my-secret-password"</span>) <span class="kw">as</span> db:
-    <span class="cm"># Normal put/get — encryption is transparent</span>
-    db.put(<span class="str">b"secret"</span>, <span class="str">b"classified"</span>)
-    print(db.get(<span class="str">b"secret"</span>))   <span class="cm"># b'classified'</span>
-
-    <span class="cm"># Wrong password raises AuthError</span>
-    <span class="kw">try</span>:
-        KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"wrong"</span>)
-    <span class="kw">except</span> AuthError:
-        print(<span class="str">"Bad password"</span>)</pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">is_encrypted · remove_encryption · reencrypt</span>
-            <span class="ex-card-file">python/examples/enc.py</span>
-          </div>
-<pre>><span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"pass1"</span>) <span class="kw">as</span> db:
-    print(db.<span class="fn">is_encrypted</span>())   <span class="cm"># True</span>
-
-    <span class="cm"># Password rotation — re-encrypt with new password</span>
-    db.<span class="fn">reencrypt</span>(<span class="str">b"pass2"</span>)
-
-    <span class="cm"># Strip encryption — store becomes plain after close</span>
-    db.<span class="fn">remove_encryption</span>()
-
-<span class="cm"># Re-open as plain store — no password needed</span>
-<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"secure.db"</span>) <span class="kw">as</span> db:
-    print(db.<span class="fn">is_encrypted</span>())   <span class="cm"># False</span>
-    print(db.get(<span class="str">b"secret"</span>))   <span class="cm"># b'classified'</span></pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Plaintext → encrypt → plaintext lifecycle</span>
-            <span class="ex-card-file">python/examples/enc.py</span>
-          </div>
-<pre>><span class="kw">import</span> os
-
-<span class="cm"># Start plain</span>
-<span class="kw">with</span> <span class="fn">KVStore</span>(<span class="str">"data.db"</span>) <span class="kw">as</span> db:
-    db.put(<span class="str">b"k"</span>, <span class="str">b"SENTINEL"</span>)
-
-<span class="cm"># open_encrypted on a plain store encrypts it in place</span>
-<span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"data.db"</span>, <span class="str">b"pass"</span>) <span class="kw">as</span> db:
-    raw = open(<span class="str">"data.db"</span>, <span class="str">"rb"</span>).read()
-    <span class="kw">assert</span> <span class="str">b"SENTINEL"</span> <span class="kw">not in</span> raw   <span class="cm"># ciphertext confirmed</span>
-    db.<span class="fn">remove_encryption</span>()
-
-raw = open(<span class="str">"data.db"</span>, <span class="str">"rb"</span>).read()
-<span class="kw">assert</span> <span class="str">b"SENTINEL"</span> <span class="kw">in</span> raw   <span class="cm"># plaintext confirmed</span></pre>
-        </div>
-
-        <div class="ex-card">
-          <div class="ex-card-header">
-            <span class="ex-card-title">Encrypted store with TTL + column families</span>
-            <span class="ex-card-file">python/examples/enc.py</span>
-          </div>
-<pre>><span class="kw">with</span> KVStore.<span class="fn">open_encrypted</span>(<span class="str">"secure.db"</span>, <span class="str">b"pass"</span>) <span class="kw">as</span> db:
-    <span class="cm"># TTL works transparently on encrypted store</span>
-    db.put(<span class="str">b"session"</span>, <span class="str">b"tok123"</span>, ttl=<span class="nm">3600</span>)
-    print(db.<span class="fn">ttl</span>(<span class="str">b"session"</span>))   <span class="cm"># ~3600.0</span>
-
-    <span class="cm"># Column families also encrypted</span>
-    <span class="kw">with</span> db.<span class="fn">create_column_family</span>(<span class="str">"users"</span>) <span class="kw">as</span> cf:
-        cf.put(<span class="str">b"alice"</span>, <span class="str">b"secret_data"</span>, ttl=<span class="nm">86400</span>)
-        print(cf.get(<span class="str">b"alice"</span>))   <span class="cm"># b'secret_data'</span>
-        print(cf.<span class="fn">is_encrypted</span>())   <span class="cm"># True (inherited)</span>
-
-    <span class="cm"># Iterators work — keys plaintext, values decrypted</span>
-    <span class="kw">for</span> k, v <span class="kw">in</span> db.<span class="fn">iterator</span>():
-        print(k, v)</pre>
-        </div>
-      </section>
-
-    </div><!-- /panel-py -->
-
   </main>
 </div>
 
@@ -1445,10 +952,8 @@ function switchLang(lang) {
   document.querySelectorAll('.lang-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.lang-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('toc-c').style.display  = lang === 'c'  ? '' : 'none';
-  document.getElementById('toc-py').style.display = lang === 'py' ? '' : 'none';
   document.getElementById('panel-c').classList.toggle('active',  lang === 'c');
-  document.getElementById('panel-py').classList.toggle('active', lang === 'py');
-  document.querySelectorAll('.lang-tab')[lang === 'c' ? 0 : 1].classList.add('active');
+  document.querySelectorAll('.lang-tab')[0].classList.add('active');
 }
 </script>
 

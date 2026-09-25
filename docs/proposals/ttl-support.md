@@ -574,7 +574,6 @@ Useful for production systems that cannot afford a long write stall.
 - [ ] Add all public API functions with default-CF wrappers
 - [ ] Write `tests/test_ttl.c`
 - [ ] Update `API_SPECIFICATION.md`
-- [ ] Update `python/snkv/__init__.py` and `python/snkv_module.c` for Python bindings
 
 ---
 
