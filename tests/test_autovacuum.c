@@ -326,7 +326,7 @@ static void test_vacuum_integrity(void){
       kvstore_close(kv);
       TEST_FAIL("data lost after vacuum");
     }
-    sqliteFree(pVal);
+    snkv_free(pVal);
   }
 
   /* Deleted keys should not exist */
@@ -338,7 +338,7 @@ static void test_vacuum_integrity(void){
     rc = kvstore_get(kv, key, (int)strlen(key), &pVal, &nVal);
     if( rc != KVSTORE_NOTFOUND ){
       printf("  Deleted key still present: %s\n", key);
-      if( pVal ) sqliteFree(pVal);
+      if( pVal ) snkv_free(pVal);
       kvstore_close(kv);
       TEST_FAIL("deleted key still exists after vacuum");
     }
@@ -349,11 +349,11 @@ static void test_vacuum_integrity(void){
   rc = kvstore_integrity_check(kv, &zErr);
   if( rc != KVSTORE_OK ){
     printf("  Integrity check failed: %s\n", zErr ? zErr : "unknown");
-    if( zErr ) sqliteFree(zErr);
+    if( zErr ) snkv_free(zErr);
     kvstore_close(kv);
     TEST_FAIL("integrity check failed after vacuum");
   }
-  if( zErr ) sqliteFree(zErr);
+  if( zErr ) snkv_free(zErr);
   printf("  All 200 remaining records intact, deleted keys confirmed gone\n");
   printf("  Integrity check passed\n");
 
@@ -410,7 +410,7 @@ static void test_multiple_vacuum_cycles(void){
         kvstore_close(kv);
         TEST_FAIL("data lost across vacuum cycles");
       }
-      sqliteFree(pVal);
+      snkv_free(pVal);
     }
   }
 
@@ -420,11 +420,11 @@ static void test_multiple_vacuum_cycles(void){
   rc = kvstore_integrity_check(kv, &zErr);
   if( rc != KVSTORE_OK ){
     printf("  Integrity check failed: %s\n", zErr ? zErr : "unknown");
-    if( zErr ) sqliteFree(zErr);
+    if( zErr ) snkv_free(zErr);
     kvstore_close(kv);
     TEST_FAIL("integrity check failed");
   }
-  if( zErr ) sqliteFree(zErr);
+  if( zErr ) snkv_free(zErr);
 
   kvstore_close(kv);
   cleanup_db(TEST_DB);

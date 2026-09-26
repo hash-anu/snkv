@@ -136,7 +136,7 @@ static void test_ciphertext_in_file(void){
   if( f ){
     fseek(f, 0, SEEK_END);
     long sz = ftell(f); rewind(f);
-    char *buf = malloc(sz);
+    char *buf = snkv_malloc(sz);
     if( buf ){
       fread(buf, 1, sz, f);
       int found = 0;
@@ -144,7 +144,7 @@ static void test_ciphertext_in_file(void){
         if( memcmp(buf + i, "plaintext_value", 15) == 0 ){ found = 1; break; }
       }
       ASSERT("plaintext NOT in file", !found);
-      free(buf);
+      snkv_free(buf);
     }
     fclose(f);
   }

@@ -376,9 +376,9 @@ static void test11_cf_list_hides_ttl_cf(void){
   int foundHidden = 0, i;
   for( i = 0; i < nCount; i++ ){
     if( azNames[i][0] == '_' && azNames[i][1] == '_' ) foundHidden = 1;
-    sqliteFree(azNames[i]);
+    snkv_free(azNames[i]);
   }
-  sqliteFree(azNames);
+  snkv_free(azNames);
   ASSERT("no __ names in list", !foundHidden);
 
   cleanup(&pKV, path);
@@ -546,9 +546,9 @@ static void test16_cf_drop_removes_ttl_cfs(void){
   for( i = 0; i < nCount; i++ ){
     if( strcmp(azNames[i], "temp") == 0 ) foundTemp = 1;
     if( azNames[i][0] == '_' && azNames[i][1] == '_' ) foundHidden = 1;
-    sqliteFree(azNames[i]);
+    snkv_free(azNames[i]);
   }
-  sqliteFree(azNames);
+  snkv_free(azNames);
   ASSERT("temp not listed",    !foundTemp);
   ASSERT("no __ names listed", !foundHidden);
 

@@ -157,7 +157,7 @@ static void test_store_mutex_protection(void) {
             rc = kvstore_get(pKV, key, strlen(key), &retrieved_value, &value_len);
             if (rc == KVSTORE_OK && retrieved_value != NULL) {
                 passed = (memcmp(value, retrieved_value, strlen(value)) == 0);
-                sqliteFree(retrieved_value);
+                snkv_free(retrieved_value);
             }
         }
         kvstore_close(pKV);
@@ -193,7 +193,7 @@ static void test_cf_mutex_protection(void) {
                 rc = kvstore_cf_get(pCF, key, strlen(key), &retrieved_value, &value_len);
                 if (rc == KVSTORE_OK && retrieved_value != NULL) {
                     passed = (memcmp(value, retrieved_value, strlen(value)) == 0);
-                    sqliteFree(retrieved_value);
+                    snkv_free(retrieved_value);
                 }
             }
             kvstore_cf_close(pCF);
@@ -392,7 +392,7 @@ static void* thread_worker(void *arg) {
             data->errors++;
         }
         
-        sqliteFree(retrieved_value);
+        snkv_free(retrieved_value);
         
         /* Small random delay to increase contention */
         usleep(rand() % 1000);
@@ -625,7 +625,7 @@ static void test_mutex_data_integrity(void) {
             passed = 1;
         } else {
             printf("  Integrity check failed: %s\n", err_msg ? err_msg : "unknown error");
-            if (err_msg) sqliteFree(err_msg);
+            if (err_msg) snkv_free(err_msg);
         }
         
         kvstore_close(pKV);
@@ -678,7 +678,7 @@ static void test_journal_recovery(void) {
             /* Value should be original (transaction was not committed) */
             passed = (value_len == (int)strlen("original_value") &&
                       memcmp(retrieved_value, "original_value", value_len) == 0);
-            sqliteFree(retrieved_value);
+            snkv_free(retrieved_value);
         }
         
         kvstore_close(pKV);
@@ -740,8 +740,8 @@ static void test_multi_cf_concurrent(void) {
                             }
                         }
                         
-                        if (val1) sqliteFree(val1);
-                        if (val2) sqliteFree(val2);
+                        if (val1) snkv_free(val1);
+                        if (val2) snkv_free(val2);
                     }
                 }
                 

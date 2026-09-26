@@ -133,7 +133,7 @@ static void test_edge_empty_value(void) {
             void* got = NULL; int glen = 0;
             rc = kvstore_get(kv, k, (int)strlen(k), &got, &glen);
             ok = (rc == KVSTORE_OK && glen == 0);
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
         kvstore_close(kv);
     }
@@ -156,7 +156,7 @@ static void test_edge_binary_key_with_nulls(void) {
             rc = kvstore_get(kv, binkey, 5, &got, &glen);
             ok = (rc == KVSTORE_OK && glen == (int)strlen(val)
                 && memcmp(got, val, glen) == 0);
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
         kvstore_close(kv);
     }
@@ -179,7 +179,7 @@ static void test_edge_single_byte_key(void) {
             rc = kvstore_get(kv, &k, 1, &got, &glen);
             ok = (rc == KVSTORE_OK && glen == (int)strlen(val)
                 && memcmp(got, val, glen) == 0);
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
         kvstore_close(kv);
     }
@@ -196,8 +196,8 @@ static void test_edge_large_key_value(void) {
     if (rc == KVSTORE_OK) {
         int klen = 1024;
         int vlen = 1024 * 1024;
-        char* bigkey = (char*)malloc(klen);
-        char* bigval = (char*)malloc(vlen);
+        char* bigkey = (char*)snkv_malloc(klen);
+        char* bigval = (char*)snkv_malloc(vlen);
         if (bigkey && bigval) {
             int i;
             for (i = 0; i < klen; i++) bigkey[i] = 'K' + (i % 26);
@@ -209,11 +209,11 @@ static void test_edge_large_key_value(void) {
                 rc = kvstore_get(kv, bigkey, klen, &got, &glen);
                 ok = (rc == KVSTORE_OK && glen == vlen
                     && memcmp(got, bigval, vlen) == 0);
-                if (got) sqliteFree(got);
+                if (got) snkv_free(got);
             }
         }
-        free(bigkey);
-        free(bigval);
+        snkv_free(bigkey);
+        snkv_free(bigval);
         kvstore_close(kv);
     }
     print_result("Large key (1KB) + large value (1MB)", ok);
@@ -240,7 +240,7 @@ static void test_edge_overwrite_same_key(void) {
             rc = kvstore_get(kv, k, (int)strlen(k), &got, &glen);
             ok = (rc == KVSTORE_OK && glen == (int)strlen("version-99")
                 && memcmp(got, "version-99", glen) == 0);
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
         kvstore_close(kv);
     }
@@ -294,7 +294,7 @@ static void test_edge_put_after_delete(void) {
             void* got = NULL; int glen = 0;
             rc = kvstore_get(kv, k, (int)strlen(k), &got, &glen);
             ok = (rc == KVSTORE_OK && glen == 6 && memcmp(got, "second", 6) == 0);
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
         kvstore_close(kv);
     }
@@ -340,7 +340,7 @@ static void test_write_storm(int journalMode, const char* label) {
                         errMsg ? errMsg : "unknown");
                     integrityOk = 0;
                 }
-                if (errMsg) sqliteFree(errMsg);
+                if (errMsg) snkv_free(errMsg);
                 integrityChecks++;
                 kvstore_begin(kv, 1);
             }
@@ -358,7 +358,7 @@ static void test_write_storm(int journalMode, const char* label) {
             printf("    Final integrity FAILED: %s\n", errMsg ? errMsg : "unknown");
             integrityOk = 0;
         }
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         int spotOk = 1;
         int spots[] = { 0, 1, WRITE_STORM_N / 2, WRITE_STORM_N - 1 };
@@ -371,7 +371,7 @@ static void test_write_storm(int journalMode, const char* label) {
                 || memcmp(got, val, glen) != 0) {
                 spotOk = 0;
             }
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
 
         ok = (rc == KVSTORE_OK && integrityOk && spotOk);
@@ -438,7 +438,7 @@ static void test_large_dataset(void) {
                 || memcmp(got, val, glen) != 0) {
                 verifyOk = 0;
             }
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
 
         t0 = now_sec();
@@ -462,7 +462,7 @@ static void test_large_dataset(void) {
                 || memcmp(got, val, glen) != 0) {
                 halfOk = 0;
             }
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
         }
 
         int goneOk = 1;
@@ -477,7 +477,7 @@ static void test_large_dataset(void) {
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
         int intOk = (ic == KVSTORE_OK);
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         ok = (scanOk && verifyOk && halfOk && goneOk && intOk);
         kvstore_close(kv);
@@ -512,7 +512,7 @@ static void test_crash_recovery_uncommitted(void) {
     void* got = NULL; int glen = 0;
     rc = kvstore_get(kv, "safe", 4, &got, &glen);
     int safeOk = (rc == KVSTORE_OK && glen == 14 && memcmp(got, "committed_data", 14) == 0);
-    if (got) sqliteFree(got);
+    if (got) snkv_free(got);
 
     int unsafeExists = 0;
     kvstore_exists(kv, "unsafe", 6, &unsafeExists);
@@ -520,7 +520,7 @@ static void test_crash_recovery_uncommitted(void) {
     char* errMsg = NULL;
     int ic = kvstore_integrity_check(kv, &errMsg);
     int intOk = (ic == KVSTORE_OK);
-    if (errMsg) sqliteFree(errMsg);
+    if (errMsg) snkv_free(errMsg);
 
     kvstore_close(kv);
     print_result("Crash recovery: uncommitted txn rolled back", safeOk && !unsafeExists && intOk);
@@ -549,7 +549,7 @@ static void test_crash_recovery_wal(void) {
     void* got = NULL; int glen = 0;
     rc = kvstore_get(kv, "wal_safe", 8, &got, &glen);
     int safeOk = (rc == KVSTORE_OK && glen == 13);
-    if (got) sqliteFree(got);
+    if (got) snkv_free(got);
 
     int unsafeExists = 0;
     kvstore_exists(kv, "wal_unsafe", 10, &unsafeExists);
@@ -557,7 +557,7 @@ static void test_crash_recovery_wal(void) {
     char* errMsg = NULL;
     int ic = kvstore_integrity_check(kv, &errMsg);
     int intOk = (ic == KVSTORE_OK);
-    if (errMsg) sqliteFree(errMsg);
+    if (errMsg) snkv_free(errMsg);
 
     kvstore_close(kv);
     print_result("Crash recovery WAL: uncommitted txn rolled back", safeOk && !unsafeExists && intOk);
@@ -589,11 +589,11 @@ static void test_rapid_open_close(void) {
         rc = kvstore_get(kv, "persist", 7, &got, &glen);
         if (rc != KVSTORE_OK || glen != 8 || memcmp(got, "survives", 8) != 0) {
             ok = 0;
-            if (got) sqliteFree(got);
+            if (got) snkv_free(got);
             kvstore_close(kv);
             break;
         }
-        if (got) sqliteFree(got);
+        if (got) snkv_free(got);
 
         if ((i % 50) == 0) {
             char val[32];
@@ -610,7 +610,7 @@ static void test_rapid_open_close(void) {
             char* errMsg = NULL;
             int ic = kvstore_integrity_check(kv, &errMsg);
             if (ic != KVSTORE_OK) ok = 0;
-            if (errMsg) sqliteFree(errMsg);
+            if (errMsg) snkv_free(errMsg);
             kvstore_close(kv);
         }
         else {
@@ -647,14 +647,14 @@ static void test_cross_config(void) {
         void* got = NULL; int glen = 0;
         rc = kvstore_get(kv, k, 7, &got, &glen);
         if (rc != KVSTORE_OK || glen != 2 || memcmp(got, "v1", 2) != 0) allOk = 0;
-        if (got) { sqliteFree(got); } got = NULL;
+        if (got) { snkv_free(got); } got = NULL;
 
         rc = kvstore_put(kv, k, 7, "v2-updated", 10);
         if (rc != KVSTORE_OK) allOk = 0;
 
         rc = kvstore_get(kv, k, 7, &got, &glen);
         if (rc != KVSTORE_OK || glen != 10 || memcmp(got, "v2-updated", 10) != 0) allOk = 0;
-        if (got) { sqliteFree(got); } got = NULL;
+        if (got) { snkv_free(got); } got = NULL;
 
         rc = kvstore_delete(kv, k, 7);
         if (rc != KVSTORE_OK) allOk = 0;
@@ -672,7 +672,7 @@ static void test_cross_config(void) {
 
         rc = kvstore_get(kv, "txn1", 4, &got, &glen);
         if (rc != KVSTORE_OK || glen != 9) allOk = 0;
-        if (got) { sqliteFree(got); } got = NULL;
+        if (got) { snkv_free(got); } got = NULL;
 
         kvstore_begin(kv, 1);
         kvstore_put(kv, "txn2", 4, "rolled_back", 11);
@@ -680,7 +680,7 @@ static void test_cross_config(void) {
 
         rc = kvstore_get(kv, "txn2", 4, &got, &glen);
         if (rc != KVSTORE_NOTFOUND) allOk = 0;
-        if (got) { sqliteFree(got); } got = NULL;
+        if (got) { snkv_free(got); } got = NULL;
 
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
@@ -688,7 +688,7 @@ static void test_cross_config(void) {
             printf("    %s mode integrity FAILED: %s\n", names[m], errMsg ? errMsg : "?");
             allOk = 0;
         }
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         kvstore_close(kv);
         cleanup(dbs[m]);
@@ -850,7 +850,7 @@ static void test_concurrent_stress(void) {
         intOk = (ic == KVSTORE_OK);
         if (!intOk) printf("    Integrity FAILED after concurrent stress: %s\n",
             errMsg ? errMsg : "?");
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         int verifyOk = 1;
         for (i = 0; i < 2 && verifyOk; i++) {
@@ -986,12 +986,12 @@ static void test_transaction_cycling(void) {
         void* got = NULL; int glen = 0;
         rc = kvstore_get(kv, key, (int)strlen(key), &got, &glen);
         int lastOk = (rc == KVSTORE_OK && glen > 0);
-        if (got) sqliteFree(got);
+        if (got) snkv_free(got);
 
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
         int intOk = (ic == KVSTORE_OK);
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         ok = (errors == 0 && lastOk && intOk);
         kvstore_close(kv);
@@ -1022,7 +1022,7 @@ static void test_rollback_cycling(void) {
         void* got = NULL; int glen = 0;
         rc = kvstore_get(kv, "anchor", 6, &got, &glen);
         int anchorOk = (rc == KVSTORE_OK && glen == 6);
-        if (got) sqliteFree(got);
+        if (got) snkv_free(got);
 
         int ephExists = 0;
         kvstore_exists(kv, "ephemeral", 9, &ephExists);
@@ -1030,7 +1030,7 @@ static void test_rollback_cycling(void) {
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
         int intOk = (ic == KVSTORE_OK);
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         ok = (errors == 0 && anchorOk && !ephExists && intOk);
         kvstore_close(kv);
@@ -1074,7 +1074,7 @@ static void test_mixed_workload(void) {
                 void* got = NULL; int glen = 0;
                 rc = kvstore_get(kv, key, (int)strlen(key), &got, &glen);
                 if (rc != KVSTORE_OK && rc != KVSTORE_NOTFOUND) errors++;
-                if (got) sqliteFree(got);
+                if (got) snkv_free(got);
                 gets++;
             }
             else if (op < 85) {
@@ -1105,7 +1105,7 @@ static void test_mixed_workload(void) {
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
         int intOk = (ic == KVSTORE_OK);
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         ok = (errors == 0 && intOk);
         kvstore_close(kv);
@@ -1170,14 +1170,14 @@ static void test_cf_stress(void) {
         void* got = NULL; int glen = 0;
         rc = kvstore_cf_get(cfs[1], "cf0-key-0", 9, &got, &glen);
         if (rc != KVSTORE_NOTFOUND) isolOk = 0;
-        if (got) sqliteFree(got);
+        if (got) snkv_free(got);
 
         for (i = 0; i < nCF; i++) kvstore_cf_close(cfs[i]);
 
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
         int intOk = (ic == KVSTORE_OK);
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         ok = (allCountOk && isolOk && intOk);
         kvstore_close(kv);
@@ -1204,7 +1204,7 @@ static void test_growing_values(void) {
 
         for (i = 0; i < nSizes; i++) {
             int vlen = sizes[i];
-            char* val = (char*)malloc(vlen);
+            char* val = (char*)snkv_malloc(vlen);
             if (!val) { allOk = 0; break; }
 
             int j;
@@ -1213,7 +1213,7 @@ static void test_growing_values(void) {
             char key[32];
             snprintf(key, sizeof(key), "grow-%d", vlen);
             rc = kvstore_put(kv, key, (int)strlen(key), val, vlen);
-            if (rc != KVSTORE_OK) { allOk = 0; free(val); break; }
+            if (rc != KVSTORE_OK) { allOk = 0; snkv_free(val); break; }
 
             void* got = NULL; int glen = 0;
             rc = kvstore_get(kv, key, (int)strlen(key), &got, &glen);
@@ -1221,15 +1221,15 @@ static void test_growing_values(void) {
                 printf("    FAIL at value size %d\n", vlen);
                 allOk = 0;
             }
-            if (got) sqliteFree(got);
-            free(val);
+            if (got) snkv_free(got);
+            snkv_free(val);
             if (!allOk) break;
         }
 
         char* errMsg = NULL;
         int ic = kvstore_integrity_check(kv, &errMsg);
         if (ic != KVSTORE_OK) allOk = 0;
-        if (errMsg) sqliteFree(errMsg);
+        if (errMsg) snkv_free(errMsg);
 
         ok = allOk;
         kvstore_close(kv);
@@ -1259,7 +1259,7 @@ static void test_mode_switch_persistence(void) {
     void* got = NULL; int glen = 0;
     rc = kvstore_get(kv, "del_key", 7, &got, &glen);
     int delOk = (rc == KVSTORE_OK && glen == 9 && memcmp(got, "del_value", 9) == 0);
-    if (got) { sqliteFree(got); } got = NULL;
+    if (got) { snkv_free(got); } got = NULL;
 
     kvstore_put(kv, "wal_key", 7, "wal_value", 9);
     kvstore_close(kv);
@@ -1269,16 +1269,16 @@ static void test_mode_switch_persistence(void) {
 
     rc = kvstore_get(kv, "del_key", 7, &got, &glen);
     int dk = (rc == KVSTORE_OK && glen == 9);
-    if (got) { sqliteFree(got); } got = NULL;
+    if (got) { snkv_free(got); } got = NULL;
 
     rc = kvstore_get(kv, "wal_key", 7, &got, &glen);
     int wk = (rc == KVSTORE_OK && glen == 9 && memcmp(got, "wal_value", 9) == 0);
-    if (got) { sqliteFree(got); } got = NULL;
+    if (got) { snkv_free(got); } got = NULL;
 
     char* errMsg = NULL;
     int ic = kvstore_integrity_check(kv, &errMsg);
     int intOk = (ic == KVSTORE_OK);
-    if (errMsg) sqliteFree(errMsg);
+    if (errMsg) snkv_free(errMsg);
 
     kvstore_close(kv);
     ok = (delOk && dk && wk && intOk);

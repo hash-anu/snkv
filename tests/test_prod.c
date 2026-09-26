@@ -133,7 +133,7 @@ static void test_basic_crud(void){
   ASSERT_OK(rc, "Failed to get key1");
   ASSERT_EQ(6, vlen, "Wrong value length");
   ASSERT_TRUE(memcmp(val, "value1", 6) == 0, "Wrong value content");
-  sqliteFree(val);
+  snkv_free(val);
   
   /* DELETE */
   rc = kvstore_delete(kv, "key1", 4);
@@ -175,7 +175,7 @@ static void test_update(void){
   ASSERT_OK(rc, "Failed to get after update");
   ASSERT_EQ(13, vlen, "Wrong updated value length");
   ASSERT_TRUE(memcmp(val, "value2_longer", 13) == 0, "Wrong updated value");
-  sqliteFree(val);
+  snkv_free(val);
   
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -336,7 +336,7 @@ static void test_large_data(void){
   ASSERT_OK(rc, "Failed to open database");
   
   /* Allocate large value */
-  large_val = (char*)malloc(large_size);
+  large_val = (char*)snkv_malloc(large_size);
   ASSERT_TRUE(large_val != NULL, "Failed to allocate large buffer");
   memset(large_val, 'X', large_size);
   
@@ -350,8 +350,8 @@ static void test_large_data(void){
   ASSERT_EQ(large_size, vlen, "Large value size mismatch");
   ASSERT_TRUE(memcmp(val, large_val, large_size) == 0, "Large value content mismatch");
   
-  sqliteFree(val);
-  free(large_val);
+  snkv_free(val);
+  snkv_free(large_val);
   kvstore_close(kv);
   cleanup_db(TEST_DB);
   TEST_PASS();
@@ -426,7 +426,7 @@ static void test_persistence(void){
   ASSERT_OK(rc, "Failed to get persistent data");
   ASSERT_EQ(4, vlen, "Wrong persistent value length");
   ASSERT_TRUE(memcmp(val, "data", 4) == 0, "Wrong persistent value");
-  sqliteFree(val);
+  snkv_free(val);
   
   kvstore_close(kv);
   cleanup_db(TEST_DB);
@@ -453,7 +453,7 @@ static void test_statistics(void){
   void *v;
   int vlen;
   kvstore_get(kv, "k1", 2, &v, &vlen);
-  sqliteFree(v);
+  snkv_free(v);
   
   kvstore_delete(kv, "k1", 2);
   
@@ -505,7 +505,7 @@ static void test_integrity(void){
   rc = kvstore_integrity_check(kv, &errMsg);
   if( rc != KVSTORE_OK ){
     printf("  Integrity error: %s\n", errMsg ? errMsg : "unknown");
-    if( errMsg ) sqliteFree(errMsg);
+    if( errMsg ) snkv_free(errMsg);
     TEST_FAIL("Integrity check failed");
   }
   ASSERT_TRUE(errMsg == NULL, "Should have no error message");
@@ -566,7 +566,7 @@ static void test_performance(void){
     snprintf(key, sizeof(key), "perf_key_%08d", idx);
     rc = kvstore_get(kv, key, strlen(key), &v, &vlen);
     ASSERT_OK(rc, "Failed benchmark get");
-    sqliteFree(v);
+    snkv_free(v);
   }
   
   end = clock();

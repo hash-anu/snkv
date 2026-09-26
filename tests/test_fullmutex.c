@@ -71,7 +71,7 @@ static void test_null_config_no_mutex(void) {
         rc = kvstore_get(kv, "k", 1, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 1 && *(char *)val == 'v',
               "get returns correct value");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(kv);
     }
@@ -95,7 +95,7 @@ static void test_fullmutex_zero(void) {
         void *val; int len;
         rc = kvstore_get(kv, "zero", 4, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 3, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         rc = kvstore_delete(kv, "zero", 4);
         CHECK(rc == KVSTORE_OK, "delete OK");
@@ -125,7 +125,7 @@ static void test_fullmutex_one(void) {
         void *val; int len;
         rc = kvstore_get(kv, "one", 3, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 3, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         rc = kvstore_delete(kv, "one", 3);
         CHECK(rc == KVSTORE_OK, "delete OK");
@@ -170,7 +170,7 @@ static void *t4_worker(void *arg) {
         } else {
             if (glen != (int)strlen(val) || memcmp(got, val, glen) != 0)
                 a->errors++;
-            sqliteFree(got);
+            snkv_free(got);
         }
     }
     return NULL;
@@ -211,7 +211,7 @@ static void test_shared_handle_fullmutex(void) {
     char *errmsg = NULL;
     int rc = kvstore_integrity_check(kv, &errmsg);
     CHECK(rc == KVSTORE_OK, "integrity_check passes after shared-handle writes");
-    if (errmsg) sqliteFree(errmsg);
+    if (errmsg) snkv_free(errmsg);
 
     kvstore_close(kv);
     cleanup(db);
@@ -302,7 +302,7 @@ static void *t6_worker(void *arg) {
             if (glen != (int)strlen(expected) ||
                 memcmp(got, expected, glen) != 0)
                 a->errors++;
-            sqliteFree(got);
+            snkv_free(got);
         }
     }
 
@@ -352,7 +352,7 @@ static void test_per_thread_handles(void) {
                 if (kvstore_get(verify, key, (int)strlen(key), &v, &vl)
                     == KVSTORE_OK) {
                     count++;
-                    sqliteFree(v);
+                    snkv_free(v);
                 }
             }
         }

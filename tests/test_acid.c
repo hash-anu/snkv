@@ -152,11 +152,11 @@ static int test_atomicity(const char *dbfile, char *err_msg, int journal_mode) {
   
   if(!buffers_equal(pVal, value1, strlen(value1))) {
     snprintf(err_msg, 1024, "Key1 has wrong value after rollback - atomicity violated");
-    sqliteFree(pVal);
+    snkv_free(pVal);
     kvstore_close(pKV);
     return 0;
   }
-  sqliteFree(pVal);
+  snkv_free(pVal);
   
   /* Verify key2 doesn't exist */
   kvstore_exists(pKV, key2, strlen(key2), &exists);
@@ -201,7 +201,7 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Integrity check failed on empty DB: %s", 
              integrity_err ? integrity_err : "unknown");
-    if(integrity_err) sqliteFree(integrity_err);
+    if(integrity_err) snkv_free(integrity_err);
     kvstore_close(pKV);
     return 0;
   }
@@ -241,11 +241,11 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
     
     if(!buffers_equal(pVal, value, strlen(value))) {
       snprintf(err_msg, 1024, "Key %d has wrong value after deletions", i);
-      sqliteFree(pVal);
+      snkv_free(pVal);
       kvstore_close(pKV);
       return 0;
     }
-    sqliteFree(pVal);
+    snkv_free(pVal);
     pVal = NULL;
   }
   
@@ -254,7 +254,7 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Integrity check failed after operations: %s",
              integrity_err ? integrity_err : "unknown");
-    if(integrity_err) sqliteFree(integrity_err);
+    if(integrity_err) snkv_free(integrity_err);
     kvstore_close(pKV);
     return 0;
   }
@@ -289,31 +289,31 @@ static int test_consistency(const char *dbfile, char *err_msg, int journal_mode)
   rc = kvstore_cf_get(pCF1, test_key, strlen(test_key), &pVal, &nVal);
   if(rc != KVSTORE_OK || !buffers_equal(pVal, cf1_value, strlen(cf1_value))) {
     snprintf(err_msg, 1024, "CF1 value incorrect - CF isolation violated");
-    sqliteFree(pVal);
+    snkv_free(pVal);
     kvstore_cf_close(pCF1);
     kvstore_cf_close(pCF2);
     kvstore_close(pKV);
     return 0;
   }
-  sqliteFree(pVal);
+  snkv_free(pVal);
   
   rc = kvstore_cf_get(pCF2, test_key, strlen(test_key), &pVal, &nVal);
   if(rc != KVSTORE_OK || !buffers_equal(pVal, cf2_value, strlen(cf2_value))) {
     snprintf(err_msg, 1024, "CF2 value incorrect - CF isolation violated");
-    sqliteFree(pVal);
+    snkv_free(pVal);
     kvstore_cf_close(pCF1);
     kvstore_cf_close(pCF2);
     kvstore_close(pKV);
     return 0;
   }
-  sqliteFree(pVal);
+  snkv_free(pVal);
   
   /* Final integrity check */
   rc = kvstore_integrity_check(pKV, &integrity_err);
   if(rc != KVSTORE_OK) {
     snprintf(err_msg, 1024, "Final integrity check failed: %s",
              integrity_err ? integrity_err : "unknown");
-    if(integrity_err) sqliteFree(integrity_err);
+    if(integrity_err) snkv_free(integrity_err);
     kvstore_cf_close(pCF1);
     kvstore_cf_close(pCF2);
     kvstore_close(pKV);
@@ -395,12 +395,12 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
   rc = kvstore_get(pKV, key1, strlen(key1), &pVal, &nVal);
   if(rc != KVSTORE_OK || !buffers_equal(pVal, value_new, strlen(value_new))) {
     snprintf(err_msg, 1024, "Updated value not visible within transaction");
-    sqliteFree(pVal);
+    snkv_free(pVal);
     kvstore_rollback(pKV);
     kvstore_close(pKV);
     return 0;
   }
-  sqliteFree(pVal);
+  snkv_free(pVal);
   
   /* Commit transaction */
   rc = kvstore_commit(pKV);
@@ -428,7 +428,7 @@ static int test_isolation(const char *dbfile, char *err_msg, int journal_mode) {
     kvstore_close(pKV);
     return 0;
   }
-  sqliteFree(pVal);
+  snkv_free(pVal);
   
   /* Cleanup */
   kvstore_delete(pKV, key1, strlen(key1));
@@ -501,11 +501,11 @@ static int test_durability(const char *dbfile, char *err_msg, int journal_mode) 
   
   if(!buffers_equal(pVal, value, strlen(value))) {
     snprintf(err_msg, 1024, "Data corrupted after reopen");
-    sqliteFree(pVal);
+    snkv_free(pVal);
     kvstore_close(pKV);
     return 0;
   }
-  sqliteFree(pVal);
+  snkv_free(pVal);
   
   /* Test 2: Multiple write/close cycles */
   printf("    Test 4.2: Multiple write/reopen cycles\n");

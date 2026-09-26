@@ -348,12 +348,12 @@ static int doVerify(const char *zDb) {
     printf("[verify] Database opened successfully.\n\n");
 
     /* Allocate bookkeeping arrays once. */
-    long long *committed  = (long long *)malloc(MAX_TXNS * sizeof(long long));
-    int       *perTxCount = (int *)      malloc(MAX_TXNS * sizeof(int));
+    long long *committed  = (long long *)snkv_malloc(MAX_TXNS * sizeof(long long));
+    int       *perTxCount = (int *)      snkv_malloc(MAX_TXNS * sizeof(int));
     if (!committed || !perTxCount) {
         fprintf(stderr, "[verify] ERROR: out of memory\n");
-        free(committed);
-        free(perTxCount);
+        snkv_free(committed);
+        snkv_free(perTxCount);
         kvstore_close(kv);
         return 1;
     }
@@ -385,7 +385,7 @@ static int doVerify(const char *zDb) {
             printf(CLR_RED
                    "[verify] FAIL: cannot create mark iterator (rc=%d)\n"
                    CLR_RESET, rc);
-            free(committed); free(perTxCount); kvstore_close(kv);
+            snkv_free(committed); snkv_free(perTxCount); kvstore_close(kv);
             return 1;
         }
 
@@ -455,7 +455,7 @@ static int doVerify(const char *zDb) {
             printf(CLR_RED
                    "[verify] FAIL: cannot create data iterator (rc=%d)\n"
                    CLR_RESET, rc);
-            free(committed); free(perTxCount); kvstore_close(kv);
+            snkv_free(committed); snkv_free(perTxCount); kvstore_close(kv);
             return 1;
         }
 
@@ -559,7 +559,7 @@ static int doVerify(const char *zDb) {
         printf(CLR_RED "[verify] Phase 4: FAIL -- %s\n" CLR_RESET,
                errMsg ? errMsg : "unknown error");
     }
-    if (errMsg) sqliteFree(errMsg);
+    if (errMsg) snkv_free(errMsg);
 
     /* ----------------------------------------------------------------
     ** Summary
@@ -586,8 +586,8 @@ static int doVerify(const char *zDb) {
     }
     printf("==================================================\n\n");
 
-    free(committed);
-    free(perTxCount);
+    snkv_free(committed);
+    snkv_free(perTxCount);
     kvstore_close(kv);
     return failed ? 1 : 0;
 }
