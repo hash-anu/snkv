@@ -783,12 +783,12 @@ ro.readOnly = <span class="nm">1</span>;
   <span class="kw">const void</span>  *pKey,   <span class="kw">int</span>   nKey,
   <span class="kw">void</span>       **ppValue, <span class="kw">int</span>  *pnValue
 );</div>
-          <p class="fn-desc">Retrieve a value by key. The returned buffer is heap-allocated by SNKV. Caller must free with <code>sqliteFree()</code> / <code>snkv_free()</code>.</p>
+          <p class="fn-desc">Retrieve a value by key. The returned buffer is heap-allocated by SNKV. Caller must free with <code>snkv_free()</code> / <code>snkv_free()</code>.</p>
           <pre><span class="kw">void</span> *value = <span class="kw">NULL</span>; <span class="kw">int</span> vlen = <span class="nm">0</span>;
 <span class="kw">int</span> rc = <span class="fn">kvstore_get</span>(kv, <span class="str">"user:1"</span>, <span class="nm">6</span>, &amp;value, &amp;vlen);
 <span class="kw">if</span> (rc == KVSTORE_OK) {
     printf(<span class="str">"%.*s\n"</span>, vlen, (<span class="kw">char</span>*)value);
-    <span class="fn">sqliteFree</span>(value);
+    <span class="fn">snkv_free</span>(value);
 }</pre>
           <div class="returns-label">Returns</div>
           <p class="fn-desc"><code>KVSTORE_OK</code> if found · <code>KVSTORE_NOTFOUND</code> if key does not exist.</p>
@@ -839,14 +839,14 @@ ro.readOnly = <span class="nm">1</span>;
         <div class="fn-entry" id="c-cf-list">
           <h3 class="fn-name">kvstore_cf_list</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_list</span>(KVStore *pKV, <span class="kw">char</span> ***pazNames, <span class="kw">int</span> *pnCount);</div>
-          <p class="fn-desc">List all column families. Caller must free each name and the array with <code>sqliteFree()</code>.</p>
+          <p class="fn-desc">List all column families. Caller must free each name and the array with <code>snkv_free()</code>.</p>
           <pre><span class="kw">char</span> **names = <span class="kw">NULL</span>; <span class="kw">int</span> count = <span class="nm">0</span>;
 <span class="fn">kvstore_cf_list</span>(kv, &amp;names, &amp;count);
 <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; count; i++) {
     printf(<span class="str">"%s\n"</span>, names[i]);
-    <span class="fn">sqliteFree</span>(names[i]);
+    <span class="fn">snkv_free</span>(names[i]);
 }
-<span class="fn">sqliteFree</span>(names);</pre>
+<span class="fn">snkv_free</span>(names);</pre>
         </div>
 
         <div class="fn-entry" id="c-cf-close">
@@ -862,7 +862,7 @@ ro.readOnly = <span class="nm">1</span>;
 <span class="kw">int</span> <span class="fn">kvstore_cf_get</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">void</span> **ppValue, <span class="kw">int</span> *pnValue);
 <span class="kw">int</span> <span class="fn">kvstore_cf_delete</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);
 <span class="kw">int</span> <span class="fn">kvstore_cf_exists</span>(KVColumnFamily *pCF, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">int</span> *pExists);</div>
-          <div class="note"><strong>Note:</strong> Caller must free the value from <code>kvstore_cf_get</code> with <code>sqliteFree()</code>.</div>
+          <div class="note"><strong>Note:</strong> Caller must free the value from <code>kvstore_cf_get</code> with <code>snkv_free()</code>.</div>
         </div>
       </section>
 
@@ -1064,7 +1064,7 @@ KVIterator *it = <span class="kw">NULL</span>;
 <span class="cm">/* read with lazy expiry */</span>
 <span class="kw">void</span> *val = <span class="kw">NULL</span>; <span class="kw">int</span> nVal = <span class="nm">0</span>; <span class="kw">int64_t</span> rem = <span class="nm">0</span>;
 <span class="kw">int</span> rc = <span class="fn">kvstore_get_ttl</span>(kv, <span class="str">"sess:abc"</span>, <span class="nm">8</span>, &amp;val, &amp;nVal, &amp;rem);
-<span class="kw">if</span> (rc == KVSTORE_OK) { <span class="cm">/* rem = ms remaining */</span> <span class="fn">sqliteFree</span>(val); }</pre>
+<span class="kw">if</span> (rc == KVSTORE_OK) { <span class="cm">/* rem = ms remaining */</span> <span class="fn">snkv_free</span>(val); }</pre>
         </div>
 
         <div class="fn-entry" id="c-ttl-remaining">
@@ -1231,7 +1231,7 @@ printf(<span class="str">"live entries after purge: %lld\n"</span>, (<span class
         <div class="fn-entry" id="c-integrity">
           <h3 class="fn-name">kvstore_integrity_check</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_integrity_check</span>(KVStore *pKV, <span class="kw">char</span> **pzErrMsg);</div>
-          <p class="fn-desc">Walk the entire B-tree and verify structural integrity. Returns <code>KVSTORE_OK</code> or <code>KVSTORE_CORRUPT</code> with details in <code>*pzErrMsg</code>. Caller must free <code>*pzErrMsg</code> with <code>sqliteFree()</code>.</p>
+          <p class="fn-desc">Walk the entire B-tree and verify structural integrity. Returns <code>KVSTORE_OK</code> or <code>KVSTORE_CORRUPT</code> with details in <code>*pzErrMsg</code>. Caller must free <code>*pzErrMsg</code> with <code>snkv_free()</code>.</p>
         </div>
 
         <div class="fn-entry" id="c-sync">
@@ -1266,14 +1266,14 @@ printf(<span class="str">"%d frames total, %d checkpointed\n"</span>, nLog, nCkp
         <h2 class="section-title">Memory Management</h2>
         <div class="table-wrap"><table>
           <tr><th>Macro</th><th>Description</th></tr>
-          <tr><td><code>sqliteMalloc(n)</code></td><td>Allocate <code>n</code> zero-initialised bytes.</td></tr>
-          <tr><td><code>sqliteFree(p)</code></td><td>Free memory allocated by SNKV.</td></tr>
-          <tr><td><code>sqliteRealloc(p, n)</code></td><td>Resize allocation.</td></tr>
-          <tr><td><code>sqliteStrDup(s)</code></td><td>Duplicate a C string (equivalent to <code>sqlite3_mprintf("%s", s)</code>).</td></tr>
-          <tr><td><code>snkv_malloc(n)</code></td><td>Alias for <code>sqliteMalloc</code> (single-header build).</td></tr>
-          <tr><td><code>snkv_free(p)</code></td><td>Alias for <code>sqliteFree</code> (single-header build).</td></tr>
+          <tr><td><code>sqliteMalloc(n)</code></td><td>Legacy alias of <code>snkv_malloc</code>, kept for compatibility.</td></tr>
+          <tr><td><code>sqliteFree(p)</code></td><td>Legacy alias of <code>snkv_free</code>, kept for compatibility.</td></tr>
+          <tr><td><code>sqliteRealloc(p, n)</code></td><td>Legacy: resize an SNKV allocation. Not needed by the public API.</td></tr>
+          <tr><td><code>sqliteStrDup(s)</code></td><td>Legacy: duplicate a C string into SNKV memory. Not needed by the public API.</td></tr>
+          <tr><td><code>snkv_malloc(n)</code></td><td><strong>Use this</strong> to allocate <code>n</code> zero-initialised bytes. Call it only after the first <code>kvstore_open</code>.</td></tr>
+          <tr><td><code>snkv_free(p)</code></td><td><strong>Use this</strong> to free any memory returned by SNKV.</td></tr>
         </table></div>
-        <div class="note"><strong>Rule:</strong> Any pointer returned by <code>kvstore_get</code>, <code>kvstore_cf_get</code>, <code>kvstore_cf_list</code>, or <code>kvstore_integrity_check</code> must be freed with <code>sqliteFree()</code>. Iterator key/value pointers are iterator-owned — do NOT free them.</div>
+        <div class="note"><strong>Rule:</strong> Any pointer returned by <code>kvstore_get</code>, <code>kvstore_cf_get</code>, <code>kvstore_cf_list</code>, or <code>kvstore_integrity_check</code> must be freed with <code>snkv_free()</code>. Iterator key/value pointers are iterator-owned — do NOT free them.</div>
       </section>
 
       <!-- Thread Safety -->
