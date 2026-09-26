@@ -112,7 +112,7 @@ static void bench_random_reads(KVStore *kv) {
         snprintf(key, sizeof(key), "key_%08d", idx);
         
         if (kvstore_get(kv, key, strlen(key), &value, &vlen) == KVSTORE_OK) {
-            sqliteFree(value);
+            snkv_free(value);
         }
     }
     
@@ -250,7 +250,7 @@ static void bench_mixed_workload(KVStore *kv) {
         if (op < 70) {
             /* Read */
             if (kvstore_get(kv, key, strlen(key), &val, &vlen) == KVSTORE_OK) {
-                sqliteFree(val);
+                snkv_free(val);
             }
         } else if (op < 90) {
             /* Write */

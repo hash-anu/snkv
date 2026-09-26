@@ -70,7 +70,8 @@ kvstore_put_ttl(db, "session", 7, "tok123", 6, kvstore_now_ms() + 60000);
 kvstore_open_encrypted("secure.db", "hunter2", 7, &db, NULL);
 
 /* Custom configuration */
-KVStoreConfig cfg = {0};
+KVStoreConfig cfg = {0};                  /* zero fields are NOT defaults: set journalMode */
+cfg.journalMode = KVSTORE_JOURNAL_WAL;
 cfg.syncLevel   = KVSTORE_SYNC_FULL;
 cfg.busyTimeout = 5000;
 kvstore_open_v2("mydb.db", &db, &cfg);

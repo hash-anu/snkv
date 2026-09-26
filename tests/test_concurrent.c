@@ -232,7 +232,7 @@ static void *reader_thread(void *arg) {
                 } else {
                     res->reads_wrong++;
                 }
-                sqliteFree(got_val);
+                snkv_free(got_val);
             } else if (rc == KVSTORE_NOTFOUND) {
                 /* Writer hasn't committed this key yet -- acceptable */
                 res->reads_missing++;
@@ -367,7 +367,7 @@ static void test_concurrent_write_read(void) {
                            key, exp_len, got_len);
                 }
             }
-            sqliteFree(got_val);
+            snkv_free(got_val);
         } else {
             verify_missing++;
             if (verify_missing <= 3) {
@@ -390,7 +390,7 @@ static void test_concurrent_write_read(void) {
     if (!integrity_ok) {
         printf("    Integrity check failed: %s\n", errMsg ? errMsg : "unknown");
     }
-    if (errMsg) sqliteFree(errMsg);
+    if (errMsg) snkv_free(errMsg);
     print_result("Database integrity check", integrity_ok);
 
     kvstore_close(kv);

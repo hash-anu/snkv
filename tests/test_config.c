@@ -50,7 +50,7 @@ static void test_null_config(void)
         void *val; int len;
         rc = kvstore_get(db, "k", 1, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 1 && *(char*)val == 'v', "get returns correct value");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -76,7 +76,7 @@ static void test_wal_normal(void)
         void *val; int len;
         rc = kvstore_get(db, "key", 3, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 5, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -102,7 +102,7 @@ static void test_sync_off(void)
         void *val; int len;
         rc = kvstore_get(db, "a", 1, &val, &len);
         CHECK(rc == KVSTORE_OK, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -128,7 +128,7 @@ static void test_sync_full(void)
         void *val; int len;
         rc = kvstore_get(db, "safe", 4, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 4, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -154,7 +154,7 @@ static void test_custom_page_size(void)
         void *val; int len;
         rc = kvstore_get(db, "pg", 2, &val, &len);
         CHECK(rc == KVSTORE_OK, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -182,7 +182,7 @@ static void test_custom_cache_size(void)
         void *val; int len;
         rc = kvstore_get(db, "k0", 2, &val, &len);
         CHECK(rc == KVSTORE_OK, "get after 200 puts OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -213,7 +213,7 @@ static void test_read_only(void)
         void *val; int len;
         rc = kvstore_get(db, "ro_key", 6, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 6, "read succeeds");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         /* Write attempt must fail */
         rc = kvstore_put(db, "new", 3, "x", 1);
@@ -261,7 +261,7 @@ static void test_delete_journal(void)
         void *val; int len;
         rc = kvstore_get(db, "j", 1, &val, &len);
         CHECK(rc == KVSTORE_OK, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }
@@ -303,7 +303,7 @@ static void test_backward_compat(void)
         void *val; int len;
         rc = kvstore_get(db, "compat", 6, &val, &len);
         CHECK(rc == KVSTORE_OK && len == 3, "get OK");
-        if (rc == KVSTORE_OK) sqliteFree(val);
+        if (rc == KVSTORE_OK) snkv_free(val);
 
         kvstore_close(db);
     }

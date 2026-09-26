@@ -340,7 +340,7 @@ int kvstore_cf_drop(
 ** Returns:
 **   KVSTORE_OK on success, error code otherwise
 **
-** Note: Caller must free each name with sqliteFree(), then free the array
+** Note: Caller must free each name with snkv_free(), then free the array
 */
 int kvstore_cf_list(
   KVStore *pKV,
@@ -396,7 +396,7 @@ int kvstore_put(
 **   KVSTORE_NOTFOUND if key doesn't exist
 **   Other error codes on failure
 **
-** Note: Caller is responsible for freeing *ppValue with sqliteFree()
+** Note: Caller is responsible for freeing *ppValue with snkv_free()
 */
 int kvstore_get(
   KVStore *pKV,
@@ -935,7 +935,7 @@ int kvstore_stats_reset(KVStore *pKV);
 **
 ** Parameters:
 **   pKV      - KVStore handle
-**   pzErrMsg - Output pointer to error message (caller must free with sqliteFree)
+**   pzErrMsg - Output pointer to error message (caller must free with snkv_free)
 **
 ** Returns:
 **   KVSTORE_OK if database is ok

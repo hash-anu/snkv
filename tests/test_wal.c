@@ -137,9 +137,9 @@ static void test_wal_basic_crud(void){
   rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
   if( rc != KVSTORE_OK || !got ) goto done;
   if( glen != (int)strlen(val) || memcmp(got, val, glen) != 0 ){
-    sqliteFree(got); goto done;
+    snkv_free(got); goto done;
   }
-  sqliteFree(got); got = NULL;
+  snkv_free(got); got = NULL;
 
   /* Exists */
   int exists = 0;
@@ -154,9 +154,9 @@ static void test_wal_basic_crud(void){
   rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
   if( rc != KVSTORE_OK || !got ) goto done;
   if( glen != (int)strlen(val2) || memcmp(got, val2, glen) != 0 ){
-    sqliteFree(got); goto done;
+    snkv_free(got); goto done;
   }
-  sqliteFree(got); got = NULL;
+  snkv_free(got); got = NULL;
 
   /* Delete */
   rc = kvstore_delete(pKV, key, (int)strlen(key));
@@ -203,7 +203,7 @@ static void test_wal_commit(void){
         snprintf(k, sizeof(k), "tkey_%d", i);
         rc = kvstore_get(pKV, k, (int)strlen(k), &got, &glen);
         if( rc != KVSTORE_OK || !got ){ ok = 0; }
-        else{ sqliteFree(got); }
+        else{ snkv_free(got); }
       }
       passed = ok;
     }
@@ -244,7 +244,7 @@ static void test_wal_rollback(void){
     if( rc == KVSTORE_OK && got ){
       passed = (glen == (int)strlen(val1) &&
                 memcmp(got, val1, glen) == 0);
-      sqliteFree(got);
+      snkv_free(got);
     }
   }
 
@@ -286,7 +286,7 @@ static void test_wal_recovery(void){
     if( rc == KVSTORE_OK && got ){
       passed = (glen == (int)strlen(val1) &&
                 memcmp(got, val1, glen) == 0);
-      sqliteFree(got);
+      snkv_free(got);
     }
     kvstore_close(pKV);
   }
@@ -333,7 +333,7 @@ static void test_wal_persistence(void){
         if( glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
           ok = 0;
         }
-        sqliteFree(got);
+        snkv_free(got);
       }
     }
     passed = ok;
@@ -386,7 +386,7 @@ static void *wal_reader_thread(void *arg){
     }else{
       d->errors++;
     }
-    if( got ) sqliteFree(got);
+    if( got ) snkv_free(got);
     usleep(100);
   }
   return NULL;
@@ -475,13 +475,13 @@ static void test_wal_column_families(void){
   rc = kvstore_cf_get(pCF1, key, (int)strlen(key), &g1, &l1);
   if( rc != KVSTORE_OK || !g1 ) goto cf_done;
   rc = kvstore_cf_get(pCF2, key, (int)strlen(key), &g2, &l2);
-  if( rc != KVSTORE_OK || !g2 ){ sqliteFree(g1); goto cf_done; }
+  if( rc != KVSTORE_OK || !g2 ){ snkv_free(g1); goto cf_done; }
 
   passed = (l1 == (int)strlen(va) && memcmp(g1, va, l1) == 0 &&
             l2 == (int)strlen(vb) && memcmp(g2, vb, l2) == 0);
 
-  sqliteFree(g1);
-  sqliteFree(g2);
+  snkv_free(g1);
+  snkv_free(g2);
 
 cf_done:
   if( pCF1 ) kvstore_cf_close(pCF1);
@@ -505,7 +505,7 @@ static void test_wal_large_payload(void){
 
   /* Create a 1 MB value */
   int sz = 1024 * 1024;
-  char *big = (char*)malloc(sz);
+  char *big = (char*)snkv_malloc(sz);
   if( !big ){ kvstore_close(pKV); print_result("WAL large payload", 0); return; }
 
   int i;
@@ -513,17 +513,17 @@ static void test_wal_large_payload(void){
 
   const char *key = "big_wal_key";
   rc = kvstore_put(pKV, key, (int)strlen(key), big, sz);
-  if( rc != KVSTORE_OK ){ free(big); kvstore_close(pKV); print_result("WAL large payload", 0); return; }
+  if( rc != KVSTORE_OK ){ snkv_free(big); kvstore_close(pKV); print_result("WAL large payload", 0); return; }
 
   /* Read back */
   void *got = NULL; int glen = 0;
   rc = kvstore_get(pKV, key, (int)strlen(key), &got, &glen);
   if( rc == KVSTORE_OK && got && glen == sz ){
     passed = (memcmp(got, big, sz) == 0);
-    sqliteFree(got);
+    snkv_free(got);
   }
 
-  free(big);
+  snkv_free(big);
   kvstore_close(pKV);
   cleanup();
   print_result("WAL large payload (1 MB)", passed);
@@ -556,7 +556,7 @@ static void test_wal_integrity(void){
     passed = 1;
   }else{
     printf("  Integrity error: %s\n", errMsg ? errMsg : "(null)");
-    if( errMsg ) sqliteFree(errMsg);
+    if( errMsg ) snkv_free(errMsg);
   }
 
   kvstore_close(pKV);
@@ -596,7 +596,7 @@ static void test_wal_cross_mode(void){
     return;
   }
   int phase1_ok = (glen == (int)strlen(val1) && memcmp(got, val1, glen) == 0);
-  sqliteFree(got); got = NULL;
+  snkv_free(got); got = NULL;
 
   const char *key2 = "cross_key2";
   const char *val2 = "written_in_wal_mode";
@@ -610,12 +610,12 @@ static void test_wal_cross_mode(void){
   rc = kvstore_get(pKV, key1, (int)strlen(key1), &got, &glen);
   int k1_ok = (rc == KVSTORE_OK && got &&
                glen == (int)strlen(val1) && memcmp(got, val1, glen) == 0);
-  if( got ){ sqliteFree(got); } got = NULL;
+  if( got ){ snkv_free(got); } got = NULL;
 
   rc = kvstore_get(pKV, key2, (int)strlen(key2), &got, &glen);
   int k2_ok = (rc == KVSTORE_OK && got &&
                glen == (int)strlen(val2) && memcmp(got, val2, glen) == 0);
-  if( got ) sqliteFree(got);
+  if( got ) snkv_free(got);
 
   passed = phase1_ok && k1_ok && k2_ok;
 
@@ -674,7 +674,7 @@ static void test_wal_batch_performance(void){
           memcmp(got, expected, glen) != 0 ){
         spot_ok = 0;
       }
-      if( got ) sqliteFree(got);
+      if( got ) snkv_free(got);
     }
     passed = spot_ok;
   }
@@ -881,7 +881,7 @@ static void test_wal_acid_atomicity(void){
         glen != (int)strlen(expected) || memcmp(got, expected, glen) != 0 ){
       all_exist = 0;
     }
-    if( got ) sqliteFree(got);
+    if( got ) snkv_free(got);
     if( !all_exist ) break;
   }
 
@@ -942,12 +942,12 @@ static void test_wal_acid_consistency(void){
         ok = 0;
         printf("  FAIL: key cons_%d mismatch\n", i);
       }
-      if( got ) sqliteFree(got);
+      if( got ) snkv_free(got);
     }
     passed = ok;
   }else{
     printf("  Integrity error: %s\n", errMsg ? errMsg : "(null)");
-    if( errMsg ) sqliteFree(errMsg);
+    if( errMsg ) snkv_free(errMsg);
   }
 
   kvstore_close(pKV);
@@ -993,7 +993,7 @@ static void test_wal_acid_isolation(void){
   int v1_ok = (rc == KVSTORE_OK && got &&
                glen == (int)strlen(val_v1) &&
                memcmp(got, val_v1, glen) == 0);
-  if( got ){ sqliteFree(got); } got = NULL;
+  if( got ){ snkv_free(got); } got = NULL;
 
   /* Phantom key should not exist */
   int phantom_exists = 0;
@@ -1066,7 +1066,7 @@ static void test_wal_acid_durability(void){
       committed_ok = 0;
       printf("  FAIL: dur_%d mismatch after reopen\n", i);
     }
-    if( got ) sqliteFree(got);
+    if( got ) snkv_free(got);
     if( !committed_ok ) break;
   }
 
@@ -1140,7 +1140,7 @@ static void test_wal_acid_crash_atomicity(void){
   int base_ok = (rc == KVSTORE_OK && got &&
                  glen == (int)strlen(base_val) &&
                  memcmp(got, base_val, glen) == 0);
-  if( got ) sqliteFree(got);
+  if( got ) snkv_free(got);
 
   int crash_keys_gone = 1;
   int i;
@@ -1182,9 +1182,9 @@ static void test_wal_statistics(void){
 
   void *got = NULL; int glen = 0;
   kvstore_get(pKV, "s1", 2, &got, &glen);
-  if( got ) sqliteFree(got);
+  if( got ) snkv_free(got);
   kvstore_get(pKV, "s2", 2, &got, &glen);
-  if( got ) sqliteFree(got);
+  if( got ) snkv_free(got);
 
   kvstore_delete(pKV, "s3", 2);
 

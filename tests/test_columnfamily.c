@@ -138,20 +138,20 @@ static void test_cf_isolation(void) {
   rc = kvstore_cf_get(cf_users, "key1", 4, &val, &vlen);
   ASSERT_OK(rc, "Failed to get from users CF");
   if( vlen != 10 || memcmp(val, "user_value", 10) != 0 ){
-    sqliteFree(val);
+    snkv_free(val);
     FAIL("Wrong value from users CF");
   }
   printf("  [OK] users CF: key1 = user_value\n");
-  sqliteFree(val);
+  snkv_free(val);
   
   rc = kvstore_cf_get(cf_sessions, "key1", 4, &val, &vlen);
   ASSERT_OK(rc, "Failed to get from sessions CF");
   if( vlen != 13 || memcmp(val, "session_value", 13) != 0 ){
-    sqliteFree(val);
+    snkv_free(val);
     FAIL("Wrong value from sessions CF");
   }
   printf("  [OK] sessions CF: key1 = session_value\n");
-  sqliteFree(val);
+  snkv_free(val);
   
   /* Verify key doesn't exist in wrong CF */
   rc = kvstore_cf_put(cf_users, "users_only", 10, "data", 4);
@@ -211,9 +211,9 @@ static void test_cf_list(void) {
   }
   
   for(i = 0; i < count; i++){
-    sqliteFree(names[i]);
+    snkv_free(names[i]);
   }
-  sqliteFree(names);
+  snkv_free(names);
   names = NULL;
   
   /* Drop one CF */
@@ -231,9 +231,9 @@ static void test_cf_list(void) {
     if( strcmp(names[i], "logs") == 0 ){
       found_logs = 1;
     }
-    sqliteFree(names[i]);
+    snkv_free(names[i]);
   }
-  sqliteFree(names);
+  snkv_free(names);
   
   if( count != 3 ){
     FAIL("Expected 3 CFs after drop");

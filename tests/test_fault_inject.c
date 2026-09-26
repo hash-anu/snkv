@@ -64,7 +64,7 @@ static void test_null_handles(void){
   ASSERT("get(NULL)", kvstore_get(NULL,"k",1,NULL,NULL) == KVSTORE_ERROR);
   ASSERT("delete(NULL)", kvstore_delete(NULL,"k",1) == KVSTORE_ERROR);
   ASSERT("exists(NULL)", kvstore_exists(NULL,"k",1,NULL) == KVSTORE_ERROR);
-  /* close(NULL) is defined to be a no-op returning KVSTORE_OK, like free(NULL) */
+  /* close(NULL) is defined to be a no-op returning KVSTORE_OK, like snkv_free(NULL) */
   ASSERT("close(NULL) no-crash", kvstore_close(NULL) == KVSTORE_OK || kvstore_close(NULL) == KVSTORE_ERROR);
   ASSERT("begin(NULL)", kvstore_begin(NULL,1) == KVSTORE_ERROR);
   ASSERT("commit(NULL)", kvstore_commit(NULL) == KVSTORE_ERROR);
@@ -116,12 +116,12 @@ static void test_key_too_large(void){
   if(!kv) return;
   /* 64 * 1024 + 1 bytes — one over the 64 KiB limit in kvstore.c */
   int biglen = 64 * 1024 + 1;
-  char *bigkey = malloc((size_t)biglen);
+  char *bigkey = snkv_malloc((size_t)biglen);
   if(bigkey){
     memset(bigkey, 'k', (size_t)biglen);
     int rc = kvstore_put(kv, bigkey, biglen, "v", 1);
     ASSERT("oversized key rejected", rc == KVSTORE_ERROR);
-    free(bigkey);
+    snkv_free(bigkey);
   }
   kvstore_close(kv);
   dbRemove("fi4.db");

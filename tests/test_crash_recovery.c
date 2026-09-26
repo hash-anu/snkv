@@ -100,10 +100,10 @@ static int verify_keys(KVStore *kv, const char *prefix, int count) {
 
         int exp_len = (int)strlen(expected);
         if (got_len != exp_len || memcmp(got, expected, exp_len) != 0) {
-            sqliteFree(got);
+            snkv_free(got);
             return 0;
         }
-        sqliteFree(got);
+        snkv_free(got);
     }
     return 1;
 }
@@ -112,7 +112,7 @@ static int verify_keys(KVStore *kv, const char *prefix, int count) {
 static int check_integrity(KVStore *kv) {
     char *errMsg = NULL;
     int rc = kvstore_integrity_check(kv, &errMsg);
-    if (errMsg) sqliteFree(errMsg);
+    if (errMsg) snkv_free(errMsg);
     return (rc == KVSTORE_OK);
 }
 
@@ -548,7 +548,7 @@ static void test_overwrite_recovery(void) {
             if (got_len == exp_len && memcmp(got, expected_v3, exp_len) == 0) {
                 v3_found++;
             }
-            sqliteFree(got);
+            snkv_free(got);
         }
     }
 
@@ -646,7 +646,7 @@ static void test_delete_recovery(void) {
         if (got_len != exp_len || memcmp(got, value, exp_len) != 0) {
             restored_correct = 0;
         }
-        sqliteFree(got);
+        snkv_free(got);
     }
     print_result("Restored values are correct", restored_correct);
 
