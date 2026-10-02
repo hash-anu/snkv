@@ -699,6 +699,25 @@ static void btreeReleaseAllCursorPages(BtCursor *pCur){
 }
 
 /*
+** SNKV: every index-tree payload is [keyLen 4 bytes BE][key][value], and
+** sqlite3VdbeRecordCompare() / sqlite3VdbeRecordUnpack() only look at the
+** first 4+keyLen bytes.  Return how many payload bytes are needed to compare
+** or re-seek the cell described by pInfo, so callers can avoid copying the
+** value (which may span many overflow pages).
+**
+** The 4-byte length is always in the local part of the cell (nLocal is at
+** least minLocal, far more than 4).  The result never exceeds nPayload, so
+** a corrupt length can only make the copy smaller, never larger.
+*/
+static i64 snkvKeyPrefixSize(const CellInfo *pInfo){
+  i64 nNeed;
+  if( pInfo->nLocal<4 ) return pInfo->nPayload;
+  nNeed = 4 + (i64)(((u32)pInfo->pPayload[0]<<24) | ((u32)pInfo->pPayload[1]<<16)
+                  | ((u32)pInfo->pPayload[2]<<8)  |  (u32)pInfo->pPayload[3]);
+  return nNeed<(i64)pInfo->nPayload ? nNeed : (i64)pInfo->nPayload;
+}
+
+/*
 ** The cursor passed as the only argument must point to a valid entry
 ** when this function is called (i.e. have eState==CURSOR_VALID). This
 ** function saves the current cursor key in variables pCur->nKey and
@@ -728,7 +747,13 @@ static int saveCursorKey(BtCursor *pCur){
     ** position is restored. Hence the 17 bytes of padding allocated
     ** below. */
     void *pKey;
-    pCur->nKey = sqlite3BtreePayloadSize(pCur);
+    /* SNKV: the saved key is only used to re-seek (btreeMoveto ->
+    ** sqlite3VdbeRecordUnpack), which reads [keyLen][key] and ignores the
+    ** value.  Save just that prefix instead of the whole payload.
+    ** sqlite3BtreePayloadSize() is called for its side effect of filling
+    ** pCur->info (pPayload, nLocal, nPayload). */
+    (void)sqlite3BtreePayloadSize(pCur);
+    pCur->nKey = snkvKeyPrefixSize(&pCur->info);
     pKey = sqlite3Malloc( ((i64)pCur->nKey) + 9 + 8 );
     if( pKey ){
       rc = sqlite3BtreePayload(pCur, 0, (int)pCur->nKey, pKey);
@@ -6165,6 +6190,9 @@ bypass_moveto_root:
           rc = SQLITE_CORRUPT_PAGE(pPage);
           goto moveto_index_finish;
         }
+        /* SNKV: the comparator only reads [keyLen][key], so copy just that
+        ** instead of the whole payload (key + value + overflow pages). */
+        nCell = (int)snkvKeyPrefixSize(&pCur->info);
         pCellKey = sqlite3Malloc( (u64)nCell+(u64)nOverrun );
         if( pCellKey==0 ){
           rc = SQLITE_NOMEM_BKPT;
@@ -11621,10 +11649,13 @@ UnpackedRecord *sqlite3VdbeAllocUnpackedRecord(KeyInfo *pKeyInfo){
 void sqlite3VdbeRecordUnpack(int nKey, const void *pKey, UnpackedRecord *p){
   const unsigned char *raw = (const unsigned char *)pKey;
   u32 keyLen;
-  (void)nKey;
   /* Decode key length from the first 4 bytes (big-endian) */
   keyLen = ((u32)raw[0]<<24) | ((u32)raw[1]<<16)
          | ((u32)raw[2]<<8)  |  (u32)raw[3];
+  /* A corrupt length must not make the comparator read past the nKey-byte
+  ** buffer (or go negative when cast to int). */
+  if( nKey<4 ) keyLen = 0;
+  else if( keyLen>(u32)(nKey-4) ) keyLen = (u32)(nKey-4);
   p->u.z    = (char *)(raw + 4);
   p->n      = (int)keyLen;
   p->nField = 1;
@@ -11643,11 +11674,17 @@ int sqlite3VdbeRecordCompare(
   const unsigned char *cell = (const unsigned char *)pCellKey;
   u32 cellKeyLen;
   int n, c;
-  (void)nCell;
 
   /* Decode the stored cell's key length (4-byte big-endian header) */
   cellKeyLen = ((u32)cell[0]<<24) | ((u32)cell[1]<<16)
              | ((u32)cell[2]<<8)  |  (u32)cell[3];
+
+  /* Every caller passes nCell = bytes available at pCellKey (the local
+  ** payload, or the key-prefix buffer built by sqlite3BtreeIndexMoveto).
+  ** A corrupt length must not read past it: a length of 0x80000000 or more
+  ** used to become a negative int and reach memcmp() as a huge size_t. */
+  if( nCell<4 ) cellKeyLen = 0;
+  else if( cellKeyLen>(u32)(nCell-4) ) cellKeyLen = (u32)(nCell-4);
 
   /* Compare the shorter of the two keys */
   n = (int)cellKeyLen < p->n ? (int)cellKeyLen : p->n;

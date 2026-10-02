@@ -41,3 +41,5 @@ examples/snkv.h
 examples/new_apis
 examples/encryption
 examples/vector
+examples/concurrent_rw
+tests/test_large_values

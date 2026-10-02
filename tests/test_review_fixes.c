@@ -288,6 +288,64 @@ static void test_txn_owner_protected(void){
   cleanup(db);
 }
 
+/* ----------------------------------------------------------------------
+** Test 6 (fix: TTL count drift after rollback):
+** The in-memory count of TTL keys (nTtlActive) gates every expiry check.
+** Deleting a TTL key, or overwriting it with a plain put, lowers the count
+** at once; if that transaction is rolled back, the keys come back on disk
+** but the count stayed lowered. At 0, get / exists / iterators skipped the
+** TTL check and returned expired keys as live until the store was reopened.
+** -------------------------------------------------------------------- */
+static void test_ttl_count_after_rollback(void){
+  const char *db = "t_rf_ttlrb.db";
+  printf("Test 6: TTL keys still expire after a rolled-back delete/overwrite\n");
+  cleanup(db);
+  KVStore *kv = NULL;
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL) == KVSTORE_OK, "open");
+
+  int64_t exp = kvstore_now_ms() + 300;
+  kvstore_put_ttl(kv, "ta", 2, "va", 2, exp);
+  kvstore_put_ttl(kv, "tc", 2, "vc", 2, exp);
+  kvstore_put(kv, "keep", 4, "vk", 2);
+
+  /* Drop both TTL entries inside a transaction, then roll it back. */
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "begin");
+  kvstore_delete(kv, "ta", 2);
+  kvstore_put(kv, "tc", 2, "new", 3);       /* plain put clears the TTL */
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "rollback restores both TTL keys");
+
+  while( kvstore_now_ms() < exp + 50 ){ }    /* wait for the expiry */
+
+  /* Iterator: expired keys must be skipped, only "keep" remains. */
+  KVIterator *it = NULL; int n = 0, sawExpired = 0;
+  kvstore_iterator_create(kv, &it);
+  for( kvstore_iterator_first(it); !kvstore_iterator_eof(it); kvstore_iterator_next(it) ){
+    void *k; int nk;
+    kvstore_iterator_key(it, &k, &nk);
+    if( nk == 2 && k && ((char*)k)[0] == 't' ) sawExpired = 1;
+    n++;
+  }
+  kvstore_iterator_close(it);
+  CHECK(!sawExpired && n == 1, "iterator skips the expired keys");
+
+  int ex = 1;
+  kvstore_exists(kv, "ta", 2, &ex);
+  CHECK(ex == 0, "exists reports the expired key as absent");
+
+  void *v = NULL; int nv = 0;
+  int rc = kvstore_get(kv, "tc", 2, &v, &nv);
+  CHECK(rc == KVSTORE_NOTFOUND, "get returns NOTFOUND for the expired key");
+  if( rc == KVSTORE_OK ) snkv_free(v);
+
+  v = NULL;
+  rc = kvstore_get(kv, "keep", 4, &v, &nv);
+  CHECK(rc == KVSTORE_OK && nv == 2, "permanent key is still readable");
+  if( rc == KVSTORE_OK ) snkv_free(v);
+
+  kvstore_close(kv);
+  cleanup(db);
+}
+
 int main(void){
   printf("=== test_review_fixes ===\n");
   test_encrypt_user_cf_only();
@@ -295,6 +353,7 @@ int main(void){
   test_iterator_ttl_skip();
   test_errmsg_stability();
   test_txn_owner_protected();
+  test_ttl_count_after_rollback();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
