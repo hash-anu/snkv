@@ -951,15 +951,24 @@ int kvstore_vec_kv_put(
 /* =======================================================================
 ** kvstore_vec_contains
 ** ======================================================================= */
+/* -----------------------------------------------------------------------
+** Is pKey present and not expired in the default CF?
+** Uses kvstore_exists (same lazy TTL expiry as kvstore_get) so the value is
+** never read.  *pRc receives the kvstore_exists result code.
+** ----------------------------------------------------------------------- */
+static int vecKeyIsLive(KVVecStore *pVS, const void *pKey, int nKey, int *pRc) {
+    int ex = 0;
+    int rc = kvstore_exists(pVS->pKV, pKey, nKey, &ex);
+    if (pRc) *pRc = rc;
+    return rc == KVSTORE_OK && ex;
+}
+
 int kvstore_vec_contains(
     KVVecStore  *pVS,
     const void  *pKey, int nKey
 ) {
     if (!pVS || !pKey) return 0;
-    void *pVal = NULL; int nVal = 0;
-    int rc = kvstore_get(pVS->pKV, pKey, nKey, &pVal, &nVal);
-    if (rc == KVSTORE_OK) { snkv_free(pVal); return 1; }
-    return 0;
+    return vecKeyIsLive(pVS, pKey, nKey, NULL);
 }
 
 /* =======================================================================
@@ -1277,12 +1286,11 @@ int kvstore_vec_search_keys(
         unsigned char idBuf[8]; packI64(idBuf, (int64_t)keys[i]);
         void *pKey = NULL; int nKey = 0;
         if (kvstore_cf_get(pVS->pIdiCF, idBuf, 8, &pKey, &nKey) != KVSTORE_OK) continue;
-        /* Skip expired */
-        void *pTmp = NULL; int nTmp = 0;
-        if (kvstore_get(pVS->pKV, pKey, nKey, &pTmp, &nTmp) != KVSTORE_OK) {
+        /* Skip expired or missing keys (existence check only — the value is
+        ** not returned, so do not read it). */
+        if (!vecKeyIsLive(pVS, pKey, nKey, NULL)) {
             snkv_free(pKey); continue;
         }
-        snkv_free(pTmp);
         out[nOut].pKey     = pKey;
         out[nOut].nKey     = nKey;
         out[nOut].distance = dists[i];
@@ -1377,8 +1385,11 @@ int kvstore_vec_purge_expired(KVVecStore *pVS, int *pnDeleted) {
         void *pKey = NULL; int nKey = 0;
         kvstore_iterator_key(pIter, &pKey, &nKey);
 
-        void *pVal = NULL; int nVal = 0;
-        if (kvstore_get(pVS->pKV, pKey, nKey, &pVal, &nVal) != KVSTORE_OK) {
+        /* Existence check only.  Purge only keys that are confirmed missing
+        ** or expired — an error (e.g. out of memory) must not delete data. */
+        int liveRc = KVSTORE_OK;
+        int live = vecKeyIsLive(pVS, pKey, nKey, &liveRc);
+        if (!live && liveRc == KVSTORE_OK) {
             /* expired or missing — collect for deletion */
             void *pIdRaw = NULL; int nIdRaw = 0;
             kvstore_cf_get(pVS->pIdkCF, pKey, nKey, &pIdRaw, &nIdRaw);
@@ -1403,8 +1414,6 @@ int kvstore_vec_purge_expired(KVVecStore *pVS, int *pnDeleted) {
             expired[nExpired].nKey  = nKey;
             expired[nExpired].intId = intId;
             nExpired++;
-        } else {
-            snkv_free(pVal);
         }
         /* pKey is an internal buffer — do NOT free */
         iterRc = kvstore_iterator_next(pIter);

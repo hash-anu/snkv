@@ -811,6 +811,91 @@ static void test_null_safety(void) {
 /* -----------------------------------------------------------------------
 ** main
 ** ----------------------------------------------------------------------- */
+/* -----------------------------------------------------------------------
+** T24: big values (overflow pages) — contains / search_keys /
+** purge_expired only need "is the key live?", so they must not read the
+** values.  SQLITE_STATUS_MALLOC_SIZE records the largest single SQLite
+** allocation; it must stay far below the value size.
+** ----------------------------------------------------------------------- */
+#define BIGV      50000
+#define NBIGV     30
+static int  big_max_alloc(void) { int c = 0, h = 0; sqlite3_status(SQLITE_STATUS_MALLOC_SIZE, &c, &h, 0); return h; }
+static void big_reset(void)     { int c = 0, h = 0; sqlite3_status(SQLITE_STATUS_MALLOC_SIZE, &c, &h, 1); }
+
+static void test_big_values_liveness(void) {
+    section("T24: big values — liveness checks do not read values");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    unsigned char *val = (unsigned char *)malloc(BIGV);
+    memset(val, 'b', BIGV);
+    float v[DIM];
+    char key[32];
+    int putOk = 1;
+    int64_t past = kvstore_now_ms() - 1000;
+    for (int i = 0; i < NBIGV; i++) {
+        int n = snprintf(key, sizeof key, "big:%03d", i);
+        fill_vec(v, (float)i);
+        /* odd keys are already expired */
+        if (kvstore_vec_put(vs, key, n, val, BIGV, v, (i % 2) ? past : 0, NULL, 0) != KVSTORE_OK)
+            putOk = 0;
+    }
+    ASSERT(putOk, "put 30 vectors with 50 KB values (15 already expired)");
+
+    /* contains */
+    big_reset();
+    int cOk = 1;
+    for (int i = 0; i < NBIGV; i++) {
+        int n = snprintf(key, sizeof key, "big:%03d", i);
+        if (kvstore_vec_contains(vs, key, n) != !(i % 2)) cOk = 0;
+    }
+    ASSERT(cOk, "contains: live keys 1, expired keys 0");
+    ASSERT(kvstore_vec_contains(vs, "big:999", 7) == 0, "contains: missing key 0");
+    printf("        largest allocation during contains: %d bytes\n", big_max_alloc());
+    ASSERT(big_max_alloc() < 16 * 1024, "contains does not read values");
+
+    /* search_keys: expired keys are skipped */
+    big_reset();
+    KVVecKeyResult *kr = NULL; int nkr = 0;
+    fill_vec(v, 0.0f);
+    ASSERT_OK(kvstore_vec_search_keys(vs, v, NBIGV, &kr, &nkr), "search_keys");
+    int allLive = 1;
+    for (int i = 0; i < nkr; i++) {
+        /* keys are not NUL-terminated: copy before parsing */
+        char kb[32] = {0};
+        int nk = kr[i].nKey < (int)sizeof kb - 1 ? kr[i].nKey : (int)sizeof kb - 1;
+        memcpy(kb, kr[i].pKey, nk);
+        if (atoi(kb + 4) % 2) allLive = 0;
+    }
+    if (nkr != NBIGV / 2 || !allLive)
+        printf("        search_keys returned %d keys, allLive=%d\n", nkr, allLive);
+    ASSERT(nkr == NBIGV / 2 && allLive, "search_keys returns exactly the 15 live keys");
+    kvstore_vec_free_key_results(kr, nkr);
+    printf("        largest allocation during search_keys: %d bytes\n", big_max_alloc());
+    ASSERT(big_max_alloc() < 16 * 1024, "search_keys does not read values");
+
+    /* purge_expired removes the expired vectors (their values are already
+    ** lazily deleted by the checks above; the vector rows remain) */
+    big_reset();
+    int nDel = -1;
+    ASSERT_OK(kvstore_vec_purge_expired(vs, &nDel), "purge_expired");
+    ASSERT_EQ(nDel, NBIGV / 2, "purge_expired removed 15 vectors");
+    ASSERT_EQ(kvstore_vec_count(vs), (int64_t)(NBIGV / 2), "15 vectors left in the index");
+    printf("        largest allocation during purge_expired: %d bytes\n", big_max_alloc());
+    ASSERT(big_max_alloc() < 16 * 1024, "purge_expired does not read values");
+
+    /* the live values are intact */
+    void *pv = NULL; int npv = 0;
+    ASSERT_OK(kvstore_vec_get(vs, "big:000", 7, &pv, &npv), "get a live big value");
+    ASSERT(npv == BIGV && ((unsigned char *)pv)[BIGV - 1] == 'b', "live big value intact");
+    snkv_free(pv);
+
+    kvstore_vec_close(vs);
+    free(val);
+    rm_db();
+}
+
 int main(void) {
     printf("=== SNKV Vector Store Tests ===\n");
 
@@ -837,6 +922,7 @@ int main(void) {
     test_dtype_f16();
     test_purge_no_ttl();
     test_null_safety();
+    test_big_values_liveness();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
