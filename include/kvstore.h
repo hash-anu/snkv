@@ -59,7 +59,9 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_PROTOCOL  15  /* database lock protocol error */
 
 /*
-** Maximum number of column families
+** Maximum number of column families, counting the default CF.
+** kvstore_cf_create returns KVSTORE_ERROR once 63 named CFs exist.
+** Internal CFs (TTL indexes, encryption, vector store) do not count.
 */
 #define KVSTORE_MAX_COLUMN_FAMILIES 64
 
@@ -127,7 +129,10 @@ struct KVStoreConfig {
   /*
   ** cacheSize — page cache size in pages (0 = use built-in default: 2000
   ** pages ≈ 8 MB with 4096-byte pages).  Larger caches improve read-heavy
-  ** workloads at the cost of RSS.
+  ** workloads at the cost of RSS.  A negative value is a memory budget in
+  ** KiB instead (e.g. -256 ≈ 256 KB of cache, whatever the page size) —
+  ** the usual choice on small devices.  The default can also be changed at
+  ** build time with -DKVSTORE_DEFAULT_CACHE_SIZE=N.
   */
   int cacheSize;
 
@@ -944,7 +949,10 @@ int kvstore_stats_reset(KVStore *pKV);
 int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg);
 
 /*
-** Synchronize the database to disk.
+** Synchronize the database to disk: fsync the WAL (or rollback journal)
+** and the database file, so every committed transaction survives a power
+** loss even with syncLevel KVSTORE_SYNC_OFF or NORMAL.  Returns
+** KVSTORE_ERROR while an explicit write transaction is open.
 **
 ** Parameters:
 **   pKV - KVStore handle
@@ -960,6 +968,7 @@ int kvstore_sync(KVStore *pKV);
 ** Reclaims unused pages and shrinks the database file.
 ** Databases are always opened with incremental auto-vacuum enabled,
 ** so this function can be called at any time to reclaim space.
+** Returns KVSTORE_BUSY while an iterator is open (vacuum moves pages).
 **
 ** Parameters:
 **   pKV    - KVStore handle
@@ -1214,6 +1223,8 @@ int kvstore_is_encrypted(KVStore *pKV);
 ** The store must currently be open with encryption (KVSTORE_AUTH_FAILED if
 ** the current key is wrong; KVSTORE_ERROR if the store is not encrypted).
 ** All data is re-encrypted in a single transaction.
+** On any failure nothing is changed and the old password stays valid.
+** Returns KVSTORE_ERROR inside an explicit transaction (kvstore_begin).
 */
 int kvstore_reencrypt(
   KVStore *pKV,
@@ -1224,6 +1235,8 @@ int kvstore_reencrypt(
 ** Remove encryption from a store, rewriting all values in plaintext.
 ** The store must currently be open with encryption.
 ** Returns KVSTORE_ERROR if the store is not encrypted.
+** On any failure nothing is changed and the store stays encrypted.
+** Returns KVSTORE_ERROR inside an explicit transaction (kvstore_begin).
 */
 int kvstore_remove_encryption(KVStore *pKV);
 

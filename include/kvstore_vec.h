@@ -221,7 +221,7 @@ int kvstore_vec_get(
 /*
 ** Get stored float32 vector. *ppVec is a flat array of dim floats.
 ** Caller must snkv_free(*ppVec).
-** Returns KVSTORE_NOTFOUND if the key has no vector.
+** Returns KVSTORE_NOTFOUND if the key has no vector or has expired.
 */
 int kvstore_vec_get_vector(
     KVVecStore  *pVS,
@@ -231,8 +231,8 @@ int kvstore_vec_get_vector(
 
 /*
 ** Get metadata JSON bytes. Caller must snkv_free(*ppMeta).
-** Returns KVSTORE_NOTFOUND if the key has no metadata (not an error).
-** *ppMeta is NULL and *pnMeta is 0 in that case.
+** Returns KVSTORE_NOTFOUND if the key has no metadata (not an error) or
+** has expired.  *ppMeta is NULL and *pnMeta is 0 in that case.
 */
 int kvstore_vec_get_metadata(
     KVVecStore  *pVS,
