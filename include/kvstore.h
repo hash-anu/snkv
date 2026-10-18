@@ -59,7 +59,9 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_PROTOCOL  15  /* database lock protocol error */
 
 /*
-** Maximum number of column families
+** Maximum number of column families, counting the default CF.
+** kvstore_cf_create returns KVSTORE_ERROR once 63 named CFs exist.
+** Internal CFs (TTL indexes, encryption, vector store) do not count.
 */
 #define KVSTORE_MAX_COLUMN_FAMILIES 64
 
@@ -127,7 +129,10 @@ struct KVStoreConfig {
   /*
   ** cacheSize — page cache size in pages (0 = use built-in default: 2000
   ** pages ≈ 8 MB with 4096-byte pages).  Larger caches improve read-heavy
-  ** workloads at the cost of RSS.
+  ** workloads at the cost of RSS.  A negative value is a memory budget in
+  ** KiB instead (e.g. -256 ≈ 256 KB of cache, whatever the page size) —
+  ** the usual choice on small devices.  The default can also be changed at
+  ** build time with -DKVSTORE_DEFAULT_CACHE_SIZE=N.
   */
   int cacheSize;
 
@@ -153,14 +158,6 @@ struct KVStoreConfig {
   */
   int busyTimeout;
 
-  /*
-  ** walSizeLimit — WAL auto-checkpoint threshold in committed write transactions.
-  **   0 (default) — no auto-checkpoint.
-  **   N > 0       — after every N committed write transactions a PASSIVE checkpoint
-  **                 is attempted automatically. Only effective in WAL journal mode.
-  */
-  int walSizeLimit;
-
   /* Internal flag — set by kvstore_open_encrypted to bypass the plain-open
   ** encryption guard.  Not part of the public API; zero-init leaves it 0. */
   int allowEncrypted;
@@ -176,7 +173,33 @@ struct KVStoreConfig {
   ** Default 0 (no mutex).  kvstore_open() always uses 0.
   */
   int fullMutex;
+
+  /*
+  ** walAutoCheckpoint — WAL auto-checkpoint threshold in WAL *pages*
+  ** (frames), the same rule SQLite uses by default.  After a write
+  ** transaction commits, if the WAL holds at least this many pages a PASSIVE
+  ** checkpoint runs (it never blocks readers or writers).  This keeps the
+  ** WAL — and the cost of finding pages in it — small no matter how large or
+  ** small individual commits are.
+  **   0 (default) — KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT pages (1000 ≈ 4 MB
+  **                 with 4 KB pages).
+  **   N > 0       — checkpoint once the WAL holds N or more pages.
+  **   N < 0       — disabled: the WAL grows until kvstore_checkpoint() or
+  **                 the last connection closes.
+  ** Only effective in WAL journal mode.  kvstore_open() uses the default.
+  ** (This replaces the former commit-count setting walSizeLimit: commits
+  ** vary widely in size, WAL pages do not.)
+  */
+  int walAutoCheckpoint;
 };
+
+/*
+** Default walAutoCheckpoint threshold in WAL pages (SQLite's default too).
+** Override at build time with -DKVSTORE_DEFAULT_WAL_AUTOCHECKPOINT=N.
+*/
+#ifndef KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT
+# define KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT 1000
+#endif
 
 /*
 ** Memory helpers — wrappers around the SQLite allocator.
@@ -944,7 +967,10 @@ int kvstore_stats_reset(KVStore *pKV);
 int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg);
 
 /*
-** Synchronize the database to disk.
+** Synchronize the database to disk: fsync the WAL (or rollback journal)
+** and the database file, so every committed transaction survives a power
+** loss even with syncLevel KVSTORE_SYNC_OFF or NORMAL.  Returns
+** KVSTORE_ERROR while an explicit write transaction is open.
 **
 ** Parameters:
 **   pKV - KVStore handle
@@ -960,6 +986,8 @@ int kvstore_sync(KVStore *pKV);
 ** Reclaims unused pages and shrinks the database file.
 ** Databases are always opened with incremental auto-vacuum enabled,
 ** so this function can be called at any time to reclaim space.
+** Safe while iterators are open: cursor positions are saved before pages
+** move, so an iterator continues from its current key.
 **
 ** Parameters:
 **   pKV    - KVStore handle
@@ -1214,6 +1242,8 @@ int kvstore_is_encrypted(KVStore *pKV);
 ** The store must currently be open with encryption (KVSTORE_AUTH_FAILED if
 ** the current key is wrong; KVSTORE_ERROR if the store is not encrypted).
 ** All data is re-encrypted in a single transaction.
+** On any failure nothing is changed and the old password stays valid.
+** Returns KVSTORE_ERROR inside an explicit transaction (kvstore_begin).
 */
 int kvstore_reencrypt(
   KVStore *pKV,
@@ -1224,6 +1254,8 @@ int kvstore_reencrypt(
 ** Remove encryption from a store, rewriting all values in plaintext.
 ** The store must currently be open with encryption.
 ** Returns KVSTORE_ERROR if the store is not encrypted.
+** On any failure nothing is changed and the store stays encrypted.
+** Returns KVSTORE_ERROR inside an explicit transaction (kvstore_begin).
 */
 int kvstore_remove_encryption(KVStore *pKV);
 

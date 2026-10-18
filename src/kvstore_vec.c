@@ -23,7 +23,9 @@
 #include "usearch.h"
 
 extern int kvstoreGetOrCreateInternalCF(KVStore*, const char*, KVColumnFamily**);
+extern int kvstoreOpenInternalCF(KVStore*, const char*, KVColumnFamily**);
 extern int kvstoreRenameHiddenCF(KVStore*, const char*, const char*);
+extern int kvstoreDropInternalCFs(KVStore*, const char**, int);
 
 #include <string.h>
 #include <stdlib.h>
@@ -87,6 +89,7 @@ struct KVVecStore {
     int64_t nextId;
 
     char *zSidecarPath;        /* "{path}.usearch"; NULL if disabled */
+    char *zNidPath;            /* "{path}.usearch.nid"; same block as zSidecarPath */
 
     KVColumnFamily *pVecCF;    /* _snkv_vec_ */
     KVColumnFamily *pIdkCF;    /* _snkv_vec_idk_ */
@@ -271,10 +274,12 @@ static int rebuildIndex(KVVecStore *pVS) {
         if (pVS->expansion_search == 0) pVS->expansion_search = DEFAULT_EXPANSION_SEARCH;
     }
 
-    /* Try to open tags CF if it already exists */
+    /* Open the tags CF if it already exists (it is created lazily on the
+    ** first metadata write).  kvstore_cf_open would reject the reserved name,
+    ** leaving stored metadata invisible after a reopen. */
     {
         KVColumnFamily *pTmp = NULL;
-        if (kvstore_cf_open(pVS->pKV, CF_TAGS, &pTmp) == KVSTORE_OK)
+        if (kvstoreOpenInternalCF(pVS->pKV, CF_TAGS, &pTmp) == KVSTORE_OK)
             pVS->pTagsCF = pTmp;
     }
 
@@ -298,8 +303,7 @@ static int rebuildIndex(KVVecStore *pVS) {
 
     /* Try sidecar fast-path (unencrypted, file-backed stores only) */
     if (pVS->zSidecarPath) {
-        char nidPath[4096];
-        snprintf(nidPath, sizeof(nidPath), "%s.nid", pVS->zSidecarPath);
+        const char *nidPath = pVS->zNidPath;
 
         FILE *f = fopen(nidPath, "rb");
         if (f) {
@@ -314,13 +318,24 @@ static int rebuildIndex(KVVecStore *pVS) {
                     usearch_index_t candidate = usearch_init(&lopts, &err);
                     if (candidate && !err) {
                         usearch_load(candidate, pVS->zSidecarPath, &err);
-                        if (!err && (int)usearch_dimensions(candidate, &err) == pVS->dim && !err) {
+                        /* Besides next_id, the vector count must match: a
+                        ** delete leaves next_id unchanged. */
+                        if (!err && (int)usearch_dimensions(candidate, &err) == pVS->dim && !err
+                                && (int64_t)usearch_size(candidate, &err) == count && !err) {
                             usearch_change_expansion_search(candidate,
                                 (size_t)pVS->expansion_search, &err);
                             if (!err) {
                                 /* Sidecar loaded successfully — discard temp index */
                                 usearch_free(pVS->pIdx, &err);
                                 pVS->pIdx = candidate;
+                                /* The index now lives in memory.  Delete the
+                                ** files so that only a clean close leaves a
+                                ** sidecar: after a crash the next open must
+                                ** rebuild, not load a snapshot that misses
+                                ** this session's changes.  close() rewrites
+                                ** both files. */
+                                remove(pVS->zSidecarPath);
+                                remove(nidPath);
                                 goto cleanup_meta; /* fast path */
                             }
                         }
@@ -473,6 +488,7 @@ int kvstore_vec_open(
     pVS->expansion_search = expansion_search;
     pVS->nextId        = 0;
     pVS->zSidecarPath  = NULL;
+    pVS->zNidPath      = NULL;
     pVS->pVecCF        = NULL;
     pVS->pIdkCF        = NULL;
     pVS->pIdiCF        = NULL;
@@ -480,13 +496,30 @@ int kvstore_vec_open(
     pVS->pTagsCF       = NULL;
     if (!pVS->pMutex) { kvstore_close(pKV); snkv_free(pVS); return KVSTORE_ERROR; }
 
-    /* Sidecar enabled for unencrypted, file-backed stores */
-    if (zPath && !(pPassword && nPassword > 0)) {
+    /* Sidecar paths "{path}.usearch" and "{path}.usearch.nid", built once in
+    ** one exact-size heap block (no PATH_MAX-sized stack buffers: embedded
+    ** targets often have only a few KB of stack). */
+    if (zPath) {
         size_t pathLen = strlen(zPath);
-        pVS->zSidecarPath = (char*)snkv_malloc(pathLen + 16);
-        if (!pVS->zSidecarPath) { rc = KVSTORE_NOMEM; goto fail; }
-        memcpy(pVS->zSidecarPath, zPath, pathLen);
-        memcpy(pVS->zSidecarPath + pathLen, ".usearch", 9); /* includes NUL */
+        char *zBlock = (char*)snkv_malloc(2 * (pathLen + 16));
+        if (!zBlock) { rc = KVSTORE_NOMEM; goto fail; }
+        memcpy(zBlock, zPath, pathLen);
+        memcpy(zBlock + pathLen, ".usearch", 9);              /* includes NUL */
+        char *zNid = zBlock + pathLen + 16;
+        memcpy(zNid, zPath, pathLen);
+        memcpy(zNid + pathLen, ".usearch.nid", 13);           /* includes NUL */
+        if (!(pPassword && nPassword > 0)) {
+            /* Sidecar enabled for unencrypted, file-backed stores */
+            pVS->zSidecarPath = zBlock;
+            pVS->zNidPath     = zNid;
+        } else {
+            /* Encrypted store: no sidecar is used, but one may be left over
+            ** from an earlier unencrypted session.  This session can change
+            ** the vectors, so a later unencrypted open must not trust it. */
+            remove(zBlock);
+            remove(zNid);
+            snkv_free(zBlock);
+        }
     }
 
     /* Migrate old single-underscore CF names to double-underscore (one-time, no-op if done). */
@@ -537,8 +570,7 @@ void kvstore_vec_close(KVVecStore *pVS) {
 
     /* Save sidecar + next_id stamp */
     if (pVS->zSidecarPath && pVS->pIdx) {
-        char nidPath[4096];
-        snprintf(nidPath, sizeof(nidPath), "%s.nid", pVS->zSidecarPath);
+        const char *nidPath = pVS->zNidPath;
 
         usearch_save(pVS->pIdx, pVS->zSidecarPath, &err);
         if (!err) {
@@ -685,6 +717,8 @@ int kvstore_vec_put(
 
     rc = kvstore_commit(pVS->pKV);
     if (rc != KVSTORE_OK) {
+        /* A failed kvstore_commit keeps the transaction open; end it. */
+        kvstore_rollback(pVS->pKV);
         pVS->nextId = newLabel;
         sqlite3_mutex_leave(pVS->pMutex);
         return rc;
@@ -803,9 +837,14 @@ int kvstore_vec_put_batch(
                                &pPrevId, &nPrevId) == KVSTORE_OK
                     && nPrevId == 8 ){
                 int64_t prevLabel = unpackI64((const unsigned char*)pPrevId);
-                if( prevLabel >= baseId ){
+                if( prevLabel >= baseId && prevLabel < baseId + i ){
                     unsigned char prevBuf[8]; packI64(prevBuf, prevLabel);
                     kvstore_cf_delete(pVS->pIdiCF, prevBuf, 8);
+                    /* The earlier item is superseded: mark it so its label
+                    ** is never added to the in-memory index.  Its oldLabels
+                    ** entry (the label before the batch) equals ours, so
+                    ** this item still removes it — no extra array needed. */
+                    oldLabels[prevLabel - baseId] = -2;
                 }
             }
             snkv_free(pPrevId);
@@ -844,6 +883,7 @@ int kvstore_vec_put_batch(
 
     rc = kvstore_commit(pVS->pKV);
     if (rc != KVSTORE_OK) {
+        kvstore_rollback(pVS->pKV);   /* failed commit keeps the txn open */
         pVS->nextId = baseId;
         snkv_free(oldLabels);
         sqlite3_mutex_leave(pVS->pMutex);
@@ -868,6 +908,7 @@ int kvstore_vec_put_batch(
         }
     }
     for (int i = 0; i < nItems; i++) {
+        if (oldLabels[i] == -2) continue;   /* superseded within the batch */
         usearch_add(pVS->pIdx, (usearch_key_t)(baseId + i),
                     pItems[i].pVec, usearch_scalar_f32_k, &err);
         err = NULL;
@@ -882,6 +923,8 @@ batch_rollback:
     sqlite3_mutex_leave(pVS->pMutex);
     return rc;
 }
+
+static int vecKeyIsLive(KVVecStore *pVS, const void *pKey, int nKey, int *pRc);
 
 /* =======================================================================
 ** kvstore_vec_get
@@ -906,6 +949,11 @@ int kvstore_vec_get_vector(
     if (!pVS || !pKey || !ppVec || !pnFloats) return KVSTORE_ERROR;
     if (!pVS->pVecCF) return KVVEC_INDEX_DROPPED;
 
+    /* An expired key has no vector (same rule as kvstore_vec_get). */
+    int liveRc = KVSTORE_OK;
+    if (!vecKeyIsLive(pVS, pKey, nKey, &liveRc))
+        return liveRc != KVSTORE_OK ? liveRc : KVSTORE_NOTFOUND;
+
     void *pRaw = NULL; int nRaw = 0;
     int rc = kvstore_cf_get(pVS->pVecCF, pKey, nKey, &pRaw, &nRaw);
     if (rc != KVSTORE_OK) return rc;
@@ -925,6 +973,10 @@ int kvstore_vec_get_metadata(
 ) {
     if (!pVS || !pKey || !ppMeta || !pnMeta) return KVSTORE_ERROR;
     *ppMeta = NULL; *pnMeta = 0;
+    /* An expired key has no metadata (same rule as kvstore_vec_get). */
+    int liveRc = KVSTORE_OK;
+    if (!vecKeyIsLive(pVS, pKey, nKey, &liveRc))
+        return liveRc != KVSTORE_OK ? liveRc : KVSTORE_NOTFOUND;
     sqlite3_mutex_enter(pVS->pMutex);
     int rc;
     if (!pVS->pTagsCF) {
@@ -1035,7 +1087,11 @@ int kvstore_vec_delete(
     }
 
     rc = kvstore_commit(pVS->pKV);
-    if (rc != KVSTORE_OK) { sqlite3_mutex_leave(pVS->pMutex); return rc; }
+    if (rc != KVSTORE_OK) {
+        kvstore_rollback(pVS->pKV);   /* failed commit keeps the txn open */
+        sqlite3_mutex_leave(pVS->pMutex);
+        return rc;
+    }
 
     if (pVS->pIdx) {
         usearch_error_t err = NULL;
@@ -1106,8 +1162,10 @@ int kvstore_vec_search(
     size_t sz = usearch_size(pVS->pIdx, &err);
     if (sz == 0) { sqlite3_mutex_leave(pVS->pMutex); return KVVEC_INDEX_EMPTY; }
 
-    int fetch_k = (rerank) ? top_k * oversample : top_k;
-    if ((size_t)fetch_k > sz) fetch_k = (int)sz;
+    /* 64-bit product: top_k * oversample must not overflow int. */
+    int64_t want = rerank ? (int64_t)top_k * oversample : (int64_t)top_k;
+    if (want > (int64_t)sz) want = (int64_t)sz;
+    int fetch_k = (int)want;
     if (fetch_k < 1) fetch_k = 1;
 
     int src = KVSTORE_OK;
@@ -1127,7 +1185,11 @@ int kvstore_vec_search(
     }
     if (found == 0) { snkv_free(keys); snkv_free(dists); goto search_done; }
 
-    /* Allocate candidate array (upper bound: found) */
+    /* Candidates: key + distance only.  Memory stays small whatever the
+    ** value sizes: liveness is checked without reading the value, rerank
+    ** reads one stored vector at a time and frees it at once, and values
+    ** are read only for the results actually returned (at most top_k),
+    ** not for every one of the top_k * oversample candidates. */
     KVVecSearchResult *cands = (KVVecSearchResult*)snkv_malloc(
         found * sizeof(KVVecSearchResult));
     if (!cands) {
@@ -1136,60 +1198,37 @@ int kvstore_vec_search(
     }
     int nCands = 0;
 
-    /* For rerank: collect vec bytes */
-    float **vecBufs = NULL;
-    if (rerank) {
-        vecBufs = (float**)snkv_malloc(found * sizeof(float*));
-        if (!vecBufs) {
-            snkv_free(cands); snkv_free(keys); snkv_free(dists);
-            src = KVSTORE_NOMEM; goto search_done;
-        }
-        for (size_t i = 0; i < found; i++) vecBufs[i] = NULL;
-    }
-
     for (size_t i = 0; i < found; i++) {
         unsigned char idBuf[8]; packI64(idBuf, (int64_t)keys[i]);
         void *pKey = NULL; int nKey = 0;
         if (kvstore_cf_get(pVS->pIdiCF, idBuf, 8, &pKey, &nKey) != KVSTORE_OK) continue;
-
-        void *pVal = NULL; int nVal = 0;
-        if (kvstore_get(pVS->pKV, pKey, nKey, &pVal, &nVal) != KVSTORE_OK) {
-            snkv_free(pKey); continue; /* expired */
+        if (!vecKeyIsLive(pVS, pKey, nKey, NULL)) {     /* expired or missing */
+            snkv_free(pKey); continue;
         }
-
-        float *pVecBuf = NULL;
+        float distance = dists[i];
         if (rerank) {
             void *pRawVec = NULL; int nRawVec = 0;
             if (kvstore_cf_get(pVS->pVecCF, pKey, nKey, &pRawVec, &nRawVec) != KVSTORE_OK
                     || nRawVec != pVS->dim * (int)sizeof(float)) {
-                snkv_free(pKey); snkv_free(pVal); snkv_free(pRawVec);
+                snkv_free(pKey); snkv_free(pRawVec);
                 continue;
             }
-            pVecBuf = (float*)pRawVec;
+            distance = exactDist(pQuery, (const float*)pRawVec, pVS->dim, pVS->space);
+            snkv_free(pRawVec);
         }
-
-        KVVecSearchResult *c = &cands[nCands];
+        KVVecSearchResult *c = &cands[nCands++];
         c->pKey      = pKey;
         c->nKey      = nKey;
-        c->pValue    = pVal;
-        c->nValue    = nVal;
-        c->distance  = dists[i];
+        c->pValue    = NULL;
+        c->nValue    = 0;
+        c->distance  = distance;
         c->pMetadata = NULL;
         c->nMetadata = 0;
-        if (vecBufs) vecBufs[nCands] = pVecBuf;
-        nCands++;
     }
-
     snkv_free(keys); snkv_free(dists);
 
-    /* Exact rerank */
-    if (rerank && nCands > 0) {
-        for (int i = 0; i < nCands; i++) {
-            cands[i].distance = exactDist(pQuery, vecBufs[i], pVS->dim, pVS->space);
-            snkv_free(vecBufs[i]);
-            vecBufs[i] = NULL;
-        }
-        /* Simple insertion sort for small nCands */
+    /* Exact distances can reorder the candidates (insertion sort: small n). */
+    if (rerank) {
         for (int i = 1; i < nCands; i++) {
             KVVecSearchResult tmp = cands[i];
             int j = i - 1;
@@ -1199,35 +1238,38 @@ int kvstore_vec_search(
             cands[j+1] = tmp;
         }
     }
-    snkv_free(vecBufs);
 
-    /* All candidates expired or filtered out */
-    if (nCands == 0) { snkv_free(cands); goto search_done; }
-
-    /* Apply max_distance + top_k filter */
-    KVVecSearchResult *out = (KVVecSearchResult*)snkv_malloc(
-        nCands * sizeof(KVVecSearchResult));
-    if (!out) {
-        for (int i = 0; i < nCands; i++) {
-            snkv_free(cands[i].pKey); snkv_free(cands[i].pValue);
-            snkv_free(cands[i].pMetadata);
-        }
-        snkv_free(cands);
-        src = KVSTORE_NOMEM; goto search_done;
-    }
+    /* Keep the first top_k within max_distance, compacting in place; then
+    ** read the values of the survivors only. */
     int nOut = 0;
     for (int i = 0; i < nCands; i++) {
         if (nOut < top_k && (max_distance <= 0.0f || cands[i].distance <= max_distance)) {
-            out[nOut++] = cands[i];
+            cands[nOut++] = cands[i];
         } else {
-            snkv_free(cands[i].pKey); snkv_free(cands[i].pValue);
-            snkv_free(cands[i].pMetadata);
+            snkv_free(cands[i].pKey);
         }
     }
-    snkv_free(cands);
+    int nKept = 0;
+    for (int i = 0; i < nOut; i++) {
+        void *pVal = NULL; int nVal = 0;
+        int grc = kvstore_get(pVS->pKV, cands[i].pKey, cands[i].nKey, &pVal, &nVal);
+        if (grc == KVSTORE_OK) {
+            cands[nKept] = cands[i];
+            cands[nKept].pValue = pVal;
+            cands[nKept].nValue = nVal;
+            nKept++;
+        } else {
+            snkv_free(cands[i].pKey);
+            if (grc != KVSTORE_NOTFOUND && src == KVSTORE_OK) src = grc;
+        }
+    }
+    if (src != KVSTORE_OK || nKept == 0) {
+        kvstore_vec_free_results(cands, nKept);
+        goto search_done;
+    }
 
-    *ppResults = out;
-    *pnResults = nOut;
+    *ppResults = cands;
+    *pnResults = nKept;
     }
 
 search_done:
@@ -1362,6 +1404,12 @@ int kvstore_vec_stats(KVVecStore *pVS, KVVecStats *pStats) {
 /* =======================================================================
 ** kvstore_vec_purge_expired
 ** ======================================================================= */
+/* Expired vectors deleted per transaction by kvstore_vec_purge_expired.
+** Memory used by a purge is about this many keys, however many expired. */
+#ifndef KVVEC_PURGE_BATCH
+# define KVVEC_PURGE_BATCH 64
+#endif
+
 int kvstore_vec_purge_expired(KVVecStore *pVS, int *pnDeleted) {
     if (pnDeleted) *pnDeleted = 0;
     if (!pVS || !pVS->pIdx || !pVS->pVecCF) return KVSTORE_OK;
@@ -1369,94 +1417,99 @@ int kvstore_vec_purge_expired(KVVecStore *pVS, int *pnDeleted) {
     sqlite3_mutex_enter(pVS->pMutex);
     usearch_error_t err = NULL;
 
-    /* Collect expired keys by scanning _snkv_vec_ and checking default CF */
+    /* One fixed-size batch, allocated once.  Scan _snkv_vec_ until it is
+    ** full, delete those items in one transaction, then resume the scan
+    ** just after the last deleted key.  (Collecting every expired key first
+    ** needed memory proportional to how many had expired.) */
     typedef struct { void *pKey; int nKey; int64_t intId; } Expired;
-    Expired *expired = NULL;
-    int nExpired = 0, capExpired = 0;
+    Expired *expired = (Expired*)snkv_malloc(KVVEC_PURGE_BATCH * sizeof(Expired));
+    void *pResume = NULL; int nResume = 0;   /* last key deleted; resume here */
+    int nExpired = 0, nTotal = 0;
+    int rc = expired ? KVSTORE_OK : KVSTORE_NOMEM;
 
-    KVIterator *pIter = NULL;
-    if (kvstore_cf_iterator_create(pVS->pVecCF, &pIter) != KVSTORE_OK) {
-        sqlite3_mutex_leave(pVS->pMutex);
-        return KVSTORE_OK;
-    }
+    while (rc == KVSTORE_OK) {
+        int more = 0;
+        KVIterator *pIter = NULL;
+        rc = kvstore_cf_iterator_create(pVS->pVecCF, &pIter);
+        if (rc != KVSTORE_OK) break;
+        /* pResume was deleted, so seek lands on the key after it. */
+        int iterRc = pResume ? kvstore_iterator_seek(pIter, pResume, nResume)
+                             : kvstore_iterator_first(pIter);
+        while (iterRc == KVSTORE_OK && !kvstore_iterator_eof(pIter)) {
+            void *pKey = NULL; int nKey = 0;
+            iterRc = kvstore_iterator_key(pIter, &pKey, &nKey);
+            if (iterRc != KVSTORE_OK) break;
 
-    int iterRc = kvstore_iterator_first(pIter);
-    while (iterRc == KVSTORE_OK && !kvstore_iterator_eof(pIter)) {
-        void *pKey = NULL; int nKey = 0;
-        kvstore_iterator_key(pIter, &pKey, &nKey);
-
-        /* Existence check only.  Purge only keys that are confirmed missing
-        ** or expired — an error (e.g. out of memory) must not delete data. */
-        int liveRc = KVSTORE_OK;
-        int live = vecKeyIsLive(pVS, pKey, nKey, &liveRc);
-        if (!live && liveRc == KVSTORE_OK) {
-            /* expired or missing — collect for deletion */
-            void *pIdRaw = NULL; int nIdRaw = 0;
-            kvstore_cf_get(pVS->pIdkCF, pKey, nKey, &pIdRaw, &nIdRaw);
-            int64_t intId = (pIdRaw && nIdRaw == 8)
-                ? unpackI64((const unsigned char*)pIdRaw) : -1;
-            snkv_free(pIdRaw);
-
-            if (nExpired >= capExpired) {
-                int newCap = capExpired == 0 ? 16 : capExpired * 2;
-                Expired *tmp = (Expired*)snkv_malloc(newCap * sizeof(Expired));
-                if (!tmp) break; /* pKey is iterator-internal — do NOT free */
-                memcpy(tmp, expired, nExpired * sizeof(Expired));
-                snkv_free(expired);
-                expired = tmp;
-                capExpired = newCap;
+            /* Existence check only.  Purge only keys that are confirmed
+            ** missing or expired — an error must not delete data. */
+            int liveRc = KVSTORE_OK;
+            int live = vecKeyIsLive(pVS, pKey, nKey, &liveRc);
+            if (liveRc != KVSTORE_OK) { iterRc = liveRc; break; }
+            if (!live) {
+                void *pIdRaw = NULL; int nIdRaw = 0;
+                kvstore_cf_get(pVS->pIdkCF, pKey, nKey, &pIdRaw, &nIdRaw);
+                int64_t intId = (pIdRaw && nIdRaw == 8)
+                    ? unpackI64((const unsigned char*)pIdRaw) : -1;
+                snkv_free(pIdRaw);
+                /* Copy: pKey is the iterator's internal buffer. */
+                void *keyCopy = snkv_malloc(nKey > 0 ? nKey : 1);
+                if (!keyCopy) { iterRc = KVSTORE_NOMEM; break; }
+                memcpy(keyCopy, pKey, nKey);
+                expired[nExpired].pKey  = keyCopy;
+                expired[nExpired].nKey  = nKey;
+                expired[nExpired].intId = intId;
+                nExpired++;
+                if (nExpired == KVVEC_PURGE_BATCH) { more = 1; break; }
             }
-            /* Must copy the key (iterator buffer is internal) */
-            void *keyCopy = snkv_malloc(nKey);
-            if (!keyCopy) break; /* pKey is iterator-internal — do NOT free */
-            memcpy(keyCopy, pKey, nKey);
-            expired[nExpired].pKey  = keyCopy;
-            expired[nExpired].nKey  = nKey;
-            expired[nExpired].intId = intId;
-            nExpired++;
+            iterRc = kvstore_iterator_next(pIter);
         }
-        /* pKey is an internal buffer — do NOT free */
-        iterRc = kvstore_iterator_next(pIter);
-    }
-    kvstore_iterator_close(pIter);
+        kvstore_iterator_close(pIter);
+        if (iterRc != KVSTORE_OK) { rc = iterRc; break; }
+        if (nExpired == 0) break;
 
-    if (nExpired == 0) {
-        snkv_free(expired);
-        sqlite3_mutex_leave(pVS->pMutex);
-        return KVSTORE_OK;
-    }
-
-    int rc = kvstore_begin(pVS->pKV, 1);
-    if (rc != KVSTORE_OK) { goto purge_done; }
-
-    for (int i = 0; i < nExpired; i++) {
-        kvstore_cf_delete(pVS->pVecCF, expired[i].pKey, expired[i].nKey);
-        kvstore_cf_delete(pVS->pIdkCF, expired[i].pKey, expired[i].nKey);
-        if (expired[i].intId >= 0) {
-            unsigned char idBuf[8]; packI64(idBuf, expired[i].intId);
-            kvstore_cf_delete(pVS->pIdiCF, idBuf, 8);
+        rc = kvstore_begin(pVS->pKV, 1);
+        if (rc != KVSTORE_OK) break;
+        for (int i = 0; i < nExpired && rc == KVSTORE_OK; i++) {
+            int drc[4] = { KVSTORE_OK, KVSTORE_OK, KVSTORE_OK, KVSTORE_OK };
+            drc[0] = kvstore_cf_delete(pVS->pVecCF, expired[i].pKey, expired[i].nKey);
+            drc[1] = kvstore_cf_delete(pVS->pIdkCF, expired[i].pKey, expired[i].nKey);
+            if (expired[i].intId >= 0) {
+                unsigned char idBuf[8]; packI64(idBuf, expired[i].intId);
+                drc[2] = kvstore_cf_delete(pVS->pIdiCF, idBuf, 8);
+            }
+            if (pVS->pTagsCF) {
+                drc[3] = kvstore_cf_delete(pVS->pTagsCF, expired[i].pKey, expired[i].nKey);
+            }
+            for (int k = 0; k < 4; k++)
+                if (drc[k] != KVSTORE_OK && drc[k] != KVSTORE_NOTFOUND) rc = drc[k];
         }
-        if (pVS->pTagsCF) {
-            kvstore_cf_delete(pVS->pTagsCF, expired[i].pKey, expired[i].nKey);
+        if (rc == KVSTORE_OK) rc = kvstore_commit(pVS->pKV);
+        if (rc != KVSTORE_OK) {
+            kvstore_rollback(pVS->pKV);   /* also ends a failed commit */
+            break;
         }
-    }
-    rc = kvstore_commit(pVS->pKV);
-    if (rc == KVSTORE_OK) {
         for (int i = 0; i < nExpired; i++) {
             if (expired[i].intId >= 0) {
                 usearch_remove(pVS->pIdx, (usearch_key_t)expired[i].intId, &err);
                 err = NULL;
             }
         }
-        if (pnDeleted) *pnDeleted = nExpired;
-    } else {
-        kvstore_rollback(pVS->pKV);
+        nTotal += nExpired;
+
+        /* Keep the last deleted key as the resume point; free the rest. */
+        snkv_free(pResume);
+        pResume = expired[nExpired - 1].pKey;
+        nResume = expired[nExpired - 1].nKey;
+        for (int i = 0; i < nExpired - 1; i++) snkv_free(expired[i].pKey);
+        nExpired = 0;
+        if (!more) break;
     }
 
-purge_done:
     for (int i = 0; i < nExpired; i++) snkv_free(expired[i].pKey);
     snkv_free(expired);
+    snkv_free(pResume);
     sqlite3_mutex_leave(pVS->pMutex);
+    if (pnDeleted) *pnDeleted = nTotal;
     return rc;
 }
 
@@ -1472,11 +1525,25 @@ int kvstore_vec_drop_index(KVVecStore *pVS) {
     };
     const char *cfNames[] = { CF_VEC, CF_IDK, CF_IDI, CF_META, CF_TAGS };
 
+    /* Handles must be closed before their CFs can be dropped.  The public
+    ** kvstore_cf_drop rejects reserved names, so use the internal variant,
+    ** which drops all five atomically (missing ones are skipped). */
     for (int i = 0; i < 5; i++) {
-        if (cfs[i]) {
-            kvstore_cf_close(cfs[i]);
-            kvstore_cf_drop(pVS->pKV, cfNames[i]); /* ignore NOTFOUND */
-        }
+        if (cfs[i]) kvstore_cf_close(cfs[i]);
+    }
+    int rc = kvstoreDropInternalCFs(pVS->pKV, cfNames, 5);
+    if (rc != KVSTORE_OK) {
+        /* Nothing was dropped (one transaction): reopen the handles and keep
+        ** the index.  A handle that fails to reopen stays NULL, which the
+        ** read/write paths treat as "index dropped". */
+        pVS->pVecCF = pVS->pIdkCF = pVS->pIdiCF = pVS->pMetaCF = pVS->pTagsCF = NULL;
+        getOrCreateCF(pVS->pKV, CF_VEC,  &pVS->pVecCF);
+        getOrCreateCF(pVS->pKV, CF_IDK,  &pVS->pIdkCF);
+        getOrCreateCF(pVS->pKV, CF_IDI,  &pVS->pIdiCF);
+        getOrCreateCF(pVS->pKV, CF_META, &pVS->pMetaCF);
+        kvstoreOpenInternalCF(pVS->pKV, CF_TAGS, &pVS->pTagsCF);
+        sqlite3_mutex_leave(pVS->pMutex);
+        return rc;
     }
 
     pVS->pVecCF  = NULL;
@@ -1494,12 +1561,12 @@ int kvstore_vec_drop_index(KVVecStore *pVS) {
 
     /* Remove sidecar so next open won't load stale index */
     if (pVS->zSidecarPath) {
-        char nidPath[4096];
-        snprintf(nidPath, sizeof(nidPath), "%s.nid", pVS->zSidecarPath);
+        const char *nidPath = pVS->zNidPath;
         remove(pVS->zSidecarPath);
         remove(nidPath);
         snkv_free(pVS->zSidecarPath);
         pVS->zSidecarPath = NULL;
+        pVS->zNidPath = NULL;
     }
     sqlite3_mutex_leave(pVS->pMutex);
     return KVSTORE_OK;

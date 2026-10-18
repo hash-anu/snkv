@@ -896,6 +896,330 @@ static void test_big_values_liveness(void) {
     rm_db();
 }
 
+/* -----------------------------------------------------------------------
+** T25: drop_index removes the vector data from the file, not just memory.
+** Bug: the internal CFs have reserved names, which kvstore_cf_drop rejects;
+** the errors were ignored, so after a reopen every vector came back.
+** ----------------------------------------------------------------------- */
+static void test_drop_index_persists(void) {
+    section("T25: drop_index survives a reopen");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    float v[DIM];
+    char key[16];
+    for (int i = 0; i < 3; i++) {
+        int n = snprintf(key, sizeof key, "d%d", i);
+        fill_vec(v, (float)i);
+        ASSERT_OK(kvstore_vec_put(vs, key, n, "val", 3, v, 0, "{\"a\":1}", 7), "put");
+    }
+    ASSERT_OK(kvstore_vec_drop_index(vs), "drop_index");
+    kvstore_vec_close(vs);
+
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "reopen");
+    ASSERT_EQ(kvstore_vec_count(vs), 0, "no vectors after reopen");
+    KVVecStats st;
+    kvstore_vec_stats(vs, &st);
+    ASSERT_EQ(st.vec_cf_count, 0, "vector CF is empty after reopen");
+    ASSERT_EQ(st.has_metadata, 0, "metadata CF was dropped too");
+    float *pv = NULL; int nf = 0;
+    ASSERT_EQ(kvstore_vec_get_vector(vs, "d0", 2, &pv, &nf), KVSTORE_NOTFOUND,
+              "stored vector is gone");
+    snkv_free(pv);
+    void *val = NULL; int nval = 0;
+    ASSERT_OK(kvstore_vec_get(vs, "d0", 2, &val, &nval), "value kept");
+    snkv_free(val);
+
+    /* The store is usable again: a new vector goes in and is found. */
+    fill_vec(v, 9.0f);
+    ASSERT_OK(kvstore_vec_put(vs, "new", 3, "nv", 2, v, 0, NULL, 0), "put after drop+reopen");
+    ASSERT_EQ(kvstore_vec_count(vs), 1, "count 1");
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
+/* -----------------------------------------------------------------------
+** T26: a plain vector store reopened with a password stays readable.
+** Bug: the plain->encrypted conversion skipped every "__snkv_" CF, so the
+** vector CFs stayed plaintext while encryption was on and every read of
+** them failed (AUTH_FAILED / empty index).
+** ----------------------------------------------------------------------- */
+static void test_plain_to_encrypted(void) {
+    section("T26: plain vector store reopened with a password");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, 16, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open plain");
+    float v[16];
+    char key[16];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 16; j++) v[j] = (float)(i * 16 + j);
+        int n = snprintf(key, sizeof key, "p%d", i);
+        ASSERT_OK(kvstore_vec_put(vs, key, n, "val", 3, v, 0, "{\"m\":1}", 7), "put");
+    }
+    kvstore_vec_close(vs);
+    remove(DB ".usearch"); remove(DB ".usearch.nid");   /* force a rebuild */
+
+    const uint8_t pw[] = "secret";
+    ASSERT_OK(kvstore_vec_open(DB, 16, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, pw, 6, &vs), "reopen with password");
+    ASSERT_EQ(kvstore_vec_count(vs), 3, "index rebuilt with 3 vectors");
+    float *pv = NULL; int nf = 0;
+    ASSERT_OK(kvstore_vec_get_vector(vs, "p1", 2, &pv, &nf), "get_vector after encryption");
+    ASSERT(nf == 16 && pv && pv[0] == 16.0f, "vector content intact");
+    snkv_free(pv);
+    void *meta = NULL; int nmeta = 0;
+    ASSERT_OK(kvstore_vec_get_metadata(vs, "p2", 2, &meta, &nmeta), "metadata after encryption");
+    ASSERT(nmeta == 7 && meta && memcmp(meta, "{\"m\":1}", 7) == 0, "metadata intact");
+    snkv_free(meta);
+    for (int j = 0; j < 16; j++) v[j] = (float)(16 + j);
+    KVVecSearchResult *res = NULL; int nres = 0;
+    ASSERT_OK(kvstore_vec_search(vs, v, 1, 0, 0, 0.0f, &res, &nres), "search");
+    ASSERT(nres == 1 && res[0].nKey == 2 && memcmp(res[0].pKey, "p1", 2) == 0,
+           "nearest is p1");
+    kvstore_vec_free_results(res, nres);
+    kvstore_vec_close(vs);
+
+    /* And it opens again with the password (already encrypted). */
+    ASSERT_OK(kvstore_vec_open(DB, 16, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, pw, 6, &vs), "second encrypted open");
+    ASSERT_EQ(kvstore_vec_count(vs), 3, "still 3 vectors");
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
+/* -----------------------------------------------------------------------
+** T27: stored metadata is visible after a reopen.
+** Bug: rebuildIndex opened the tags CF with kvstore_cf_open, which rejects
+** reserved names, so get_metadata returned "no metadata" after a reopen.
+** ----------------------------------------------------------------------- */
+static void test_metadata_after_reopen(void) {
+    section("T27: metadata visible after reopen");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    float v[DIM]; fill_vec(v, 1.0f);
+    ASSERT_OK(kvstore_vec_put(vs, "m1", 2, "val", 3, v, 0, "{\"tag\":\"x\"}", 11), "put with metadata");
+    kvstore_vec_close(vs);
+
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "reopen");
+    void *meta = NULL; int nmeta = 0;
+    ASSERT_OK(kvstore_vec_get_metadata(vs, "m1", 2, &meta, &nmeta), "get_metadata");
+    ASSERT(nmeta == 11 && meta && memcmp(meta, "{\"tag\":\"x\"}", 11) == 0,
+           "metadata returned after reopen");
+    snkv_free(meta);
+    KVVecStats st; kvstore_vec_stats(vs, &st);
+    ASSERT_EQ(st.has_metadata, 1, "stats report metadata");
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
+/* -----------------------------------------------------------------------
+** T28: a batch that repeats a key adds only its last vector to the index
+** Bug: every item's label was added to the in-memory HNSW index, so the
+** superseded label stayed there: count was too high and the stale label
+** had no key mapping.
+** ----------------------------------------------------------------------- */
+static void test_batch_duplicate_keys(void) {
+    section("T28: put_batch with a repeated key");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    float a[DIM], b1[DIM], b2[DIM], b3[DIM];
+    fill_vec(a, 1.0f); fill_vec(b1, 50.0f); fill_vec(b2, 60.0f); fill_vec(b3, 2.0f);
+    KVVecItem items[4] = {
+        { "a", 1, "va",  2, a,  NULL, 0 },
+        { "b", 1, "vb1", 3, b1, NULL, 0 },
+        { "b", 1, "vb2", 3, b2, NULL, 0 },
+        { "b", 1, "vb3", 3, b3, NULL, 0 },
+    };
+    ASSERT_OK(kvstore_vec_put_batch(vs, items, 4, 0), "batch with key b three times");
+    ASSERT_EQ(kvstore_vec_count(vs), 2, "index holds 2 vectors (a, b)");
+
+    float *got = NULL; int n = 0;
+    ASSERT_OK(kvstore_vec_get_vector(vs, "b", 1, &got, &n), "get_vector b");
+    ASSERT(n == DIM && got && got[0] == b3[0], "b has the last batch vector");
+    snkv_free(got);
+
+    /* Query at b1: the superseded vector must not come back as a hit. */
+    KVVecSearchResult *res = NULL; int nRes = 0;
+    ASSERT_OK(kvstore_vec_search(vs, b1, 5, 0, 0, 0.0f, &res, &nRes), "search");
+    ASSERT_EQ(nRes, 2, "search sees exactly 2 vectors");
+    kvstore_vec_free_results(res, nRes);
+
+    /* Same again after a full rebuild (no sidecar). */
+    kvstore_vec_close(vs);
+    remove(DB ".usearch"); remove(DB ".usearch.nid");
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "reopen");
+    ASSERT_EQ(kvstore_vec_count(vs), 2, "count 2 after rebuild");
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
+/* Copy a file byte for byte; returns 0 on success. */
+static int copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    if (!in) return -1;
+    FILE *out = fopen(to, "wb");
+    if (!out) { fclose(in); return -1; }
+    char buf[4096]; size_t n;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in); fclose(out);
+    return 0;
+}
+
+static int file_exists(const char *p) {
+    FILE *f = fopen(p, "rb");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
+/* -----------------------------------------------------------------------
+** T29: a stale sidecar is not loaded
+** Bug: the sidecar was trusted whenever its next_id matched.  A delete does
+** not change next_id, so a sidecar left by an earlier session (e.g. the
+** process died before close rewrote it) brought deleted vectors back.
+** ----------------------------------------------------------------------- */
+static void test_stale_sidecar(void) {
+    section("T29: stale sidecar after a delete");
+    rm_db();
+    remove(DB ".old"); remove(DB ".old.nid");
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    float v[DIM];
+    fill_vec(v, 1.0f);  kvstore_vec_put(vs, "a", 1, "1", 1, v, 0, NULL, 0);
+    fill_vec(v, 20.0f); kvstore_vec_put(vs, "b", 1, "2", 1, v, 0, NULL, 0);
+    fill_vec(v, 40.0f); kvstore_vec_put(vs, "c", 1, "3", 1, v, 0, NULL, 0);
+    kvstore_vec_close(vs);                         /* sidecar: next_id 3, 3 vectors */
+    ASSERT(copy_file(DB ".usearch", DB ".old") == 0 &&
+           copy_file(DB ".usearch.nid", DB ".old.nid") == 0, "saved sidecar copy");
+
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "reopen (loads sidecar)");
+    ASSERT(!file_exists(DB ".usearch"), "sidecar removed while the store is open");
+    ASSERT_OK(kvstore_vec_delete(vs, "b", 1), "delete b");
+    kvstore_vec_close(vs);
+    ASSERT(file_exists(DB ".usearch"), "close writes the sidecar again");
+
+    /* Put the old sidecar back, as if the second close never happened. */
+    ASSERT(copy_file(DB ".old", DB ".usearch") == 0 &&
+           copy_file(DB ".old.nid", DB ".usearch.nid") == 0, "restore stale sidecar");
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "reopen with stale sidecar");
+    ASSERT_EQ(kvstore_vec_count(vs), 2, "deleted vector not resurrected (count 2)");
+    fill_vec(v, 20.0f);
+    KVVecSearchResult *res = NULL; int nRes = 0;
+    ASSERT_OK(kvstore_vec_search(vs, v, 3, 0, 0, 0.0f, &res, &nRes), "search near b");
+    int sawB = 0;
+    for (int i = 0; i < nRes; i++)
+        if (res[i].nKey == 1 && memcmp(res[i].pKey, "b", 1) == 0) sawB = 1;
+    ASSERT(nRes == 2 && !sawB, "search does not return deleted b");
+    kvstore_vec_free_results(res, nRes);
+    kvstore_vec_close(vs);
+
+    /* An encrypted open must remove a sidecar left by a plain session. */
+    ASSERT(file_exists(DB ".usearch"), "plain close left a sidecar");
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, (const uint8_t*)"pw", 2, &vs),
+              "encrypted open");
+    ASSERT(!file_exists(DB ".usearch") && !file_exists(DB ".usearch.nid"),
+           "encrypted open removed the plain sidecar");
+    kvstore_vec_close(vs);
+    remove(DB ".old"); remove(DB ".old.nid");
+    rm_db();
+}
+
+/* -----------------------------------------------------------------------
+** T30: get_vector / get_metadata respect TTL
+** Bug: both read the hidden CFs directly, so an expired key still returned
+** its vector and metadata although kvstore_vec_get said NOTFOUND.
+** ----------------------------------------------------------------------- */
+static void test_get_vector_ttl(void) {
+    section("T30: get_vector / get_metadata of an expired key");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    float v[DIM]; fill_vec(v, 1.0f);
+    int64_t past = kvstore_now_ms() - 5000;
+    ASSERT_OK(kvstore_vec_put(vs, "old", 3, "v", 1, v, past, "{\"t\":1}", 7), "put expired");
+    ASSERT_OK(kvstore_vec_put(vs, "new", 3, "v", 1, v, 0, "{\"t\":2}", 7), "put live");
+
+    float *got = NULL; int n = 0;
+    ASSERT_EQ(kvstore_vec_get_vector(vs, "old", 3, &got, &n), KVSTORE_NOTFOUND,
+              "get_vector(expired) -> NOTFOUND");
+    ASSERT(got == NULL, "no vector returned");
+    void *meta = NULL; int nm = 0;
+    ASSERT_EQ(kvstore_vec_get_metadata(vs, "old", 3, &meta, &nm), KVSTORE_NOTFOUND,
+              "get_metadata(expired) -> NOTFOUND");
+    ASSERT(meta == NULL && nm == 0, "no metadata returned");
+
+    ASSERT_OK(kvstore_vec_get_vector(vs, "new", 3, &got, &n), "get_vector(live) ok");
+    snkv_free(got);
+    ASSERT_OK(kvstore_vec_get_metadata(vs, "new", 3, &meta, &nm), "get_metadata(live) ok");
+    ASSERT(nm == 7, "live metadata returned");
+    snkv_free(meta);
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
+/* -----------------------------------------------------------------------
+** T31: purge_expired works in fixed-size batches
+** Before, every expired key was collected in one growing array before
+** anything was deleted (memory proportional to the number expired).  Now
+** it deletes KVVEC_PURGE_BATCH (64) at a time and resumes after the last
+** deleted key; this checks that more than two batches, with live keys
+** interleaved, are all handled.
+** ----------------------------------------------------------------------- */
+static void test_purge_batches(void) {
+    section("T31: purge_expired across several batches");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    int64_t past = kvstore_now_ms() - 5000;
+    char key[16];
+    float v[DIM];
+    int nOk = 0;
+    for (int i = 0; i < 200; i++) {
+        snprintf(key, sizeof key, "p%03d", i);
+        fill_vec(v, (float)i);
+        /* every 10th key stays live */
+        int64_t exp = (i % 10 == 0) ? 0 : past;
+        if (kvstore_vec_put(vs, key, (int)strlen(key), "v", 1, v, exp, NULL, 0) == KVSTORE_OK) nOk++;
+    }
+    ASSERT_EQ(nOk, 200, "200 puts (180 already expired)");
+    int ndel = 0;
+    ASSERT_OK(kvstore_vec_purge_expired(vs, &ndel), "purge_expired");
+    ASSERT_EQ(ndel, 180, "all 180 expired items purged (3 batches)");
+    ASSERT_EQ(kvstore_vec_count(vs), 20, "20 live vectors left in the index");
+    KVVecStats st; kvstore_vec_stats(vs, &st);
+    ASSERT_EQ(st.vec_cf_count, 20, "20 rows left in the vector CF");
+    float *got = NULL; int n = 0;
+    ASSERT_OK(kvstore_vec_get_vector(vs, "p190", 4, &got, &n), "live key still has its vector");
+    snkv_free(got);
+    ASSERT_OK(kvstore_vec_purge_expired(vs, &ndel), "second purge");
+    ASSERT_EQ(ndel, 0, "nothing left to purge");
+
+    /* Search with rerank still returns values (read only for the results). */
+    fill_vec(v, 190.0f);
+    KVVecSearchResult *res = NULL; int nRes = 0;
+    ASSERT_OK(kvstore_vec_search(vs, v, 3, 1, 3, 0.0f, &res, &nRes), "rerank search");
+    ASSERT(nRes == 3 && res[0].nKey == 4 && memcmp(res[0].pKey, "p190", 4) == 0
+           && res[0].nValue == 1 && memcmp(res[0].pValue, "v", 1) == 0,
+           "nearest is p190 with its value");
+    kvstore_vec_free_results(res, nRes);
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
 int main(void) {
     printf("=== SNKV Vector Store Tests ===\n");
 
@@ -923,6 +1247,13 @@ int main(void) {
     test_purge_no_ttl();
     test_null_safety();
     test_big_values_liveness();
+    test_drop_index_persists();
+    test_plain_to_encrypted();
+    test_metadata_after_reopen();
+    test_batch_duplicate_keys();
+    test_stale_sidecar();
+    test_get_vector_ttl();
+    test_purge_batches();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

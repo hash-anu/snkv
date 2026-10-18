@@ -315,7 +315,7 @@ static void test_ttl_roundtrip(void){
   KVStore *db = NULL;
   kvstore_open_encrypted(path, "pw", 2, &db, NULL);
 
-  int64_t expire = kvstore_now_ms() + 5000;  /* 5 seconds */
+  int64_t expire = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   int rc = kvstore_put_ttl(db, "session", 7, "tok123", 6, expire);
   ASSERT("put_ttl ok", rc == KVSTORE_OK);
 
@@ -323,7 +323,7 @@ static void test_ttl_roundtrip(void){
   rc = kvstore_get_ttl(db, "session", 7, &val, &nval, &remaining);
   ASSERT("get_ttl ok", rc == KVSTORE_OK);
   ASSERT("value correct", val && nval == 6 && memcmp(val, "tok123", 6) == 0);
-  ASSERT("remaining > 0", remaining > 0 && remaining <= 5000);
+  ASSERT("remaining > 0", remaining > 0 && remaining <= 3600000);
   if( val ) snkv_free(val);
   kvstore_close(db);
   rmdb(path);
@@ -541,7 +541,7 @@ static void test_reencrypt_full_functionality(void){
   kvstore_put(db, "k3", 2, "v3", 2);
 
   /* TTL before reencrypt */
-  int64_t expire = kvstore_now_ms() + 10000;
+  int64_t expire = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   kvstore_put_ttl(db, "ttlkey", 6, "ttlval", 6, expire);
 
   /* Column family before reencrypt */
@@ -625,7 +625,7 @@ static void test_reencrypt_full_functionality(void){
   if( val ){ snkv_free(val); val = NULL; }
 
   /* --- TTL: new key with TTL after reencrypt --- */
-  int64_t expire2 = kvstore_now_ms() + 8000;
+  int64_t expire2 = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   rc = kvstore_put_ttl(db, "newttl", 6, "nv", 2, expire2);
   ASSERT("put_ttl after reencrypt ok", rc == KVSTORE_OK);
   rc = kvstore_get_ttl(db, "newttl", 6, &val, &nval, &remaining);
@@ -711,7 +711,7 @@ static void test_remove_encryption_full_functionality(void){
   kvstore_put(db, "k3", 2, "v3", 2);
 
   /* TTL before remove_encryption */
-  int64_t expire = kvstore_now_ms() + 10000;
+  int64_t expire = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   kvstore_put_ttl(db, "ttlkey", 6, "ttlval", 6, expire);
 
   /* Column family before remove_encryption */
@@ -794,7 +794,7 @@ static void test_remove_encryption_full_functionality(void){
   if( val ){ snkv_free(val); val = NULL; }
 
   /* --- TTL: new key with TTL after remove_encryption --- */
-  int64_t expire2 = kvstore_now_ms() + 8000;
+  int64_t expire2 = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   rc = kvstore_put_ttl(db, "newttl", 6, "nv", 2, expire2);
   ASSERT("put_ttl after remove_encryption ok", rc == KVSTORE_OK);
   rc = kvstore_get_ttl(db, "newttl", 6, &val, &nval, &remaining);
@@ -877,7 +877,7 @@ static void test_remove_then_reencrypt_full_functionality(void){
   kvstore_put(db, "k2", 2, "v2", 2);
   kvstore_put(db, "k3", 2, "v3", 2);
 
-  int64_t expire = kvstore_now_ms() + 10000;
+  int64_t expire = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   kvstore_put_ttl(db, "ttlkey", 6, "ttlval", 6, expire);
 
   KVColumnFamily *cf = NULL;
@@ -968,7 +968,7 @@ static void test_remove_then_reencrypt_full_functionality(void){
   if( val ){ snkv_free(val); val = NULL; }
 
   /* --- TTL: new key --- */
-  int64_t expire2 = kvstore_now_ms() + 8000;
+  int64_t expire2 = kvstore_now_ms() + 3600000;  /* 1 hour: survives slow runs (Valgrind) */
   rc = kvstore_put_ttl(db, "newttl", 6, "nv", 2, expire2);
   ASSERT("put_ttl after re-encrypt ok", rc == KVSTORE_OK);
   rc = kvstore_get_ttl(db, "newttl", 6, &val, &nval, &remaining);

@@ -103,21 +103,23 @@ make && make test
 
 ## Benchmarks
 
-1M records on Linux. Both stores use WAL, `synchronous=NORMAL`, an 8 MB cache and 4 KB pages; SQLite uses a `WITHOUT ROWID` table.
-Source: [SNKV](tests/test_benchmark.c) · [SQLite](https://github.com/hash-anu/sqllite-benchmark-kv)
+1M records, mean of 5 runs on Linux (WSL2, tmpfs — measures engine CPU cost, not disk). Both stores use the same SQLite 3.51.2 core built with `gcc -O2`, WAL with auto-checkpoint every 1000 pages, `synchronous=NORMAL`, an 8 MB cache and 4 KB pages; SQLite uses a `WITHOUT ROWID` table and prepared statements.
+Source: [SNKV](tests/test_benchmark.c) · [SQLite](https://github.com/hash-anu/sqllite-benchmark-kv) · details in [docs/benchmark.html](docs/benchmark.html)
 
 | Benchmark         | SQLite      | SNKV        | Speedup |
 | ----------------- | ----------- | ----------- | ------- |
-| Sequential writes | 142K ops/s  | 232K ops/s  | 1.64x   |
-| Random reads      | 90K ops/s   | 160K ops/s  | 1.77x   |
-| Sequential scan   | 1.56M ops/s | 2.89M ops/s | 1.85x   |
-| Random updates    | 16K ops/s   | 31K ops/s   | 1.9x    |
-| Random deletes    | 16K ops/s   | 31K ops/s   | ~2x     |
-| Mixed workload    | 34K ops/s   | 62K ops/s   | 1.79x   |
+| Sequential writes | 1.30M ops/s | 1.51M ops/s | 1.16x   |
+| Random reads      | 254K ops/s  | 588K ops/s  | 2.32x   |
+| Sequential scan   | 11.1M ops/s | 13.5M ops/s | 1.22x   |
+| Random updates    | 108K ops/s  | 120K ops/s  | 1.11x   |
+| Random deletes    | 124K ops/s  | 126K ops/s  | 1.01x   |
+| Exists checks     | 262K ops/s  | 653K ops/s  | 2.49x   |
+| Mixed workload    | 254K ops/s  | 317K ops/s  | 1.25x   |
+| Bulk insert       | 1.50M ops/s | 1.75M ops/s | 1.17x   |
 
 Comparisons against [LMDB](https://github.com/hash-anu/lmdb-benchmark) and [RocksDB](https://github.com/hash-anu/rocksdb-benchmark) are available too.
 
-**Good fit:** read-heavy or mixed workloads, native TTL (sessions, caches, leases), embedded or memory-constrained targets, and simple C integration.
+**Good fit:** read-heavy or mixed workloads (point reads and existence checks run about 2.3–2.5x faster than SQLite), native TTL (sessions, caches, leases), embedded or memory-constrained targets, and simple C integration.
 **Consider alternatives:** RocksDB for maximum write throughput, LMDB for maximum read speed when memory is plentiful.
 
 ---

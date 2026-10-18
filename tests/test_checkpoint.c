@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
-** test_checkpoint.c -- Tests for kvstore_checkpoint() and walSizeLimit.
+** test_checkpoint.c -- Tests for kvstore_checkpoint() and walAutoCheckpoint.
 */
 
 #include <stdio.h>
@@ -107,18 +107,19 @@ static void test_truncate_checkpoint(void) {
 }
 
 static void test_walsizelimit_auto_checkpoint(void) {
-    printf("\n--- Test 3: walSizeLimit auto-checkpoint fires ---\n");
+    printf("\n--- Test 3: walAutoCheckpoint auto-checkpoint fires ---\n");
     const char *db = "ckpt_t3.db";
     cleanup(db);
 
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    cfg.walSizeLimit = 10;   /* checkpoint every 10 commits */
+    cfg.walAutoCheckpoint = 10;   /* checkpoint once the WAL holds 10 pages */
     KVStore *kv = NULL;
     int rc = kvstore_open_v2(db, &kv, &cfg);
-    CHECK(rc == KVSTORE_OK, "open with walSizeLimit=10");
+    CHECK(rc == KVSTORE_OK, "open with walAutoCheckpoint=10");
 
-    /* Write 50 records -- 5 auto-checkpoints should have fired */
+    /* Write 50 records, one commit each -- the WAL passes 10 pages several
+    ** times, so auto-checkpoints must have fired */
     int i;
     char key[32], val[64];
     for (i = 0; i < 50; i++) {
@@ -126,6 +127,10 @@ static void test_walsizelimit_auto_checkpoint(void) {
         snprintf(val, sizeof(val), "value%04d", i);
         kvstore_put(kv, key, (int)strlen(key), val, (int)strlen(val));
     }
+
+    KVStoreStats st;
+    kvstore_stats(kv, &st);
+    CHECK(st.nCheckpoints >= 1, "auto-checkpoint fired (stats.nCheckpoints > 0)");
 
     /* After auto-checkpoints the WAL should be small -- manually verify
     ** by running a final PASSIVE checkpoint and checking nLog is low. */
@@ -143,13 +148,13 @@ static void test_walsizelimit_auto_checkpoint(void) {
 }
 
 static void test_walsizelimit_disabled(void) {
-    printf("\n--- Test 4: walSizeLimit=0 (disabled) -- WAL grows freely ---\n");
+    printf("\n--- Test 4: walAutoCheckpoint=-1 (disabled) -- WAL grows freely ---\n");
     const char *db = "ckpt_t4.db";
     cleanup(db);
 
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    cfg.walSizeLimit = 0;    /* no auto-checkpoint */
+    cfg.walAutoCheckpoint = -1;    /* no auto-checkpoint */
     KVStore *kv = NULL;
     kvstore_open_v2(db, &kv, &cfg);
 
@@ -168,6 +173,9 @@ static void test_walsizelimit_disabled(void) {
     long long walSize = file_size(walPath);
     CHECK(walSize > 0, "WAL file has grown (no auto-checkpoint)");
 #endif
+    KVStoreStats st;
+    kvstore_stats(kv, &st);
+    CHECK(st.nCheckpoints == 0, "no auto-checkpoint when walAutoCheckpoint=-1");
 
     kvstore_close(kv);
     cleanup(db);

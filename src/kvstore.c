@@ -48,8 +48,30 @@
 #define SNKV_ENC_MAC_LEN      16
 #define SNKV_ENC_OVERHEAD     40   /* NONCE_LEN + MAC_LEN */
 
-#define SNKV_ENC_M_COST   65536u   /* 64 MiB */
-#define SNKV_ENC_T_COST       3u
+/*
+** Argon2id cost for NEW keys (kvstore_open_encrypted on a new or plain store,
+** kvstore_reencrypt).  M_COST is in KiB blocks: the derivation needs that
+** much RAM at once.  The default (64 MiB) suits desktops and servers; on a
+** small device build with e.g. -DSNKV_ENC_M_COST=256u (256 KiB).  The cost
+** is stored in each file, so stores made with any setting open everywhere
+** the RAM allows.
+**
+** Costs READ FROM A FILE are checked against the MAX values below before
+** use: a crafted or corrupt file must not be able to request an allocation
+** that overflows size_t (32-bit targets) or hang the device.
+*/
+#ifndef SNKV_ENC_M_COST
+# define SNKV_ENC_M_COST   65536u   /* 64 MiB */
+#endif
+#ifndef SNKV_ENC_T_COST
+# define SNKV_ENC_T_COST       3u
+#endif
+#ifndef SNKV_ENC_M_COST_MAX
+# define SNKV_ENC_M_COST_MAX (1u << 20)   /* 1 GiB */
+#endif
+#ifndef SNKV_ENC_T_COST_MAX
+# define SNKV_ENC_T_COST_MAX     64u
+#endif
 
 #define SNKV_AUTH_CF_NAME    "__snkv_auth__"
 #define SNKV_AUTH_VERIFY     "SNKV_AUTH_V1"
@@ -69,6 +91,12 @@ static void kvstoreEncWipe(void *p, size_t n){
   crypto_wipe(p, n);
 }
 
+/*
+** Derive the 32-byte key.  Returns KVSTORE_OK, KVSTORE_CORRUPT if the cost
+** parameters are out of range (they may come from the file), or
+** KVSTORE_NOMEM.  The work area comes from the SQLite allocator, so it is
+** counted by SQLITE_CONFIG_MALLOC hooks and fails cleanly under a heap limit.
+*/
 static int kvstoreEncDeriveKey(
   uint8_t        aKey[SNKV_ENC_KEY_LEN],
   const void    *pPassword, int nPassword,
@@ -76,9 +104,13 @@ static int kvstoreEncDeriveKey(
   uint32_t       mCost,
   uint32_t       tCost
 ){
+  /* Argon2 needs at least 8 blocks per lane (1 lane here). */
+  if( mCost < 8 || mCost > SNKV_ENC_M_COST_MAX ) return KVSTORE_CORRUPT;
+  if( tCost < 1 || tCost > SNKV_ENC_T_COST_MAX ) return KVSTORE_CORRUPT;
+  if( (sqlite3_uint64)mCost * 1024 > (sqlite3_uint64)(size_t)-1 ) return KVSTORE_NOMEM;
   size_t workSize = (size_t)mCost * 1024;
-  void  *pWork    = malloc(workSize);
-  if( !pWork ) return -1;
+  void  *pWork    = sqlite3_malloc64((sqlite3_uint64)workSize);
+  if( !pWork ) return KVSTORE_NOMEM;
 
   crypto_argon2_config cfg;
   cfg.algorithm  = CRYPTO_ARGON2_ID;
@@ -95,8 +127,8 @@ static int kvstoreEncDeriveKey(
   crypto_argon2(aKey, SNKV_ENC_KEY_LEN, pWork, cfg, inp, crypto_argon2_no_extras);
 
   crypto_wipe(pWork, workSize);
-  free(pWork);
-  return 0;
+  sqlite3_free(pWork);
+  return KVSTORE_OK;
 }
 
 static int kvstoreEncEncrypt(
@@ -113,18 +145,29 @@ static int kvstoreEncEncrypt(
   return 0;
 }
 
-static int kvstoreEncDecrypt(
-  uint8_t       *pOut,
+/*
+** Decrypt in place.  pBuf holds [nonce][ciphertext][mac], nEnc bytes.  On
+** success the plaintext is moved to the front of pBuf and its length is
+** returned; on failure (too short, wrong key, tampered) -1 is returned.
+** No second buffer is needed, so reading a value costs one copy of it, not
+** two.  Monocypher verifies the MAC before decrypting, and its ChaCha20
+** reads each word before writing the same offset, so plain_text ==
+** cipher_text is allowed (the same-buffer case its manual permits).
+*/
+static int kvstoreEncDecryptInPlace(
+  uint8_t       *pBuf,
   const uint8_t  aKey[SNKV_ENC_KEY_LEN],
-  const uint8_t *pEnc, int nEnc
+  int            nEnc
 ){
   if( nEnc < SNKV_ENC_OVERHEAD ) return -1;
-  const uint8_t *pNonce  = pEnc;
-  const uint8_t *pCipher = pEnc + SNKV_ENC_NONCE_LEN;
-  const uint8_t *pMac    = pEnc + (nEnc - SNKV_ENC_MAC_LEN);
-  int            nPlain  = nEnc - SNKV_ENC_OVERHEAD;
-  return crypto_aead_unlock(pOut, pMac, aKey, pNonce,
-                            NULL, 0, pCipher, (size_t)nPlain);
+  uint8_t *pCipher = pBuf + SNKV_ENC_NONCE_LEN;
+  int      nPlain  = nEnc - SNKV_ENC_OVERHEAD;
+  if( crypto_aead_unlock(pCipher, pBuf + (nEnc - SNKV_ENC_MAC_LEN), aKey,
+                         pBuf, NULL, 0, pCipher, (size_t)nPlain) != 0 ){
+    return -1;
+  }
+  memmove(pBuf, pCipher, (size_t)nPlain);
+  return nPlain;
 }
 
 /* =========================================================================
@@ -227,6 +270,56 @@ static int kvstoreEncodeBlob(
   return nTotal;
 }
 
+/*
+** Like kvstoreEncodeBlob, but if aEncKey is non-NULL the value is encrypted
+** straight into the blob ([nonce][ciphertext][mac] after the key).  An
+** encrypted put then holds one copy of the value (the blob) instead of two
+** (a ciphertext buffer plus the blob it is copied into).
+** Returns the blob size, -1 if out of memory, or -2 if the value is too
+** large or encryption failed.
+*/
+static int kvstoreEncodeBlobEnc(
+  const void *pKey, int nKey,
+  const void *pVal, int nVal,
+  const uint8_t *aEncKey,
+  unsigned char *pStack, int nStack,
+  unsigned char **ppOut
+){
+  *ppOut = 0;
+  if( !aEncKey ){
+    return kvstoreEncodeBlob(pKey, nKey, pVal, nVal, pStack, nStack, ppOut);
+  }
+  if( nVal > INT_MAX - SNKV_ENC_OVERHEAD - 4 - nKey ) return -2;
+  int nTotal = 4 + nKey + nVal + SNKV_ENC_OVERHEAD;
+  unsigned char *pOut = nTotal <= nStack ? pStack
+                                         : (unsigned char *)sqlite3Malloc(nTotal);
+  if( pOut == 0 ) return -1;
+  pOut[0] = (unsigned char)((nKey >> 24) & 0xFF);
+  pOut[1] = (unsigned char)((nKey >> 16) & 0xFF);
+  pOut[2] = (unsigned char)((nKey >>  8) & 0xFF);
+  pOut[3] = (unsigned char)( nKey        & 0xFF);
+  memcpy(pOut + 4, pKey, nKey);
+  if( kvstoreEncEncrypt(pOut + 4 + nKey, aEncKey, (const uint8_t *)pVal, nVal) != 0 ){
+    if( pOut != pStack ) sqlite3_free(pOut);
+    return -2;
+  }
+  *ppOut = pOut;
+  return nTotal;
+}
+
+/* Grow a scratch buffer to at least nNeed bytes (never shrinks).  Returns
+** KVSTORE_OK, KVSTORE_ERROR above INT_MAX, or SQLITE_NOMEM (the old buffer
+** stays valid). */
+static int kvstoreGrowBuf(unsigned char **pp, int *pnAlloc, i64 nNeed){
+  if( nNeed <= *pnAlloc ) return KVSTORE_OK;
+  if( nNeed > INT_MAX ) return KVSTORE_ERROR;
+  unsigned char *p = (unsigned char*)sqlite3_realloc64(*pp, (u64)nNeed);
+  if( !p ) return SQLITE_NOMEM;
+  *pp = p; *pnAlloc = (int)nNeed;
+  return KVSTORE_OK;
+}
+
+
 /* ======================================================================
 ** Internal cursor helpers – wraps the new callerallocs cursor model
 ** ====================================================================== */
@@ -318,14 +411,20 @@ struct KVStore {
   int closing;            /* Set to 1 when kvstore_close() is in progress */
 
   /* WAL auto-checkpoint */
-  int walSizeLimit;       /* Checkpoint every N commits (0 = disabled) */
-  int walCommits;         /* Write commits since last auto-checkpoint */
+  int walAutoCkptPages;   /* Checkpoint when the WAL holds >= N pages (0 = off) */
 
   /* Column families */
   KVColumnFamily *pDefaultCF;  /* Default column family */
   KVColumnFamily **apCF;       /* Array of open column families */
   int nCF;                     /* Number of open column families */
   int nCFAlloc;                /* Allocated size of apCF array */
+
+  /* Root-page moves applied to open handles during the current write
+  ** transaction (a drop moves the highest table into the freed slot).
+  ** Rolled back together with the transaction; see kvstoreRetargetCF. */
+  struct KVRootMove { KVColumnFamily *pCF; int iOld; } *aRootUndo;
+  int nRootUndo;               /* Entries in aRootUndo */
+  int nRootUndoAlloc;          /* Allocated size of aRootUndo */
 
   /* Encryption */
   uint8_t aEncKey[32]; /* Derived 256-bit key; zeroed when not encrypted */
@@ -368,16 +467,45 @@ static void kvstoreMarkTtlStale(KVStore *pKV){
   }
 }
 
-/* sqlite3BtreeRollback() + mark TTL counts stale. */
+/*
+** Undo the root-page moves applied to open handles in this transaction
+** (newest first), so every handle points at its pre-transaction root again.
+** Called whenever the write transaction is rolled back.
+*/
+static void kvstoreUndoRootMoves(KVStore *pKV){
+  while( pKV->nRootUndo > 0 ){
+    struct KVRootMove *m = &pKV->aRootUndo[--pKV->nRootUndo];
+    if( m->pCF->pReadCur ){
+      kvstoreFreeCursor(m->pCF->pReadCur);
+      m->pCF->pReadCur = NULL;
+    }
+    m->pCF->iTable = m->iOld;
+  }
+}
+
+/* sqlite3BtreeRollback() + mark TTL counts stale + undo root moves. */
 static int kvstoreBtreeRollback(KVStore *pKV){
   kvstoreMarkTtlStale(pKV);
+  kvstoreUndoRootMoves(pKV);
   return sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
 }
 
-/* sqlite3BtreeCommit(); a failed commit may have dropped the writes. */
+/*
+** Commit a transaction this module opened itself.  A failed commit (e.g.
+** SQLITE_BUSY getting the exclusive lock, or an I/O error) leaves the btree
+** inside its write transaction; callers then set inTrans = 0, so the half-
+** applied changes would be committed by the next unrelated commit.  Roll
+** back instead, so a failed internal commit always means "nothing written".
+** kvstore_commit() uses sqlite3BtreeCommit directly: there the caller owns
+** the transaction and may retry or roll back.
+*/
 static int kvstoreBtreeCommit(KVStore *pKV){
   int rc = sqlite3BtreeCommit(pKV->pBt);
-  if( rc != SQLITE_OK ) kvstoreMarkTtlStale(pKV);
+  if( rc != SQLITE_OK ){
+    kvstoreBtreeRollback(pKV);
+  }else{
+    pKV->nRootUndo = 0;                 /* the moves are now permanent */
+  }
   return rc;
 }
 
@@ -979,6 +1107,7 @@ static void kvstoreTeardownNoLock(KVStore *pKV){
     if( pKV->apCF[i] ) kvstoreFreeCFStruct(pKV->apCF[i]);
   }
   sqlite3_free(pKV->apCF);
+  sqlite3_free(pKV->aRootUndo);
   if( pKV->pBt ) sqlite3BtreeClose(pKV->pBt);
   sqlite3_free(pKV->pKeyInfo);
   /* Free the busy-handler context if we allocated one */
@@ -990,17 +1119,31 @@ static void kvstoreTeardownNoLock(KVStore *pKV){
 }
 
 /*
-** Increment the commit counter and run a PASSIVE checkpoint when the
-** walSizeLimit threshold is reached. Called in the TRANS_NONE window
-** (after sqlite3BtreeCommit, before the read transaction is restored).
+** Run a PASSIVE auto-checkpoint after a successful write commit once the WAL
+** holds at least walAutoCkptPages pages (frames) — the rule SQLite's own
+** default wal hook uses (1000 pages by default; 0 = disabled).
+**
+** The page count comes from sqlite3PagerWalCallback(): the number of frames
+** in the WAL as of the last commit (0 when not in WAL mode, or when no commit
+** happened since the previous call).  Reading it also resets it, exactly as
+** SQLite's VDBE does before invoking its wal hook.
+**
+** Why it matters: without checkpoints the WAL grows to the size of the
+** database, and every page-cache miss must then search a WAL index whose
+** cost grows with the WAL (one hash table per 4096 frames) and read the page
+** from the WAL file.  Measured on 1M rows this cost 8-16% on reads.
+**
+** PASSIVE never blocks; if another connection is reading old frames it just
+** copies what it can, and the attempt is repeated after a later commit.
+** Must be called in the TRANS_NONE window (after the commit, before the
+** persistent read transaction is restored): checkpoints need TRANS_NONE.
 */
 static void kvstoreAutoCheckpoint(KVStore *pKV){
+  int nFrame = sqlite3PagerWalCallback(sqlite3BtreePager(pKV->pBt));
   pKV->stats.nWalCommits++;
-  if( pKV->walSizeLimit > 0 ){
-    pKV->walCommits++;
-    if( pKV->walCommits >= pKV->walSizeLimit ){
-      pKV->walCommits = 0;
-      sqlite3BtreeCheckpoint(pKV->pBt, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+  if( pKV->walAutoCkptPages > 0 && nFrame >= pKV->walAutoCkptPages ){
+    if( sqlite3BtreeCheckpoint(pKV->pBt, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL)
+          == SQLITE_OK ){
       pKV->stats.nCheckpoints++;
     }
   }
@@ -1008,10 +1151,13 @@ static void kvstoreAutoCheckpoint(KVStore *pKV){
 
 /* Early forward declarations needed by kvstore_open_v2. */
 static int kvstoreCfOpenInternal(KVStore*, const char*, KVColumnFamily**);
+static void kvstoreClearOrphanTtl(KVStore*, KVColumnFamily*, KVColumnFamily*);
 static int kvstoreRawBtreeGet(KVStore*, int, const void*, int, void**, int*);
-static void kvstoreRegisterCF(KVStore*, KVColumnFamily*);
+static int kvstoreRegisterCF(KVStore*, KVColumnFamily*);
 static void kvstoreUnregisterCF(KVStore*, KVColumnFamily*);
-static void kvstoreDropHiddenCFNoLock(KVStore*, const char*);
+static int kvstoreDropHiddenCFNoLock(KVStore*, const char*);
+static int kvstoreEnsureWrite(KVStore*, int*);
+static int kvstoreFinishWrite(KVStore*, int, int);
 int kvstoreGetOrCreateInternalCF(KVStore*, const char*, KVColumnFamily**);
 int kvstoreRenameHiddenCF(KVStore*, const char*, const char*);
 
@@ -1034,7 +1180,9 @@ int kvstore_open_v2(
   int readOnly     = pConfig ? pConfig->readOnly     : 0;
   int busyTimeout  = pConfig ? pConfig->busyTimeout  : 0;
 
-  if( cacheSize <= 0 ) cacheSize = KVSTORE_DEFAULT_CACHE_SIZE;
+  /* 0 = default.  Negative = a memory budget in KiB (SQLite semantics: the
+  ** page count is derived from the page size), useful on small devices. */
+  if( cacheSize == 0 ) cacheSize = KVSTORE_DEFAULT_CACHE_SIZE;
 
   if( ppKV == NULL ){
     return KVSTORE_ERROR;
@@ -1290,8 +1438,13 @@ int kvstore_open_v2(
     /* Non-fatal if it fails; auto-trans will handle individual operations. */
   }
 
-  /* WAL auto-checkpoint config (walCommits starts at 0 via sqlite3MallocZero). */
-  pKV->walSizeLimit = pConfig ? pConfig->walSizeLimit : 0;
+  /* WAL auto-checkpoint config.
+  ** walAutoCheckpoint: 0 = default page threshold, < 0 = off, N = N pages. */
+  {
+    int n = pConfig ? pConfig->walAutoCheckpoint : 0;
+    pKV->walAutoCkptPages = n == 0 ? KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT
+                          : n < 0  ? 0 : n;
+  }
 
   /* Probe for existing TTL index CFs from a previous session (default CF). */
   {
@@ -1300,12 +1453,16 @@ int kvstore_open_v2(
     snprintf(zExpName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_EXP_PREFIX, DEFAULT_CF_NAME);
     KVColumnFamily *pKeyCF = NULL, *pExpCF = NULL;
     KV_ENTER(pKV);
-    if( kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF) == KVSTORE_OK &&
-        kvstoreCfOpenInternal(pKV, zExpName, &pExpCF) == KVSTORE_OK ){
+    int rcKey = kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF);
+    int rcExp = kvstoreCfOpenInternal(pKV, zExpName, &pExpCF);
+    if( rcKey == KVSTORE_OK && rcExp == KVSTORE_OK ){
       pKV->pDefaultCF->pTtlKeyCF    = pKeyCF;
       pKV->pDefaultCF->pTtlExpiryCF = pExpCF;
       pKV->pDefaultCF->hasTtl       = 1;
       pKV->pDefaultCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF);
+    } else if( !readOnly ){
+      /* One TTL index without the other: a partial-write orphan. */
+      kvstoreClearOrphanTtl(pKV, pKeyCF, pExpCF);
     } else {
       if( pKeyCF ) kvstoreFreeCFStruct(pKeyCF);
       if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
@@ -1418,6 +1575,7 @@ int kvstore_close(KVStore *pKV){
     kvstoreFreeCFStruct(pKV->apCF[i]);
   }
   sqlite3_free(pKV->apCF);
+  sqlite3_free(pKV->aRootUndo);
 
   /* Close the btree */
   rc = sqlite3BtreeClose(pKV->pBt);
@@ -1509,6 +1667,50 @@ int kvstore_begin(KVStore *pKV, int wrflag){
 static void kvstoreRestorePersistentRead(KVStore *pKV);
 
 /*
+** A CF's TTL indexes come in pairs (__snkv_ttl_k__ + __snkv_ttl_e__).  If only
+** one exists — a partial-write orphan — EMPTY it (sqlite3BtreeClearTable)
+** rather than drop it.  Clearing keeps the root page, so no table moves: a
+** drop could move the table of a CF whose handle is being opened and not yet
+** registered, leaving that handle on a stale root.  Because nothing moves,
+** this is safe with iterators open, and inside the caller's write
+** transaction it simply becomes part of it (if they roll back, the next open
+** clears again).  The emptied table is reused by the next put_ttl, so stale
+** index rows can never apply to the CF's keys.  Best effort: on failure the
+** orphan is left for the next open.  Frees both structs (either may be NULL).
+** Caller holds pKV->pMutex.
+*/
+static void kvstoreClearOrphanTtl(
+  KVStore *pKV, KVColumnFamily *pKeyCF, KVColumnFamily *pExpCF
+){
+  if( pKeyCF || pExpCF ){
+    int callerTrans = (pKV->inTrans == 2);
+    int rc = SQLITE_OK;
+    if( !callerTrans ){
+      if( pKV->inTrans == 1 ){
+        kvstoreInvalidateReadCursors(pKV);
+        kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
+      }
+      rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
+      if( rc == SQLITE_OK ) pKV->inTrans = 2;
+    }
+    if( rc == SQLITE_OK && pKeyCF ){
+      rc = sqlite3BtreeClearTable(pKV->pBt, pKeyCF->iTable, NULL);
+    }
+    if( rc == SQLITE_OK && pExpCF ){
+      rc = sqlite3BtreeClearTable(pKV->pBt, pExpCF->iTable, NULL);
+    }
+    if( !callerTrans && pKV->inTrans == 2 ){
+      if( rc == SQLITE_OK ) kvstoreBtreeCommit(pKV);   /* rolls back on failure */
+      else kvstoreBtreeRollback(pKV);
+      pKV->inTrans = 0;
+    }
+    if( !callerTrans ) kvstoreRestorePersistentRead(pKV);
+  }
+  if( pKeyCF ) kvstoreFreeCFStruct(pKeyCF);
+  if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
+}
+
+/*
 ** Commit the current transaction.
 */
 int kvstore_commit(KVStore *pKV){
@@ -1531,7 +1733,11 @@ int kvstore_commit(KVStore *pKV){
     return KVSTORE_ERROR;
   }
 
-  rc = kvstoreBtreeCommit(pKV);
+  /* Not kvstoreBtreeCommit: on failure the caller keeps the transaction
+  ** and may retry the commit or roll back. */
+  rc = sqlite3BtreeCommit(pKV->pBt);
+  if( rc != SQLITE_OK ) kvstoreMarkTtlStale(pKV);
+  else pKV->nRootUndo = 0;              /* root moves are now permanent */
   if( rc == SQLITE_OK ){
     pKV->inTrans = 0;
     kvstoreAutoCheckpoint(pKV);
@@ -1668,31 +1874,16 @@ static int kvstoreRawBtreePut(
   int rc = sqlite3BtreeCursor(pKV->pBt, iTable, 1, pKV->pKeyInfo, pCur);
   if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
 
-  /* Encrypt value if the store is encrypted */
-  const void *pActualVal = pVal;
-  int         nActualVal = nVal;
-  uint8_t    *pEncBuf    = NULL;
-  if( pKV->bEncrypted ){
-    if( nVal > INT_MAX - SNKV_ENC_OVERHEAD ){
-      kvstoreFreeCursor(pCur);
-      return KVSTORE_ERROR;
-    }
-    int nOut = nVal + SNKV_ENC_OVERHEAD;
-    pEncBuf = (uint8_t *)sqlite3Malloc(nOut);
-    if( !pEncBuf ){ kvstoreFreeCursor(pCur); return SQLITE_NOMEM; }
-    if( kvstoreEncEncrypt(pEncBuf, pKV->aEncKey, (const uint8_t *)pVal, nVal) != 0 ){
-      sqlite3_free(pEncBuf); kvstoreFreeCursor(pCur); return KVSTORE_ERROR;
-    }
-    pActualVal = pEncBuf;
-    nActualVal = nOut;
-  }
-
+  /* Encode (and, for an encrypted store, encrypt straight into) the blob. */
   unsigned char stackBuf[512];
   unsigned char *pEncoded;
-  int nEncoded = kvstoreEncodeBlob(pKey, nKey, pActualVal, nActualVal,
-                                   stackBuf, (int)sizeof(stackBuf), &pEncoded);
-  if( pEncBuf ) sqlite3_free(pEncBuf);
-  if( nEncoded < 0 ){ kvstoreFreeCursor(pCur); return SQLITE_NOMEM; }
+  int nEncoded = kvstoreEncodeBlobEnc(pKey, nKey, pVal, nVal,
+                                      pKV->bEncrypted ? pKV->aEncKey : NULL,
+                                      stackBuf, (int)sizeof(stackBuf), &pEncoded);
+  if( nEncoded < 0 ){
+    kvstoreFreeCursor(pCur);
+    return nEncoded == -1 ? SQLITE_NOMEM : KVSTORE_ERROR;
+  }
 
   BtreePayload payload;
   memset(&payload, 0, sizeof(payload));
@@ -1784,16 +1975,11 @@ static int kvstoreRawBtreeGet(
       sqlite3_free(pValue);
       return KVSTORE_CORRUPT;
     }
-    int nPlain = valueLen - SNKV_ENC_OVERHEAD;
-    void *pPlain = sqlite3Malloc(nPlain > 0 ? nPlain : 1);
-    if( !pPlain ){ sqlite3_free(pValue); return SQLITE_NOMEM; }
-    if( kvstoreEncDecrypt((uint8_t *)pPlain, pKV->aEncKey,
-                          (const uint8_t *)pValue, valueLen) != 0 ){
-      sqlite3_free(pPlain); sqlite3_free(pValue);
+    int nPlain = kvstoreEncDecryptInPlace((uint8_t *)pValue, pKV->aEncKey, valueLen);
+    if( nPlain < 0 ){
+      sqlite3_free(pValue);
       return KVSTORE_AUTH_FAILED;
     }
-    sqlite3_free(pValue);
-    pValue = pPlain;
     valueLen = nPlain;
   }
 
@@ -2041,7 +2227,26 @@ int kvstoreCreateOrOpenHiddenCF(
 int kvstoreGetOrCreateInternalCF(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   KV_ENTER(pKV);
   int rc = kvstoreCfOpenInternal(pKV, zName, ppCF);
-  if( rc != KVSTORE_NOTFOUND ){ KV_LEAVE(pKV); return rc; }
+  if( rc != KVSTORE_NOTFOUND ){
+    /* Register like a user handle so that kvstore_close frees it, rollbacks
+    ** mark it stale, and a drop that moves its root page re-points it.
+    ** kvstore_cf_close unregisters it. */
+    if( rc == KVSTORE_OK && kvstoreRegisterCF(pKV, *ppCF) != KVSTORE_OK ){
+      kvstoreFreeCFStruct(*ppCF); *ppCF = NULL; rc = KVSTORE_NOMEM;
+    }
+    KV_LEAVE(pKV);
+    return rc;
+  }
+  if( pKV->inTrans == 2 ){
+    /* The caller owns a write transaction: create the CF inside it.
+    ** Committing here would commit the caller's work behind their back. */
+    rc = kvstoreCreateOrOpenHiddenCF(pKV, zName, ppCF);
+    if( rc == KVSTORE_OK && kvstoreRegisterCF(pKV, *ppCF) != KVSTORE_OK ){
+      kvstoreFreeCFStruct(*ppCF); *ppCF = NULL; rc = KVSTORE_NOMEM;
+    }
+    KV_LEAVE(pKV);
+    return rc;
+  }
   if( pKV->inTrans == 1 ){
     kvstoreInvalidateReadCursors(pKV);
     kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
@@ -2055,11 +2260,37 @@ int kvstoreGetOrCreateInternalCF(KVStore *pKV, const char *zName, KVColumnFamily
   pKV->inTrans = 2;
   rc = kvstoreCreateOrOpenHiddenCF(pKV, zName, ppCF);
   if( rc == KVSTORE_OK ){
-    kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
+    rc = kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
+    if( rc == SQLITE_OK && kvstoreRegisterCF(pKV, *ppCF) != KVSTORE_OK ){
+      /* Committed, but the handle cannot be tracked: drop the handle (the
+      ** CF exists and the next open will find it). */
+      kvstoreFreeCFStruct(*ppCF); *ppCF = NULL; rc = KVSTORE_NOMEM;
+    }else if( rc != SQLITE_OK ){
+      /* The table was not committed: the handle would point at nothing. */
+      kvstoreFreeCFStruct(*ppCF);
+      *ppCF = NULL;
+    }
   }else{
     kvstoreBtreeRollback(pKV); pKV->inTrans = 0;
   }
   if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0)==SQLITE_OK ) pKV->inTrans = 1;
+  KV_LEAVE(pKV);
+  return rc;
+}
+
+/*
+** Open an internal CF only if it already exists (KVSTORE_NOTFOUND if not).
+** For subsystems (vector store) whose reserved-name CFs are created lazily:
+** kvstore_cf_open rejects reserved names.  The handle is registered; close
+** it with kvstore_cf_close.
+*/
+int kvstoreOpenInternalCF(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
+  if( !pKV || !zName || !ppCF ) return KVSTORE_ERROR;
+  KV_ENTER(pKV);
+  int rc = kvstoreCfOpenInternal(pKV, zName, ppCF);
+  if( rc == KVSTORE_OK && kvstoreRegisterCF(pKV, *ppCF) != KVSTORE_OK ){
+    kvstoreFreeCFStruct(*ppCF); *ppCF = NULL; rc = KVSTORE_NOMEM;
+  }
   KV_LEAVE(pKV);
   return rc;
 }
@@ -2259,6 +2490,44 @@ int kvstore_cf_get_default(KVStore *pKV, KVColumnFamily **ppCF){
 /*
 ** Create a new column family
 */
+/*
+** Count the user-created column families in the metadata table: every live
+** row whose name does not start with "__" or "_snkv_" (the reserved prefixes
+** used by TTL, auth and vector-store CFs).  Tombstones (name length 0) are
+** skipped.  The default CF has no metadata row and is not counted.
+** Caller holds pKV->pMutex and at least a read transaction.
+*/
+static int kvstoreCountUserCFs(KVStore *pKV, int *pnCF){
+  int n = 0;
+  BtCursor *pCur = kvstoreAllocCursor();
+  if( !pCur ) return SQLITE_NOMEM;
+  int rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 0, 0, pCur);
+  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
+
+  int res = 0;
+  rc = sqlite3BtreeFirst(pCur, &res);
+  while( rc == SQLITE_OK && !res ){
+    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    if( payloadSz >= 8 ){
+      unsigned char buf[10];
+      int nRead = payloadSz < sizeof(buf) ? (int)payloadSz : (int)sizeof(buf);
+      rc = sqlite3BtreePayload(pCur, 0, (u32)nRead, buf);
+      if( rc != SQLITE_OK ) break;
+      int nameLen = (buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|buf[3];
+      const unsigned char *z = buf + 4;
+      int nZ = nRead - 4;
+      int reserved = (nameLen >= 2 && nZ >= 2 && z[0]=='_' && z[1]=='_')
+                  || (nameLen >= 6 && nZ >= 6 && memcmp(z, "_snkv_", 6)==0);
+      if( nameLen > 0 && !reserved ) n++;
+    }
+    rc = sqlite3BtreeNext(pCur, 0);
+  }
+  if( rc == SQLITE_DONE ) rc = SQLITE_OK;
+  kvstoreFreeCursor(pCur);
+  *pnCF = n;
+  return rc;
+}
+
 int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   int rc;
   BtCursor *pCur = NULL;
@@ -2351,6 +2620,23 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     kvstoreSetError(pKV, "column family already exists: %s", zName);
     KV_LEAVE(pKV);
     return KVSTORE_ERROR;
+  }
+
+  /* Enforce KVSTORE_MAX_COLUMN_FAMILIES (the default CF counts as one). */
+  {
+    int nUser = 0;
+    rc = kvstoreCountUserCFs(pKV, &nUser);
+    if( rc == SQLITE_OK && nUser + 1 >= KVSTORE_MAX_COLUMN_FAMILIES ){
+      kvstoreSetError(pKV, "too many column families (max %d, including "
+                           "the default)", KVSTORE_MAX_COLUMN_FAMILIES);
+      rc = KVSTORE_ERROR;
+    }
+    if( rc != SQLITE_OK ){
+      if( autoTrans ){ kvstoreBtreeRollback(pKV); pKV->inTrans = 0;
+                       kvstoreRestorePersistentRead(pKV); }
+      KV_LEAVE(pKV);
+      return rc;
+    }
   }
 
   /* Create new btree table for this CF (BLOBKEY) */
@@ -2475,7 +2761,12 @@ int kvstore_cf_create(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return KVSTORE_NOMEM;
   }
 
-  kvstoreRegisterCF(pKV, pCF);
+  if( kvstoreRegisterCF(pKV, pCF) != KVSTORE_OK ){
+    kvstoreFreeCFStruct(pCF);
+    kvstoreSetError(pKV, "out of memory registering column family handle");
+    KV_LEAVE(pKV);
+    return KVSTORE_NOMEM;
+  }
   KV_LEAVE(pKV);
 
   *ppCF = pCF;
@@ -2645,43 +2936,50 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       pCF->hasTtl       = 1;
       pCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF2);
     } else {
-      if( pKeyCF2 ){ kvstoreFreeCFStruct(pKeyCF2); pKeyCF2 = NULL; }
-      if( pExpCF2 ){ kvstoreFreeCFStruct(pExpCF2); pExpCF2 = NULL; }
-      /* One CF exists without the other — partial-write orphan. Drop it. */
-      if( rcKey == KVSTORE_OK || rcExp == KVSTORE_OK ){
-        if( pKV->inTrans == 1 ){
-          kvstoreInvalidateReadCursors(pKV);
-          kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
-          pKV->inTrans = 2;
-          if( rcKey == KVSTORE_OK ) kvstoreDropHiddenCFNoLock(pKV, zKeyName);
-          if( rcExp == KVSTORE_OK ) kvstoreDropHiddenCFNoLock(pKV, zExpName);
-          kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
-      }
+      /* One TTL index exists without the other: a partial-write orphan. */
+      kvstoreClearOrphanTtl(pKV, pKeyCF2, pExpCF2);
     }
   }
 
-  kvstoreRegisterCF(pKV, pCF);
+  if( kvstoreRegisterCF(pKV, pCF) != KVSTORE_OK ){
+    kvstoreFreeCFStruct(pCF);
+    kvstoreSetError(pKV, "out of memory registering column family handle");
+    KV_LEAVE(pKV);
+    return KVSTORE_NOMEM;
+  }
   KV_LEAVE(pKV);
 
   *ppCF = pCF;
   return KVSTORE_OK;
 }
 
-static void kvstoreRegisterCF(KVStore *pKV, KVColumnFamily *pCF){
+/* Add pCF to the list of open handles.  Returns KVSTORE_NOMEM if the list
+** cannot grow; the caller must then free the handle and fail, because an
+** unregistered handle would miss root-page moves and rollback staleness. */
+static int kvstoreRegisterCF(KVStore *pKV, KVColumnFamily *pCF){
   if( pKV->nCF >= pKV->nCFAlloc ){
     int n = pKV->nCFAlloc ? pKV->nCFAlloc*2 : 4;
     KVColumnFamily **a = sqlite3_realloc(pKV->apCF, n*sizeof(*a));
-    if( !a ) return;
+    if( !a ) return KVSTORE_NOMEM;
     pKV->apCF = a; pKV->nCFAlloc = n;
   }
   pKV->apCF[pKV->nCF++] = pCF;
+  return KVSTORE_OK;
 }
 
 static void kvstoreUnregisterCF(KVStore *pKV, KVColumnFamily *pCF){
+  /* The handle is about to be freed: forget its logged root moves (keep
+  ** the others in order — undo replays them newest first). */
+  {
+    int k = 0;
+    for( int j = 0; j < pKV->nRootUndo; j++ ){
+      KVColumnFamily *p = pKV->aRootUndo[j].pCF;
+      if( p != pCF && p != pCF->pTtlKeyCF && p != pCF->pTtlExpiryCF ){
+        pKV->aRootUndo[k++] = pKV->aRootUndo[j];
+      }
+    }
+    pKV->nRootUndo = k;
+  }
   for( int i = 0; i < pKV->nCF; i++ ){
     if( pKV->apCF[i]==pCF ){ pKV->apCF[i]=pKV->apCF[--pKV->nCF]; return; }
   }
@@ -2785,55 +3083,22 @@ static int kvstore_cf_put_internal(
     return rc;
   }
 
-  /* Encrypt value if the store is encrypted */
-  const void *pActualValue = pValue;
-  int         nActualValue = nValue;
-  uint8_t    *pCFEncBuf    = NULL;
-  if( pKV->bEncrypted ){
-    if( nValue > INT_MAX - SNKV_ENC_OVERHEAD ){
-      kvstoreFreeCursor(pCur);
-      if( autoTrans ){ kvstoreBtreeRollback(pKV); pKV->inTrans = 0; }
-      KV_LEAVE(pKV);
-      sqlite3_mutex_leave(pCF->pMutex);
-      return KVSTORE_ERROR;
-    }
-    int nCFOut = nValue + SNKV_ENC_OVERHEAD;
-    pCFEncBuf = (uint8_t *)sqlite3Malloc(nCFOut);
-    if( !pCFEncBuf ){
-      kvstoreFreeCursor(pCur);
-      if( autoTrans ){ kvstoreBtreeRollback(pKV); pKV->inTrans = 0; }
-      KV_LEAVE(pKV);
-      sqlite3_mutex_leave(pCF->pMutex);
-      return SQLITE_NOMEM;
-    }
-    if( kvstoreEncEncrypt(pCFEncBuf, pKV->aEncKey,
-                          (const uint8_t *)pValue, nValue) != 0 ){
-      sqlite3_free(pCFEncBuf);
-      kvstoreFreeCursor(pCur);
-      if( autoTrans ){ kvstoreBtreeRollback(pKV); pKV->inTrans = 0; }
-      KV_LEAVE(pKV);
-      sqlite3_mutex_leave(pCF->pMutex);
-      return KVSTORE_ERROR;
-    }
-    pActualValue = pCFEncBuf;
-    nActualValue = nCFOut;
-  }
-
-  /* Encode [key_len | key | value] as a single BLOBKEY entry.
-  ** Use a stack buffer for small payloads to avoid a heap allocation. */
+  /* Encode [key_len | key | value] as a single BLOBKEY entry; for an
+  ** encrypted store the value is encrypted straight into it (one copy of
+  ** the value, not two).  Small payloads use a stack buffer. */
   {
     unsigned char stackBuf[512];
     unsigned char *pEncoded;
-    int nEncoded = kvstoreEncodeBlob(pKey, nKey, pActualValue, nActualValue,
-                                     stackBuf, (int)sizeof(stackBuf),
-                                     &pEncoded);
+    int nEncoded = kvstoreEncodeBlobEnc(pKey, nKey, pValue, nValue,
+                                        pKV->bEncrypted ? pKV->aEncKey : NULL,
+                                        stackBuf, (int)sizeof(stackBuf),
+                                        &pEncoded);
     if( nEncoded < 0 ){
-      if( pCFEncBuf ) sqlite3_free(pCFEncBuf);
       kvstoreFreeCursor(pCur);
       if( autoTrans ){ kvstoreBtreeRollback(pKV); pKV->inTrans = 0; }
       KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
-      return SQLITE_NOMEM;
+      return nEncoded == -1 ? SQLITE_NOMEM : KVSTORE_ERROR;
     }
 
     BtreePayload payload;
@@ -2844,7 +3109,6 @@ static int kvstore_cf_put_internal(
 
     rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
     if( pEncoded != stackBuf ) sqlite3_free(pEncoded);
-    if( pCFEncBuf ) sqlite3_free(pCFEncBuf);
   }
   kvstoreFreeCursor(pCur);
 
@@ -3058,23 +3322,15 @@ static int kvstore_cf_get_internal(
       sqlite3_mutex_leave(pCF->pMutex);
       return KVSTORE_CORRUPT;
     }
-    int nPlain = valueLen - SNKV_ENC_OVERHEAD;
-    void *pPlain = sqlite3Malloc(nPlain > 0 ? nPlain : 1);
-    if( !pPlain ){
+    /* In place: the caller gets the same buffer, so a read holds one copy
+    ** of the value, not ciphertext + plaintext. */
+    int nPlain = kvstoreEncDecryptInPlace((uint8_t *)pValue, pKV->aEncKey, valueLen);
+    if( nPlain < 0 ){
       sqlite3_free(pValue);
-      KV_LEAVE(pKV);
-      sqlite3_mutex_leave(pCF->pMutex);
-      return SQLITE_NOMEM;
-    }
-    if( kvstoreEncDecrypt((uint8_t *)pPlain, pKV->aEncKey,
-                          (const uint8_t *)pValue, valueLen) != 0 ){
-      sqlite3_free(pPlain); sqlite3_free(pValue);
       KV_LEAVE(pKV);
       sqlite3_mutex_leave(pCF->pMutex);
       return KVSTORE_AUTH_FAILED;
     }
-    sqlite3_free(pValue);
-    pValue    = pPlain;
     valueLen  = nPlain;
   }
 
@@ -4045,21 +4301,13 @@ int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
   rc = sqlite3BtreePayload(pIter->pCur, 4 + keyLen, valLen, pIter->pValBuf);
   if( rc != SQLITE_OK ) return rc;
 
-  /* Decrypt in-place if the store is encrypted.
-  ** crypto_aead_unlock requires non-overlapping buffers, so decrypt
-  ** into a temp buffer then copy back. */
+  /* Decrypt in place in the iterator's reusable buffer: no per-row
+  ** allocation and no second copy of the value. */
   if( pIter->pCF->pKV->bEncrypted && valLen > 0 ){
     if( valLen < SNKV_ENC_OVERHEAD ) return KVSTORE_CORRUPT;
-    int nPlain = valLen - SNKV_ENC_OVERHEAD;
-    uint8_t *pTmp = (uint8_t *)sqlite3Malloc(nPlain > 0 ? nPlain : 1);
-    if( !pTmp ) return KVSTORE_NOMEM;
-    if( kvstoreEncDecrypt(pTmp, pIter->pCF->pKV->aEncKey,
-                          (const uint8_t *)pIter->pValBuf, valLen) != 0 ){
-      sqlite3_free(pTmp);
-      return KVSTORE_AUTH_FAILED;
-    }
-    memcpy(pIter->pValBuf, pTmp, nPlain);
-    sqlite3_free(pTmp);
+    int nPlain = kvstoreEncDecryptInPlace((uint8_t *)pIter->pValBuf,
+                                          pIter->pCF->pKV->aEncKey, valLen);
+    if( nPlain < 0 ) return KVSTORE_AUTH_FAILED;
     valLen = nPlain;
   }
 
@@ -4492,9 +4740,9 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
 
 /*
 ** Synchronize database to disk.
-** In SQLite 3.51.200 there is no sqlite3BtreeSync.
-** We do a commit+begin cycle to flush to disk if a write transaction
-** is active, otherwise this is a no-op (reads are already consistent).
+** fsyncs the WAL (or rollback journal) and the database file so every
+** committed transaction survives a power loss, whatever the synchronous
+** setting.  Refused while an explicit write transaction is open.
 */
 int kvstore_sync(KVStore *pKV){
   int rc = SQLITE_OK;
@@ -4527,6 +4775,27 @@ int kvstore_sync(KVStore *pKV){
     return KVSTORE_ERROR;
   }
 
+  /* Every committed transaction lives either in the WAL file (WAL mode) or
+  ** in the database file (rollback-journal mode).  With synchronous=OFF, or
+  ** NORMAL in WAL mode, commits do not fsync, so force both files to stable
+  ** storage here.  Files that are not open (in-memory store, no WAL yet)
+  ** are skipped. */
+  {
+    Pager *pPager = sqlite3BtreePager(pKV->pBt);
+    sqlite3_file *pJrnl = sqlite3PagerJrnlFile(pPager);
+    sqlite3_file *pDb   = sqlite3PagerFile(pPager);
+    if( pJrnl && pJrnl->pMethods ){
+      rc = sqlite3OsSync(pJrnl, SQLITE_SYNC_NORMAL);
+    }
+    if( rc == SQLITE_OK && pDb && pDb->pMethods ){
+      rc = sqlite3OsSync(pDb, SQLITE_SYNC_NORMAL);
+    }
+    if( rc != SQLITE_OK ){
+      kvstoreCheckCorruption(pKV, rc);
+      kvstoreSetError(pKV, "sync failed: error %d", rc);
+    }
+  }
+
   KV_LEAVE(pKV);
   return rc;
 }
@@ -4555,29 +4824,22 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     return KVSTORE_CORRUPT;
   }
 
-  /* Begin a write transaction if none is active */
+  /* Open iterators need no check: incremental vacuum saves every cursor's
+  ** position (saveAllCursors) before moving pages and never moves a root
+  ** page, so an iterator re-seeks to its key on its next step.  (Dropping a
+  ** CF is different: it can move another table's root page.) */
+
+  /* Begin a write transaction unless the caller already has one.  The
+  ** persistent read transaction is ended properly (cached read cursors
+  ** invalidated first) rather than upgraded in place, and it is restored
+  ** afterwards on both the success and the failure path. */
   int autoTrans = 0;
-  if( pKV->inTrans == 0 ){
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 2, 0);
-    if( rc != SQLITE_OK ){
-      kvstoreCheckCorruption(pKV, rc);
-      kvstoreSetError(pKV, "failed to begin transaction for vacuum: error %d", rc);
-      KV_LEAVE(pKV);
-      return rc;
-    }
-    pKV->inTrans = 2;
-    autoTrans = 1;
-  }else if( pKV->inTrans == 1 ){
-    /* Upgrade read transaction to write */
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 2, 0);
-    if( rc != SQLITE_OK ){
-      kvstoreCheckCorruption(pKV, rc);
-      kvstoreSetError(pKV, "failed to upgrade transaction for vacuum: error %d", rc);
-      KV_LEAVE(pKV);
-      return rc;
-    }
-    pKV->inTrans = 2;
-    autoTrans = 1;
+  rc = kvstoreEnsureWrite(pKV, &autoTrans);
+  if( rc != SQLITE_OK ){
+    kvstoreCheckCorruption(pKV, rc);
+    kvstoreSetError(pKV, "failed to begin transaction for vacuum: error %d", rc);
+    KV_LEAVE(pKV);
+    return rc;
   }
 
   /* Run incremental vacuum steps */
@@ -4586,34 +4848,27 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     do {
       rc = sqlite3BtreeIncrVacuum(pKV->pBt);
     } while( rc == SQLITE_OK );
-    if( rc == SQLITE_DONE ) rc = SQLITE_OK;
   }else{
     int i;
     for( i = 0; i < nPage; i++ ){
       rc = sqlite3BtreeIncrVacuum(pKV->pBt);
       if( rc != SQLITE_OK ) break;
     }
-    if( rc == SQLITE_DONE ) rc = SQLITE_OK;
   }
+  if( rc == SQLITE_DONE ) rc = SQLITE_OK;
 
   if( rc != SQLITE_OK ){
     kvstoreCheckCorruption(pKV, rc);
     kvstoreSetError(pKV, "incremental vacuum failed: error %d", rc);
-    if( autoTrans ){
-      kvstoreBtreeRollback(pKV);
-      pKV->inTrans = 0;
-    }
+    (void)kvstoreFinishWrite(pKV, autoTrans, rc);
     KV_LEAVE(pKV);
     return rc;
   }
 
-  if( autoTrans ){
-    rc = kvstoreBtreeCommit(pKV);
-    pKV->inTrans = 0;
-    if( rc != SQLITE_OK ){
-      kvstoreCheckCorruption(pKV, rc);
-      kvstoreSetError(pKV, "failed to commit vacuum: error %d", rc);
-    }
+  rc = kvstoreFinishWrite(pKV, autoTrans, rc);
+  if( rc != SQLITE_OK ){
+    kvstoreCheckCorruption(pKV, rc);
+    kvstoreSetError(pKV, "failed to commit vacuum: error %d", rc);
   }
 
   KV_LEAVE(pKV);
@@ -4745,20 +5000,56 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
   return KVSTORE_OK;
 }
 
+/* Point one open handle (and its TTL sub-CFs) at the new root if it used
+** the moved one.  Its cached cursor was opened on the old root: drop it.
+** Each move is logged in aRootUndo first, so a rollback of this transaction
+** can point the handle back; if the log cannot grow, nothing is changed and
+** SQLITE_NOMEM is returned (the caller rolls the drop back). */
+static int kvstoreRetargetCF(KVStore *pKV, KVColumnFamily *pCF, int iFrom, int iTo){
+  KVColumnFamily *ap[3];
+  int i;
+  if( !pCF ) return SQLITE_OK;
+  ap[0] = pCF; ap[1] = pCF->pTtlKeyCF; ap[2] = pCF->pTtlExpiryCF;
+  for( i = 0; i < 3; i++ ){
+    if( ap[i] && ap[i]->iTable == iFrom ){
+      if( pKV->nRootUndo >= pKV->nRootUndoAlloc ){
+        int n = pKV->nRootUndoAlloc ? pKV->nRootUndoAlloc*2 : 4;
+        struct KVRootMove *a = sqlite3_realloc(pKV->aRootUndo, n*(int)sizeof(*a));
+        if( !a ) return SQLITE_NOMEM;
+        pKV->aRootUndo = a; pKV->nRootUndoAlloc = n;
+      }
+      pKV->aRootUndo[pKV->nRootUndo].pCF  = ap[i];
+      pKV->aRootUndo[pKV->nRootUndo].iOld = iFrom;
+      pKV->nRootUndo++;
+      if( ap[i]->pReadCur ){ kvstoreFreeCursor(ap[i]->pReadCur); ap[i]->pReadCur = NULL; }
+      ap[i]->iTable = iTo;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /*
 ** After sqlite3BtreeDropTable frees root page iDropped and reports iMoved,
-** scan the metadata table for the entry whose stored root equals iMoved and
-** update it to iDropped.  This keeps the metadata consistent when SQLite
-** shuffles root pages to fill the gap left by the dropped table.
+** the table that lived at iMoved now lives at iDropped.  Rewrite its
+** metadata row, then re-point the open handles that used it.
+**
+** Returns SQLITE_OK, or an error (out of memory, I/O, or SQLITE_CORRUPT if
+** no metadata row names iMoved).  On error the caller MUST roll the
+** transaction back: the table has already moved, so committing would leave
+** the metadata pointing at a page that is no longer its root.  Handles are
+** only re-pointed after the metadata update succeeded, and every move is
+** logged for rollback.
 ** Caller must hold pKV->pMutex and be in a write transaction.
 */
-static void kvstoreFixMovedTableRoot(KVStore *pKV, int iDropped, int iMoved){
-  if( iMoved == 0 ) return;
+static int kvstoreFixMovedTableRoot(KVStore *pKV, int iDropped, int iMoved){
+  int i;
+  if( iMoved == 0 ) return SQLITE_OK;
+
   BtCursor *pCur = kvstoreAllocCursor();
-  if( !pCur ) return;
+  if( !pCur ) return SQLITE_NOMEM;
   int rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
-  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return; }
-  int res = 0;
+  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
+  int res = 0, found = 0;
   rc = sqlite3BtreeFirst(pCur, &res);
   while( rc == SQLITE_OK && res == 0 ){
     u32 sz = sqlite3BtreePayloadSize(pCur);
@@ -4770,75 +5061,139 @@ static void kvstoreFixMovedTableRoot(KVStore *pKV, int iDropped, int iMoved){
                        (rootBytes[2]<<8)|rootBytes[3];
       if( storedRoot == iMoved ){
         unsigned char *pBuf = sqlite3Malloc(sz);
-        if( pBuf ){
-          rc = sqlite3BtreePayload(pCur, 0, sz, pBuf);
-          if( rc == SQLITE_OK ){
-            pBuf[sz-4] = (iDropped>>24)&0xFF;
-            pBuf[sz-3] = (iDropped>>16)&0xFF;
-            pBuf[sz-2] = (iDropped>> 8)&0xFF;
-            pBuf[sz-1] =  iDropped     &0xFF;
-            i64 rowid = sqlite3BtreeIntegerKey(pCur);
-            BtreePayload payload;
-            memset(&payload, 0, sizeof(payload));
-            payload.nKey  = rowid;
-            payload.pData = pBuf;
-            payload.nData = (int)sz;
-            sqlite3BtreeInsert(pCur, &payload, 0, 0);
-          }
-          sqlite3_free(pBuf);
+        if( !pBuf ){ rc = SQLITE_NOMEM; break; }
+        rc = sqlite3BtreePayload(pCur, 0, sz, pBuf);
+        if( rc == SQLITE_OK ){
+          pBuf[sz-4] = (iDropped>>24)&0xFF;
+          pBuf[sz-3] = (iDropped>>16)&0xFF;
+          pBuf[sz-2] = (iDropped>> 8)&0xFF;
+          pBuf[sz-1] =  iDropped     &0xFF;
+          i64 rowid = sqlite3BtreeIntegerKey(pCur);
+          BtreePayload payload;
+          memset(&payload, 0, sizeof(payload));
+          payload.nKey  = rowid;
+          payload.pData = pBuf;
+          payload.nData = (int)sz;
+          rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
         }
+        sqlite3_free(pBuf);
+        found = 1;
         break;
       }
     }
     rc = sqlite3BtreeNext(pCur, 0);
-    if( rc == SQLITE_DONE ) break;
   }
+  if( rc == SQLITE_DONE ) rc = SQLITE_OK;
   kvstoreFreeCursor(pCur);
+  if( rc == SQLITE_OK && !found ) rc = SQLITE_CORRUPT;
+  if( rc != SQLITE_OK ) return rc;
+
+  /* Open handles cache the root page number; the one that was moved must
+  ** follow it, or its next operation reads a page that is no longer its
+  ** root (KVSTORE_CORRUPT). */
+  rc = kvstoreRetargetCF(pKV, pKV->pDefaultCF, iMoved, iDropped);
+  for( i = 0; rc == SQLITE_OK && i < pKV->nCF; i++ ){
+    rc = kvstoreRetargetCF(pKV, pKV->apCF[i], iMoved, iDropped);
+  }
+  return rc;
 }
 
 /*
 ** Drop a single hidden CF by name within an existing write transaction.
 ** Caller must hold pKV->pMutex and be in a write transaction (inTrans==2).
-** Silently ignores KVSTORE_NOTFOUND.
+** Returns KVSTORE_NOTFOUND if no such CF exists (callers that only clean up
+** may ignore it).
 */
-static void kvstoreDropHiddenCFNoLock(KVStore *pKV, const char *zName){
+static int kvstoreDropHiddenCFNoLock(KVStore *pKV, const char *zName){
   int nNameLen = (int)strlen(zName);
   BtCursor *pCur = kvstoreAllocCursor();
-  if( !pCur ) return;
+  if( !pCur ) return SQLITE_NOMEM;
 
   int rc = sqlite3BtreeCursor(pKV->pBt, pKV->iMetaTable, 1, 0, pCur);
-  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return; }
+  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
 
   int found = 0;
   i64 foundRowid = 0;
   rc = kvstoreMetaSeekKey(pCur, zName, nNameLen, &found, &foundRowid);
-  if( rc != SQLITE_OK || !found ){ kvstoreFreeCursor(pCur); return; }
+  if( rc != SQLITE_OK || !found ){
+    kvstoreFreeCursor(pCur);
+    return rc != SQLITE_OK ? rc : KVSTORE_NOTFOUND;
+  }
 
   int res = 0;
   rc = sqlite3BtreeTableMoveto(pCur, foundRowid, 0, &res);
-  if( rc != SQLITE_OK || res != 0 ){ kvstoreFreeCursor(pCur); return; }
+  if( rc != SQLITE_OK || res != 0 ){
+    kvstoreFreeCursor(pCur);
+    return rc != SQLITE_OK ? rc : KVSTORE_CORRUPT;
+  }
 
   u32 payloadSz = sqlite3BtreePayloadSize(pCur);
-  if( (int)payloadSz < 4 + nNameLen + 4 ){ kvstoreFreeCursor(pCur); return; }
+  if( (int)payloadSz < 4 + nNameLen + 4 ){
+    kvstoreFreeCursor(pCur);
+    return KVSTORE_CORRUPT;
+  }
 
   unsigned char tableRootBytes[4];
   rc = sqlite3BtreePayload(pCur, 4 + nNameLen, 4, tableRootBytes);
-  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return; }
+  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
 
   int iTable = (tableRootBytes[0]<<24)|(tableRootBytes[1]<<16)|
                (tableRootBytes[2]<<8)|tableRootBytes[3];
 
-  kvstoreMetaWriteTombstone(pCur, foundRowid);
+  rc = kvstoreMetaWriteTombstone(pCur, foundRowid);
   kvstoreFreeCursor(pCur);
+  if( rc != SQLITE_OK ) return rc;
 
+  /* Cached cursors may sit on the table about to be moved into iTable. */
+  kvstoreInvalidateReadCursors(pKV);
   int iMoved = 0;
-  sqlite3BtreeDropTable(pKV->pBt, iTable, &iMoved);
-  kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
+  rc = sqlite3BtreeDropTable(pKV->pBt, iTable, &iMoved);
+  if( rc != SQLITE_OK ) return rc;
+  rc = kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
+  if( rc != SQLITE_OK ) return rc;      /* caller rolls back */
 
   u32 cfCount = 0;
   sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
   if( cfCount > 0 ) cfCount--;
-  sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
+  return sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
+}
+
+/*
+** Drop several hidden CFs in one write transaction (used by the vector store).
+** Names that do not exist are skipped.  Fails with KVSTORE_BUSY if a handle
+** to one of them is still open or any iterator is open (a drop can move
+** another table's root page, which an open iterator's cursor cannot follow).
+*/
+int kvstoreDropInternalCFs(KVStore *pKV, const char **azName, int nName){
+  int i, j, rc, autoTrans = 0;
+  if( !pKV || !azName || nName < 0 ) return KVSTORE_ERROR;
+
+  KV_ENTER(pKV);
+  if( pKV->closing ){ KV_LEAVE(pKV); return KVSTORE_ERROR; }
+  if( pKV->pIterList ){
+    kvstoreSetError(pKV, "cannot drop column families while an iterator is open");
+    KV_LEAVE(pKV);
+    return KVSTORE_BUSY;
+  }
+  for( i = 0; i < nName; i++ ){
+    for( j = 0; j < pKV->nCF; j++ ){
+      if( pKV->apCF[j] && strcmp(pKV->apCF[j]->zName, azName[i])==0 ){
+        kvstoreSetError(pKV, "cannot drop \"%s\": handle still open", azName[i]);
+        KV_LEAVE(pKV);
+        return KVSTORE_BUSY;
+      }
+    }
+  }
+
+  rc = kvstoreEnsureWrite(pKV, &autoTrans);
+  if( rc != KVSTORE_OK ){ KV_LEAVE(pKV); return rc; }
+  for( i = 0; i < nName && rc == KVSTORE_OK; i++ ){
+    rc = kvstoreDropHiddenCFNoLock(pKV, azName[i]);
+    if( rc == KVSTORE_NOTFOUND ) rc = KVSTORE_OK;
+  }
+  rc = kvstoreFinishWrite(pKV, autoTrans, rc);
+  KV_LEAVE(pKV);
+  return rc;
 }
 
 /*
@@ -4894,6 +5249,15 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
       KV_LEAVE(pKV);
       return KVSTORE_BUSY;
     }
+  }
+
+  /* Dropping can move another table's root page (auto-vacuum).  Open
+  ** handles are re-pointed (kvstoreFixMovedTableRoot), but an iterator's
+  ** cursor cannot follow, so refuse while any iterator is open. */
+  if( pKV->pIterList ){
+    kvstoreSetError(pKV, "cannot drop \"%s\": an iterator is open", zName);
+    KV_LEAVE(pKV);
+    return KVSTORE_BUSY;
   }
 
   /* Start write transaction (release persistent read first if active). */
@@ -4985,7 +5349,9 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     return rc;
   }
 
-  /* Drop the actual table */
+  /* Drop the actual table.  Cached cursors may sit on the table that gets
+  ** moved into iTable, so close them first. */
+  kvstoreInvalidateReadCursors(pKV);
   rc = sqlite3BtreeDropTable(pKV->pBt, iTable, &iMoved);
   if( rc != SQLITE_OK ){
     if( autoTrans ){
@@ -4997,21 +5363,43 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     KV_LEAVE(pKV);
     return rc;
   }
-  kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
+  /* From here on every step must succeed or the whole drop is rolled back:
+  ** a table has moved, and committing half of the bookkeeping would leave
+  ** metadata pointing at the wrong page. */
+  rc = kvstoreFixMovedTableRoot(pKV, iTable, iMoved);
 
-  /* Drop hidden TTL index CFs if they exist (best-effort). */
-  {
+  /* Drop hidden TTL index CFs if they exist (absent is fine). */
+  if( rc == SQLITE_OK ){
     char zKeyName[SNKV_TTL_NAME_BUFLEN], zExpName[SNKV_TTL_NAME_BUFLEN];
     snprintf(zKeyName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_KEY_PREFIX, zName);
     snprintf(zExpName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_EXP_PREFIX, zName);
-    kvstoreDropHiddenCFNoLock(pKV, zKeyName);
-    kvstoreDropHiddenCFNoLock(pKV, zExpName);
+    rc = kvstoreDropHiddenCFNoLock(pKV, zKeyName);
+    if( rc == KVSTORE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc == SQLITE_OK ){
+      rc = kvstoreDropHiddenCFNoLock(pKV, zExpName);
+      if( rc == KVSTORE_NOTFOUND ) rc = SQLITE_OK;
+    }
   }
 
   /* Update CF count */
-  sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
-  if( cfCount > 0 ) cfCount--;
-  sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
+  if( rc == SQLITE_OK ){
+    sqlite3BtreeGetMeta(pKV->pBt, META_CF_COUNT, &cfCount);
+    if( cfCount > 0 ) cfCount--;
+    rc = sqlite3BtreeUpdateMeta(pKV->pBt, META_CF_COUNT, cfCount);
+  }
+
+  if( rc != SQLITE_OK ){
+    kvstoreCheckCorruption(pKV, rc);
+    kvstoreSetError(pKV, "failed to drop column family: error %d%s", rc,
+                    autoTrans ? "" : "; roll back the transaction");
+    if( autoTrans ){
+      kvstoreBtreeRollback(pKV);
+      pKV->inTrans = 0;
+      if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
+    }
+    KV_LEAVE(pKV);
+    return rc;
+  }
 
   if( autoTrans ){
     rc = kvstoreBtreeCommit(pKV);
@@ -5384,7 +5772,9 @@ int kvstore_ttl_remaining(
 ** Maximum number of keys to scan and delete per purge batch.
 ** The mutex is released between batches, allowing other operations to run.
 */
-#define KVSTORE_PURGE_BATCH 256
+#ifndef KVSTORE_PURGE_BATCH
+# define KVSTORE_PURGE_BATCH 256
+#endif
 
 int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
   int nDeleted = 0;
@@ -5394,11 +5784,9 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
   KVStore *pKV = pCF->pKV;
 
   for(;;){
-    /* Stack-allocated batch arrays — avoids heap allocation per batch. */
-    void *apExpKeys[KVSTORE_PURGE_BATCH];
-    int   anExpKeys[KVSTORE_PURGE_BATCH];
-    int   nExpired = 0;
-    int   i, rc = SQLITE_OK;
+    int   nExpired = 0;       /* expired entries deleted in this batch */
+    int   nBatchDel = 0;      /* data rows deleted in this batch */
+    int   rc = SQLITE_OK;
 
     sqlite3_mutex_enter(pCF->pMutex);
     KV_ENTER(pKV);
@@ -5416,85 +5804,99 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
     }
 
     /* Upgrade to a write transaction so the scan and delete are atomic
-    ** per batch.  Opening a read cursor inside a write transaction is safe. */
-    if( pKV->inTrans == 1 ){
-      kvstoreInvalidateReadCursors(pKV);
-      kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
+    ** per batch.  Opening a read cursor inside a write transaction is safe.
+    ** If the caller already owns a write transaction (kvstore_begin), work
+    ** inside it: committing or rolling back here would end the caller's
+    ** transaction behind their back. */
+    int callerTrans = (pKV->inTrans == 2);
+    if( !callerTrans ){
+      if( pKV->inTrans == 1 ){
+        kvstoreInvalidateReadCursors(pKV);
+        kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
+      }
+      rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
+      if( rc != SQLITE_OK ){
+        kvstoreRestorePersistentRead(pKV);
+        KV_LEAVE(pKV);
+        sqlite3_mutex_leave(pCF->pMutex);
+        return rc;
+      }
+      pKV->inTrans = 2;
     }
-    rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
-    if( rc != SQLITE_OK ){
-      kvstoreRestorePersistentRead(pKV);
-      KV_LEAVE(pKV);
-      sqlite3_mutex_leave(pCF->pMutex);
-      return rc;
-    }
-    pKV->inTrans = 2;
 
     int64_t nowMs = kvstore_now_ms();
 
-    /* Scan up to KVSTORE_PURGE_BATCH expired entries from the expiry CF.
-    ** The expiry CF is sorted by 8-byte BE expire_ms prefix, so we stop
-    ** at the first unexpired entry — O(expired) not O(all TTL keys). */
+    /* Delete expired entries one at a time, at most KVSTORE_PURGE_BATCH per
+    ** transaction.  The expiry CF is sorted by its 8-byte BE expire_ms
+    ** prefix, so the next expired entry is always the first one: copy its
+    ** key into one reusable buffer, close the cursor, delete its three rows,
+    ** repeat; stop at the first unexpired entry.  Memory is one cursor and
+    ** one key whatever the batch size (no per-batch key arrays: up to
+    ** 256 x 64 KB keys before, plus ~3 KB of stack). */
     {
       BtCursor *pCur = kvstoreAllocCursor();
-      if( pCur ){
-        if( sqlite3BtreeCursor(pKV->pBt, pCF->pTtlExpiryCF->iTable,
-                               0, pKV->pKeyInfo, pCur) == SQLITE_OK ){
-          int res = 0;
-          rc = sqlite3BtreeFirst(pCur, &res);
-          while( rc == SQLITE_OK && !res && nExpired < KVSTORE_PURGE_BATCH ){
-            u32 payloadSz = sqlite3BtreePayloadSize(pCur);
-            if( (int)payloadSz >= 4 + 8 ){
-              unsigned char hdr[4];
-              rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
-              if( rc != SQLITE_OK ) break;
-              int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
-              if( storedKeyLen >= 8 ){
-                unsigned char timeBuf[8];
-                rc = sqlite3BtreePayload(pCur, 4, 8, timeBuf);
-                if( rc != SQLITE_OK ) break;
-                int64_t expireMs = kvstoreDecodeBE64(timeBuf);
-                if( nowMs < expireMs ) break; /* stop at first unexpired */
-                void *pExpKey = sqlite3Malloc(storedKeyLen);
-                if( !pExpKey ){ rc = SQLITE_NOMEM; break; }
-                rc = sqlite3BtreePayload(pCur, 4, storedKeyLen, pExpKey);
-                if( rc != SQLITE_OK ){ sqlite3_free(pExpKey); break; }
-                apExpKeys[nExpired] = pExpKey;
-                anExpKeys[nExpired] = storedKeyLen;
-                nExpired++;
-              }
+      unsigned char *pExpKey = NULL; int nExpKeyAlloc = 0;
+      if( !pCur ) rc = SQLITE_NOMEM;
+      if( pCF->pReadCur ){ kvstoreFreeCursor(pCF->pReadCur); pCF->pReadCur = NULL; }
+      while( rc == SQLITE_OK && nExpired < KVSTORE_PURGE_BATCH ){
+        int res = 0, stop = 0, storedKeyLen = 0;
+        rc = sqlite3BtreeCursor(pKV->pBt, pCF->pTtlExpiryCF->iTable,
+                                0, pKV->pKeyInfo, pCur);
+        if( rc == SQLITE_OK ) rc = sqlite3BtreeFirst(pCur, &res);
+        if( rc == SQLITE_OK && res ) stop = 1;          /* nothing left */
+        if( rc == SQLITE_OK && !stop ){
+          u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+          unsigned char hdr[4];
+          if( payloadSz < 4 + 8 ) rc = KVSTORE_CORRUPT;
+          if( rc == SQLITE_OK ) rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+          if( rc == SQLITE_OK ){
+            storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+            if( storedKeyLen < 8 || 4 + (i64)storedKeyLen > (i64)payloadSz ){
+              rc = KVSTORE_CORRUPT;
             }
-            rc = sqlite3BtreeNext(pCur, 0);
-            if( rc == SQLITE_DONE ){ rc = SQLITE_OK; break; }
+          }
+          if( rc == SQLITE_OK ){
+            unsigned char timeBuf[8];
+            rc = sqlite3BtreePayload(pCur, 4, 8, timeBuf);
+            if( rc == SQLITE_OK && nowMs < kvstoreDecodeBE64(timeBuf) ) stop = 1;
+          }
+          if( rc == SQLITE_OK && !stop ){
+            rc = kvstoreGrowBuf(&pExpKey, &nExpKeyAlloc, storedKeyLen);
+            if( rc == SQLITE_OK ){
+              rc = sqlite3BtreePayload(pCur, 4, (u32)storedKeyLen, pExpKey);
+            }
           }
         }
-        kvstoreFreeCursor(pCur);
+        sqlite3BtreeCloseCursor(pCur);                  /* close before deleting */
+        sqlite3BtreeCursorZero(pCur);
+        if( rc != SQLITE_OK || stop ) break;
+
+        int nUserKey         = storedKeyLen - 8;
+        const void *pUserKey = pExpKey + 8;
+        /* A missing data or key-index row is tolerated (already gone); any
+        ** other error aborts the batch so it is rolled back as a whole. */
+        rc = kvstoreRawBtreeDelete(pKV, pCF->iTable, pUserKey, nUserKey);
+        if( rc == SQLITE_OK ) nBatchDel++;
+        else if( rc == KVSTORE_NOTFOUND ) rc = SQLITE_OK;
+        if( rc != SQLITE_OK ) break;
+        rc = kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pUserKey, nUserKey);
+        if( rc == KVSTORE_NOTFOUND ) rc = SQLITE_OK;
+        if( rc != SQLITE_OK ) break;
+        /* The expiry row must go, or the next round finds it again. */
+        rc = kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable,
+                                   pExpKey, storedKeyLen);
+        if( rc == KVSTORE_NOTFOUND ) rc = KVSTORE_CORRUPT;
+        if( rc == SQLITE_OK ) nExpired++;
       }
+      if( pExpKey ) sqlite3_free(pExpKey);
+      kvstoreFreeCursor(pCur);
     }
 
-    /* Delete all collected entries in the same write transaction. */
-    if( rc == SQLITE_OK && nExpired > 0 ){
-      if( pCF->pReadCur ){ kvstoreFreeCursor(pCF->pReadCur); pCF->pReadCur = NULL; }
-      for( i = 0; i < nExpired; i++ ){
-        int nUserKey        = anExpKeys[i] - 8;
-        const void *pUserKey = (const char*)apExpKeys[i] + 8;
-        int rcd = kvstoreRawBtreeDelete(pKV, pCF->iTable, pUserKey, nUserKey);
-        if( rcd == SQLITE_OK ){
-          nDeleted++;
-          pKV->stats.nTtlPurged++;
-          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
-        }
-        kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pUserKey, nUserKey);
-        kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable,
-                              apExpKeys[i], anExpKeys[i]);
-      }
-    }
-
-    /* Free collected composite keys. */
-    for( i = 0; i < nExpired; i++ ) sqlite3_free(apExpKeys[i]);
-
-    /* Commit or rollback this batch. */
-    if( rc == SQLITE_OK ){
+    /* Commit or rollback this batch (the caller's transaction is left for
+    ** the caller to commit or roll back). */
+    if( callerTrans ){
+      /* nothing: the deletes are part of the caller's transaction */
+    }else if( rc == SQLITE_OK ){
       rc = kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
       if( rc == SQLITE_OK ){
         kvstoreAutoCheckpoint(pKV);
@@ -5505,10 +5907,21 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
 
+    /* Count the batch only once its deletes stand: a rolled-back batch
+    ** deleted nothing. */
+    if( callerTrans || rc == SQLITE_OK ){
+      nDeleted += nBatchDel;
+      pKV->stats.nTtlPurged += nBatchDel;
+      pCF->nTtlActive = pCF->nTtlActive > nBatchDel ? pCF->nTtlActive - nBatchDel : 0;
+    }
+
     KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
-    if( rc != SQLITE_OK ) return rc;
+    if( rc != SQLITE_OK ){
+      if( pnDeleted ) *pnDeleted = nDeleted;     /* committed before the error */
+      return rc;
+    }
     /* If we found fewer than a full batch, there are no more expired keys. */
     if( nExpired < KVSTORE_PURGE_BATCH ) break;
   }
@@ -6005,13 +6418,14 @@ static int kvstoreEnsureWrite(KVStore *pKV, int *pAutoTrans){
   return KVSTORE_OK;
 }
 
-/* Helper: commit or roll back an auto-transaction started by kvstoreEnsureWrite. */
-static void kvstoreFinishWrite(KVStore *pKV, int autoTrans, int rc){
-  if( !autoTrans ) return;
+/* Helper: commit or roll back an auto-transaction started by kvstoreEnsureWrite.
+** Returns rc, or the commit's error if rc was OK but the commit failed. */
+static int kvstoreFinishWrite(KVStore *pKV, int autoTrans, int rc){
+  if( !autoTrans ) return rc;
   if( rc == KVSTORE_OK ){
-    kvstoreBtreeCommit(pKV);
+    rc = kvstoreBtreeCommit(pKV);
     pKV->inTrans = 0;
-    kvstoreAutoCheckpoint(pKV);
+    if( rc == SQLITE_OK ) kvstoreAutoCheckpoint(pKV);
     if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK )
       pKV->inTrans = 1;
   } else {
@@ -6020,6 +6434,7 @@ static void kvstoreFinishWrite(KVStore *pKV, int autoTrans, int rc){
     if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK )
       pKV->inTrans = 1;
   }
+  return rc;
 }
 
 /*
@@ -6118,11 +6533,17 @@ static int kvstoreEncSetupAuth(
 
   /* Derive the encryption key */
   uint8_t aKey[SNKV_ENC_KEY_LEN];
-  if( kvstoreEncDeriveKey(aKey, pPassword, nPassword, aSalt, mCost, tCost) != 0 ){
-    kvstoreFreeCFStruct(pAuthCF);
-    kvstoreFinishWrite(pKV, autoTrans, KVSTORE_ERROR);
-    KV_LEAVE(pKV);
-    return KVSTORE_ERROR;
+  {
+    int drc = kvstoreEncDeriveKey(aKey, pPassword, nPassword, aSalt, mCost, tCost);
+    if( drc != KVSTORE_OK ){
+      kvstoreFreeCFStruct(pAuthCF);
+      kvstoreFinishWrite(pKV, autoTrans, drc);
+      kvstoreSetError(pKV, drc == KVSTORE_CORRUPT
+          ? "encryption parameters in the file are out of range"
+          : "out of memory deriving the encryption key");
+      KV_LEAVE(pKV);
+      return drc;
+    }
   }
 
   if( isNew ){
@@ -6160,15 +6581,15 @@ static int kvstoreEncSetupAuth(
 
   kvstoreEncWipe(aKey, SNKV_ENC_KEY_LEN);
   kvstoreFreeCFStruct(pAuthCF);
-  kvstoreFinishWrite(pKV, autoTrans, rc);
+  rc = kvstoreFinishWrite(pKV, autoTrans, rc);
   KV_LEAVE(pKV);
   return rc;
 }
 
 /* Forward declarations needed by kvstore_open_encrypted */
 typedef int (*kvstoreCFIterFn)(KVStore*, int /*iTable*/, void* /*pArg*/);
-static int kvstoreEncryptCFTable(KVStore *pKV, int iTable, const uint8_t *aKey);
-static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg, int bPublicOnly);
+static int kvstoreRewriteCFTable(KVStore*, int, const uint8_t*, const uint8_t*);
+static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg, int bSkipPlain);
 static int kvstoreEncryptCFCb(KVStore *pKV, int iTable, void *pArg);
 
 /*
@@ -6239,10 +6660,10 @@ int kvstore_open_encrypted(
     int autoTrans = 0;
     int enc_rc = kvstoreEnsureWrite(pKV, &autoTrans);
     if( enc_rc == KVSTORE_OK ){
-      enc_rc = kvstoreEncryptCFTable(pKV, pKV->pDefaultCF->iTable, pKV->aEncKey);
+      enc_rc = kvstoreRewriteCFTable(pKV, pKV->pDefaultCF->iTable, NULL, pKV->aEncKey);
       if( enc_rc == KVSTORE_OK )
         enc_rc = kvstoreForEachUserCF(pKV, kvstoreEncryptCFCb, (void*)pKV->aEncKey, 1);
-      kvstoreFinishWrite(pKV, autoTrans, enc_rc);
+      enc_rc = kvstoreFinishWrite(pKV, autoTrans, enc_rc);
     }
     KV_LEAVE(pKV);
     if( enc_rc != KVSTORE_OK ){
@@ -6263,99 +6684,144 @@ int kvstore_is_encrypted(KVStore *pKV){
 }
 
 /*
-** kvstoreReencryptCFTable — re-encrypt all values in one CF using aNewKey.
+** kvstoreRewriteCFTable — rewrite every value in one CF in place.
+**
+**   aOldKey != NULL : each stored value is decrypted with aOldKey first
+**                     (values shorter than SNKV_ENC_OVERHEAD are left alone).
+**   aNewKey != NULL : the (plaintext) value is then encrypted with aNewKey.
+**
+** So (NULL, k) encrypts, (old, new) re-encrypts and (old, NULL) decrypts.
+**
+** Processes one entry at a time: position a read cursor just past the last
+** processed key, copy one entry out, close the cursor, then write the new
+** blob.  No cursor stays open across a write, so value size changes (which
+** split or merge pages) cannot disturb the iteration.  Every write error is
+** returned to the caller.
+**
+** Memory: one cursor and three grow-only scratch buffers are reused for the
+** whole table, so the peak is about two copies of the largest entry and the
+** heap is not churned once per entry (matters on small embedded heaps).
+** Re-encryption keeps the value size, so it rewrites the copied blob in
+** place and needs no second blob buffer.
+**
 ** The caller holds pKV->pMutex and an active write transaction.
 */
-static int kvstoreReencryptCFTable(
+static int kvstoreRewriteCFTable(
   KVStore *pKV,
   int iTable,
+  const uint8_t *aOldKey,
   const uint8_t *aNewKey
 ){
+  unsigned char *pBuf = NULL;  int nBufAlloc = 0;   /* copied entry blob */
+  unsigned char *pNew = NULL;  int nNewAlloc = 0;   /* rebuilt entry blob */
+  unsigned char *pLast = NULL; int nLastAlloc = 0;  /* last processed key */
+  int nLastKey = -1;           /* -1: nothing processed yet */
+  int rc = KVSTORE_OK;
+
   BtCursor *pCur = kvstoreAllocCursor();
   if( !pCur ) return SQLITE_NOMEM;
-  int rc = sqlite3BtreeCursor(pKV->pBt, iTable, 0, pKV->pKeyInfo, pCur);
-  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
 
-  int res = 0;
-  rc = sqlite3BtreeFirst(pCur, &res);
-  while( rc == SQLITE_OK && !res ){
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
-    unsigned char hdr[4];
-    rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
+  for(;;){
+    int res = 0;
+    rc = sqlite3BtreeCursor(pKV->pBt, iTable, 0, pKV->pKeyInfo, pCur);
     if( rc != SQLITE_OK ) break;
-    int kLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+    if( nLastKey < 0 ){
+      rc = sqlite3BtreeFirst(pCur, &res);
+    } else {
+      rc = kvstoreSeekAfter(pCur, pKV->pKeyInfo, pLast, nLastKey, &res);
+    }
+    if( rc != SQLITE_OK || res ) break;            /* error, or no more rows */
+
+    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    if( payloadSz < 4 || payloadSz > INT_MAX ){ rc = KVSTORE_CORRUPT; break; }
+    rc = kvstoreGrowBuf(&pBuf, &nBufAlloc, (i64)payloadSz);
+    if( rc != KVSTORE_OK ) break;
+    rc = sqlite3BtreePayload(pCur, 0, payloadSz, pBuf);
+    sqlite3BtreeCloseCursor(pCur);                 /* close before writing */
+    sqlite3BtreeCursorZero(pCur);
+    if( rc != SQLITE_OK ) break;
+
+    int kLen = (pBuf[0]<<24)|(pBuf[1]<<16)|(pBuf[2]<<8)|pBuf[3];
     int vLen = (int)payloadSz - 4 - kLen;
-    if( vLen < 0 ){ rc = KVSTORE_CORRUPT; break; }
+    if( kLen < 0 || vLen < 0 ){ rc = KVSTORE_CORRUPT; break; }
+    unsigned char *pKey = pBuf + 4;
+    unsigned char *pVal = pBuf + 4 + kLen;
 
-    /* Read full payload */
-    unsigned char *pBuf = (unsigned char*)sqlite3Malloc((int)payloadSz);
-    if( !pBuf ){ rc = SQLITE_NOMEM; break; }
-    rc = sqlite3BtreePayload(pCur, 0, (u32)payloadSz, pBuf);
-    if( rc != SQLITE_OK ){ sqlite3_free(pBuf); break; }
+    rc = kvstoreGrowBuf(&pLast, &nLastAlloc, kLen > 0 ? kLen : 1);
+    if( rc != KVSTORE_OK ) break;
+    memcpy(pLast, pKey, kLen);
+    nLastKey = kLen;
 
-    void *pKey  = pBuf + 4;
-    void *pEncV = pBuf + 4 + kLen;
+    int doRewrite = aOldKey ? (vLen >= SNKV_ENC_OVERHEAD) : (vLen > 0);
+    if( !doRewrite ) continue;
 
-    if( vLen >= SNKV_ENC_OVERHEAD ){
-      /* Decrypt with old key */
-      int nPlain = vLen - SNKV_ENC_OVERHEAD;
-      uint8_t *pPlain = (uint8_t*)sqlite3Malloc(nPlain > 0 ? nPlain : 1);
-      if( !pPlain ){ sqlite3_free(pBuf); rc = SQLITE_NOMEM; break; }
-      if( kvstoreEncDecrypt(pPlain, pKV->aEncKey,
-                            (const uint8_t*)pEncV, vLen) != 0 ){
-        sqlite3_free(pPlain); sqlite3_free(pBuf);
+    /* Build the new entry blob [hdr][key][value].  Decryption and
+    ** re-encryption happen inside the copied entry itself (pBuf): no
+    ** plaintext buffer, and only encryption (which grows the value by
+    ** SNKV_ENC_OVERHEAD bytes) needs a second blob. */
+    unsigned char *pBlob = pBuf;
+    i64 nBlob = payloadSz;
+    if( aOldKey && aNewKey ){
+      /* Decrypt the ciphertext onto itself, then encrypt it again in the
+      ** same place under a fresh nonce: [nonce][text][mac] keeps its size. */
+      int nText = vLen - SNKV_ENC_OVERHEAD;
+      uint8_t *pText = pVal + SNKV_ENC_NONCE_LEN;
+      uint8_t *pMac  = pVal + vLen - SNKV_ENC_MAC_LEN;
+      if( crypto_aead_unlock(pText, pMac, aOldKey, pVal, NULL, 0,
+                             pText, (size_t)nText) != 0 ){
         rc = KVSTORE_AUTH_FAILED; break;
       }
-      /* Re-encrypt with new key */
-      int nNewEnc = nPlain + SNKV_ENC_OVERHEAD;
-      uint8_t *pNewEnc = (uint8_t*)sqlite3Malloc(nNewEnc);
-      if( !pNewEnc ){ sqlite3_free(pPlain); sqlite3_free(pBuf); rc = SQLITE_NOMEM; break; }
-      if( kvstoreEncEncrypt(pNewEnc, aNewKey,
-                            pPlain, nPlain) != 0 ){
-        sqlite3_free(pNewEnc); sqlite3_free(pPlain); sqlite3_free(pBuf);
+      if( platformRandBytes(pVal, SNKV_ENC_NONCE_LEN) != 0 ){
+        rc = KVSTORE_ERROR; break;                 /* never reuse a nonce */
+      }
+      crypto_aead_lock(pText, pMac, aNewKey, pVal, NULL, 0,
+                       pText, (size_t)nText);
+    }else if( aOldKey ){
+      int nText = kvstoreEncDecryptInPlace(pVal, aOldKey, vLen);
+      if( nText < 0 ){ rc = KVSTORE_AUTH_FAILED; break; }
+      nBlob = 4 + (i64)kLen + nText;
+    }else{
+      nBlob = 4 + (i64)kLen + vLen + SNKV_ENC_OVERHEAD;
+      rc = kvstoreGrowBuf(&pNew, &nNewAlloc, nBlob);
+      if( rc != KVSTORE_OK ) break;
+      memcpy(pNew, pBuf, 4 + kLen);                /* same header and key */
+      if( kvstoreEncEncrypt(pNew + 4 + kLen, aNewKey, pVal, vLen) != 0 ){
         rc = KVSTORE_ERROR; break;
       }
-      /* Open a write cursor to update */
-      BtCursor *pWCur = kvstoreAllocCursor();
-      if( !pWCur ){ sqlite3_free(pNewEnc); sqlite3_free(pPlain); sqlite3_free(pBuf); rc = SQLITE_NOMEM; break; }
-      int wrc = sqlite3BtreeCursor(pKV->pBt, iTable, 1, pKV->pKeyInfo, pWCur);
-      if( wrc == SQLITE_OK ){
-        unsigned char *pNewBlob = (unsigned char*)sqlite3Malloc(4 + kLen + nNewEnc);
-        if( pNewBlob ){
-          memcpy(pNewBlob, hdr, 4);
-          memcpy(pNewBlob + 4, pKey, kLen);
-          memcpy(pNewBlob + 4 + kLen, pNewEnc, nNewEnc);
-          BtreePayload pl; memset(&pl, 0, sizeof(pl));
-          pl.pKey = pNewBlob; pl.nKey = 4 + kLen + nNewEnc;
-          sqlite3BtreeInsert(pWCur, &pl, 0, 0);
-          sqlite3_free(pNewBlob);
-        } else { rc = SQLITE_NOMEM; }
-      }
-      kvstoreFreeCursor(pWCur);
-      sqlite3_free(pNewEnc); sqlite3_free(pPlain);
+      pBlob = pNew;
     }
-    sqlite3_free(pBuf);
+
+    /* Step 3: overwrite the entry. */
+    rc = sqlite3BtreeCursor(pKV->pBt, iTable, 1, pKV->pKeyInfo, pCur);
+    if( rc == SQLITE_OK ){
+      BtreePayload pl; memset(&pl, 0, sizeof(pl));
+      pl.pKey = pBlob; pl.nKey = nBlob;
+      rc = sqlite3BtreeInsert(pCur, &pl, 0, 0);
+      sqlite3BtreeCloseCursor(pCur);
+      sqlite3BtreeCursorZero(pCur);
+    }
     if( rc != SQLITE_OK ) break;
-    rc = sqlite3BtreeNext(pCur, 0);
-    if( rc == SQLITE_DONE ){ rc = SQLITE_OK; break; }
   }
+
+  if( pNew ){ kvstoreEncWipe(pNew, nNewAlloc); sqlite3_free(pNew); }
+  if( pBuf ){ kvstoreEncWipe(pBuf, nBufAlloc); sqlite3_free(pBuf); }
+  sqlite3_free(pLast);
   kvstoreFreeCursor(pCur);
   return rc;
 }
-
-/* Forward declarations for helpers defined below */
-static int kvstoreDecryptCFTable(KVStore *pKV, int iTable);
-static int kvstoreEncryptCFTable(KVStore *pKV, int iTable, const uint8_t *aKey);
 
 /*
 ** kvstoreForEachUserCF — call fn(pKV, iTable, pArg) for every user CF
 ** registered in the metadata table (all CFs except the default CF).
 ** Caller MUST hold pKV->pMutex and be in a write transaction.
 ** fn() must return KVSTORE_OK to continue; any other value stops iteration.
-** If bPublicOnly is non-zero, hidden CFs (names starting with "__snkv_") are skipped.
+** If bSkipPlain is non-zero, the CFs that are always stored in plaintext are
+** skipped: the auth CF (__snkv_auth__) and the TTL indexes (__snkv_ttl_k__*,
+** __snkv_ttl_e__*).  Every other CF holds user data and is visited, including
+** the vector store's hidden __snkv_vec_*__ CFs.
 */
 static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg,
-                                int bPublicOnly){
+                                int bSkipPlain){
   BtCursor *pCur = kvstoreAllocCursor();
   if( !pCur ) return SQLITE_NOMEM;
 
@@ -6372,12 +6838,15 @@ static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg,
       if( rc == SQLITE_OK ){
         int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
         if( (int)payloadSz >= 4 + nameLen + 4 ){
-          /* Optionally skip hidden CFs (names starting with "__snkv_") */
+          /* Optionally skip the always-plaintext CFs (auth, TTL indexes). */
           int skip = 0;
-          if( bPublicOnly && nameLen >= 7 ){
-            unsigned char pfx[7];
-            if( sqlite3BtreePayload(pCur, 4, 7, pfx) == SQLITE_OK ){
-              skip = (memcmp(pfx, "__snkv_", 7) == 0);
+          if( bSkipPlain && nameLen >= 11 ){
+            static const char zAuth[] = SNKV_AUTH_CF_NAME;   /* 13 bytes */
+            unsigned char pfx[13];
+            int nPfx = nameLen < 13 ? nameLen : 13;
+            if( sqlite3BtreePayload(pCur, 4, nPfx, pfx) == SQLITE_OK ){
+              skip = memcmp(pfx, "__snkv_ttl_", 11) == 0
+                  || (nameLen == 13 && memcmp(pfx, zAuth, 13) == 0);
             }
           }
           if( !skip ){
@@ -6402,14 +6871,14 @@ static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg,
 
 /* Callback wrappers for kvstoreForEachUserCF */
 static int kvstoreReencryptCFCb(KVStore *pKV, int iTable, void *pArg){
-  return kvstoreReencryptCFTable(pKV, iTable, (const uint8_t *)pArg);
+  return kvstoreRewriteCFTable(pKV, iTable, pKV->aEncKey, (const uint8_t *)pArg);
 }
 static int kvstoreDecryptCFCb(KVStore *pKV, int iTable, void *pArg){
   (void)pArg;
-  return kvstoreDecryptCFTable(pKV, iTable);
+  return kvstoreRewriteCFTable(pKV, iTable, pKV->aEncKey, NULL);
 }
 static int kvstoreEncryptCFCb(KVStore *pKV, int iTable, void *pArg){
-  return kvstoreEncryptCFTable(pKV, iTable, (const uint8_t *)pArg);
+  return kvstoreRewriteCFTable(pKV, iTable, NULL, (const uint8_t *)pArg);
 }
 
 /*
@@ -6434,12 +6903,23 @@ int kvstore_reencrypt(
   sqlite3_randomness(SNKV_ENC_SALT_LEN, aSalt);
 
   uint8_t aNewKey[SNKV_ENC_KEY_LEN];
-  if( kvstoreEncDeriveKey(aNewKey, pNewPassword, nNewPassword,
-                          aSalt, SNKV_ENC_M_COST, SNKV_ENC_T_COST) != 0 ){
-    return KVSTORE_ERROR;
+  {
+    int drc = kvstoreEncDeriveKey(aNewKey, pNewPassword, nNewPassword,
+                                  aSalt, SNKV_ENC_M_COST, SNKV_ENC_T_COST);
+    if( drc != KVSTORE_OK ) return drc;
   }
 
   KV_ENTER(pKV);
+  if( pKV->inTrans == 2 ){
+    /* The new key only matches the data if this transaction commits.  Inside
+    ** the caller's transaction a later kvstore_rollback would restore the
+    ** old ciphertext while the handle keeps the new key, so refuse. */
+    kvstoreSetError(pKV, "cannot reencrypt: an explicit transaction is active; "
+                          "commit or rollback first");
+    kvstoreEncWipe(aNewKey, SNKV_ENC_KEY_LEN);
+    KV_LEAVE(pKV);
+    return KVSTORE_ERROR;
+  }
   int autoTrans = 0;
   int rc = kvstoreEnsureWrite(pKV, &autoTrans);
   if( rc != KVSTORE_OK ){
@@ -6448,10 +6928,14 @@ int kvstore_reencrypt(
     return rc;
   }
 
-  /* Re-encrypt default CF and all user CFs.
-  ** TTL index CFs store non-sensitive metadata (expiry timestamps) and are
-  ** always written in plaintext, so they are not included here. */
-  rc = kvstoreReencryptCFTable(pKV, pKV->pDefaultCF->iTable, aNewKey);
+  /* Keep the old key so the handle can go back to it if anything fails. */
+  uint8_t aOldKey[SNKV_ENC_KEY_LEN];
+  memcpy(aOldKey, pKV->aEncKey, SNKV_ENC_KEY_LEN);
+
+  /* Re-encrypt default CF and all other CFs.  Plaintext values (TTL
+  ** timestamps, auth salt/params) are shorter than SNKV_ENC_OVERHEAD and are
+  ** left untouched by kvstoreRewriteCFTable. */
+  rc = kvstoreRewriteCFTable(pKV, pKV->pDefaultCF->iTable, aOldKey, aNewKey);
   if( rc != KVSTORE_OK ) goto reenc_done;
   rc = kvstoreForEachUserCF(pKV, kvstoreReencryptCFCb, (void*)aNewKey, 0);
   if( rc != KVSTORE_OK ) goto reenc_done;
@@ -6462,10 +6946,8 @@ int kvstore_reencrypt(
     rc = kvstoreCreateOrOpenHiddenCF(pKV, SNKV_AUTH_CF_NAME, &pAuthCF);
     if( rc != KVSTORE_OK ) goto reenc_done;
 
-    /* Write new salt + params in PLAINTEXT (temporarily disable encryption) */
-    int bWasEncrypted = pKV->bEncrypted;
-    pKV->bEncrypted = 0;  /* write plaintext auth metadata */
-    rc = kvstoreRawBtreePut(pKV, pAuthCF->iTable,
+    /* Write new salt + params in PLAINTEXT */
+    rc = kvstoreRawBtreePutPlain(pKV, pAuthCF->iTable,
                             SNKV_AUTH_KEY_SALT, (int)strlen(SNKV_AUTH_KEY_SALT),
                             aSalt, SNKV_ENC_SALT_LEN);
     unsigned char params[8];
@@ -6473,178 +6955,48 @@ int kvstore_reencrypt(
     params[0]=(mC>>24)&0xFF; params[1]=(mC>>16)&0xFF; params[2]=(mC>>8)&0xFF; params[3]=mC&0xFF;
     params[4]=(tC>>24)&0xFF; params[5]=(tC>>16)&0xFF; params[6]=(tC>>8)&0xFF; params[7]=tC&0xFF;
     if( rc == KVSTORE_OK )
-      rc = kvstoreRawBtreePut(pKV, pAuthCF->iTable,
+      rc = kvstoreRawBtreePutPlain(pKV, pAuthCF->iTable,
                               SNKV_AUTH_KEY_PARAMS, (int)strlen(SNKV_AUTH_KEY_PARAMS),
                               params, 8);
     /* Swap to new key, write verify tag encrypted with new key */
     if( rc == KVSTORE_OK ){
       memcpy(pKV->aEncKey, aNewKey, SNKV_ENC_KEY_LEN);
-      pKV->bEncrypted = bWasEncrypted;  /* re-enable encryption with new key */
       rc = kvstoreRawBtreePut(pKV, pAuthCF->iTable,
                               SNKV_AUTH_KEY_VERIFY, (int)strlen(SNKV_AUTH_KEY_VERIFY),
                               SNKV_AUTH_VERIFY, SNKV_AUTH_VERIFY_LEN);
-    } else {
-      pKV->bEncrypted = bWasEncrypted;
     }
     kvstoreFreeCFStruct(pAuthCF);
   }
 
 reenc_done:
   kvstoreEncWipe(aNewKey, SNKV_ENC_KEY_LEN);
-  kvstoreFinishWrite(pKV, autoTrans, rc);
+  rc = kvstoreFinishWrite(pKV, autoTrans, rc);
+  if( rc != KVSTORE_OK ){
+    /* Nothing was committed: the data is still under the old key. */
+    memcpy(pKV->aEncKey, aOldKey, SNKV_ENC_KEY_LEN);
+    kvstoreSetError(pKV, "reencrypt failed: error %d; old key kept", rc);
+  }
+  kvstoreEncWipe(aOldKey, SNKV_ENC_KEY_LEN);
   KV_LEAVE(pKV);
   return rc;
 }
 
 /*
-** kvstoreDecryptCFTable — decrypt all values in one CF in-place.
-** The caller holds pKV->pMutex and an active write transaction.
-*/
-static int kvstoreDecryptCFTable(KVStore *pKV, int iTable){
-  BtCursor *pCur = kvstoreAllocCursor();
-  if( !pCur ) return SQLITE_NOMEM;
-  int rc = sqlite3BtreeCursor(pKV->pBt, iTable, 0, pKV->pKeyInfo, pCur);
-  if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
-
-  int res = 0;
-  rc = sqlite3BtreeFirst(pCur, &res);
-  while( rc == SQLITE_OK && !res ){
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
-    unsigned char hdr[4];
-    rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
-    if( rc != SQLITE_OK ) break;
-    int kLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
-    int vLen = (int)payloadSz - 4 - kLen;
-    if( vLen < 0 ){ rc = KVSTORE_CORRUPT; break; }
-
-    unsigned char *pBuf = (unsigned char*)sqlite3Malloc((int)payloadSz);
-    if( !pBuf ){ rc = SQLITE_NOMEM; break; }
-    rc = sqlite3BtreePayload(pCur, 0, (u32)payloadSz, pBuf);
-    if( rc != SQLITE_OK ){ sqlite3_free(pBuf); break; }
-
-    void *pKey  = pBuf + 4;
-    void *pEncV = pBuf + 4 + kLen;
-
-    if( vLen >= SNKV_ENC_OVERHEAD ){
-      int nPlain = vLen - SNKV_ENC_OVERHEAD;
-      uint8_t *pPlain = (uint8_t*)sqlite3Malloc(nPlain > 0 ? nPlain : 1);
-      if( !pPlain ){ sqlite3_free(pBuf); rc = SQLITE_NOMEM; break; }
-      if( kvstoreEncDecrypt(pPlain, pKV->aEncKey,
-                            (const uint8_t*)pEncV, vLen) != 0 ){
-        sqlite3_free(pPlain); sqlite3_free(pBuf);
-        rc = KVSTORE_AUTH_FAILED; break;
-      }
-      BtCursor *pWCur = kvstoreAllocCursor();
-      if( !pWCur ){ sqlite3_free(pPlain); sqlite3_free(pBuf); rc = SQLITE_NOMEM; break; }
-      int wrc = sqlite3BtreeCursor(pKV->pBt, iTable, 1, pKV->pKeyInfo, pWCur);
-      if( wrc == SQLITE_OK ){
-        unsigned char *pNewBlob = (unsigned char*)sqlite3Malloc(4 + kLen + nPlain);
-        if( pNewBlob ){
-          memcpy(pNewBlob, hdr, 4);
-          memcpy(pNewBlob + 4, pKey, kLen);
-          memcpy(pNewBlob + 4 + kLen, pPlain, nPlain);
-          BtreePayload pl; memset(&pl, 0, sizeof(pl));
-          pl.pKey = pNewBlob; pl.nKey = 4 + kLen + nPlain;
-          sqlite3BtreeInsert(pWCur, &pl, 0, 0);
-          sqlite3_free(pNewBlob);
-        } else { rc = SQLITE_NOMEM; }
-      }
-      kvstoreFreeCursor(pWCur);
-      sqlite3_free(pPlain);
-    }
-    sqlite3_free(pBuf);
-    if( rc != SQLITE_OK ) break;
-    rc = sqlite3BtreeNext(pCur, 0);
-    if( rc == SQLITE_DONE ){ rc = SQLITE_OK; break; }
-  }
-  kvstoreFreeCursor(pCur);
-  return rc;
-}
-
-/*
-** kvstoreEncryptCFTable — encrypt all plaintext values in one CF using aKey.
-**
-** Processes one entry at a time to keep memory usage O(1):
-**   1. Open a fresh read cursor; seek to the entry after the last processed key.
-**   2. Read one entry (key + plaintext value) and close the cursor immediately.
-**   3. Write the encrypted blob back via kvstoreRawBtreePut (bEncrypted=1).
-**   4. Repeat from step 1 using kvstoreSeekAfter(lastKey).
-**
-** This avoids the page-split cursor invalidation that occurs when a single
-** read cursor is kept open while blobs grow by SNKV_ENC_OVERHEAD bytes.
-** kvstoreRawBtreePut is safe to call here: the caller holds pKV->pMutex and
-** an active write transaction, which is exactly what kvstoreRawBtreePut requires.
-**
-** The caller holds pKV->pMutex and an active write transaction.
-*/
-static int kvstoreEncryptCFTable(KVStore *pKV, int iTable, const uint8_t *aKey){
-  unsigned char *pLastKey = NULL;  /* user key of last processed entry */
-  int nLastKey = 0;
-  int rc = KVSTORE_OK;
-
-  for(;;){
-    /* Open a fresh read cursor and position it */
-    BtCursor *pCur = kvstoreAllocCursor();
-    if( !pCur ){ rc = SQLITE_NOMEM; break; }
-    int crc = sqlite3BtreeCursor(pKV->pBt, iTable, 0, pKV->pKeyInfo, pCur);
-    if( crc != SQLITE_OK ){ kvstoreFreeCursor(pCur); rc = crc; break; }
-
-    int res = 0;
-    if( pLastKey == NULL ){
-      crc = sqlite3BtreeFirst(pCur, &res);
-    } else {
-      int eof = 0;
-      crc = kvstoreSeekAfter(pCur, pKV->pKeyInfo, pLastKey, nLastKey, &eof);
-      res = eof;
-    }
-    if( crc != SQLITE_OK ){ kvstoreFreeCursor(pCur); rc = crc; break; }
-    if( res ){ kvstoreFreeCursor(pCur); break; }  /* no more entries */
-
-    /* Read the current entry */
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
-    unsigned char hdr[4];
-    crc = sqlite3BtreePayload(pCur, 0, 4, hdr);
-    if( crc != SQLITE_OK ){ kvstoreFreeCursor(pCur); rc = crc; break; }
-    int kLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
-    int vLen = (int)payloadSz - 4 - kLen;
-    if( vLen < 0 ){ kvstoreFreeCursor(pCur); rc = KVSTORE_CORRUPT; break; }
-
-    unsigned char *pBuf = (unsigned char*)sqlite3Malloc((int)payloadSz);
-    if( !pBuf ){ kvstoreFreeCursor(pCur); rc = SQLITE_NOMEM; break; }
-    crc = sqlite3BtreePayload(pCur, 0, (u32)payloadSz, pBuf);
-    kvstoreFreeCursor(pCur);                      /* close cursor before writing */
-    if( crc != SQLITE_OK ){ sqlite3_free(pBuf); rc = crc; break; }
-
-    unsigned char *pKey = pBuf + 4;
-    unsigned char *pVal = pBuf + 4 + kLen;
-
-    /* Update last-key for next seek */
-    sqlite3_free(pLastKey);
-    pLastKey = (unsigned char*)sqlite3Malloc(kLen > 0 ? kLen : 1);
-    if( !pLastKey ){ sqlite3_free(pBuf); rc = SQLITE_NOMEM; break; }
-    memcpy(pLastKey, pKey, kLen);
-    nLastKey = kLen;
-
-    /* Encrypt and overwrite (kvstoreRawBtreePut encrypts because bEncrypted=1) */
-    if( vLen > 0 ){
-      rc = kvstoreRawBtreePut(pKV, iTable, pKey, kLen, pVal, vLen);
-    }
-    sqlite3_free(pBuf);
-    if( rc != KVSTORE_OK ) break;
-  }
-
-  sqlite3_free(pLastKey);
-  return rc;
-}
-
-/*
 ** kvstore_remove_encryption — decrypt all values and strip the auth CF.
+** Runs in its own write transaction.  On any failure nothing is committed
+** and the handle stays encrypted with its current key.
 */
 int kvstore_remove_encryption(KVStore *pKV){
   if( !pKV ) return KVSTORE_ERROR;
   if( !pKV->bEncrypted ) return KVSTORE_ERROR;
 
   KV_ENTER(pKV);
+  if( pKV->inTrans == 2 ){
+    kvstoreSetError(pKV, "cannot remove encryption: an explicit transaction "
+                          "is active; commit or rollback first");
+    KV_LEAVE(pKV);
+    return KVSTORE_ERROR;
+  }
   int autoTrans = 0;
   int rc = kvstoreEnsureWrite(pKV, &autoTrans);
   if( rc != KVSTORE_OK ){
@@ -6652,36 +7004,42 @@ int kvstore_remove_encryption(KVStore *pKV){
     return rc;
   }
 
-  /* Decrypt default CF and all user CFs in-place.
-  ** TTL index CFs store non-sensitive metadata (expiry timestamps) and are
-  ** always written in plaintext, so they are not included here. */
-  rc = kvstoreDecryptCFTable(pKV, pKV->pDefaultCF->iTable);
+  /* Decrypt default CF and all other CFs in place (values shorter than
+  ** SNKV_ENC_OVERHEAD were never encrypted and are left alone). */
+  rc = kvstoreRewriteCFTable(pKV, pKV->pDefaultCF->iTable, pKV->aEncKey, NULL);
   if( rc != KVSTORE_OK ) goto remenc_done;
   rc = kvstoreForEachUserCF(pKV, kvstoreDecryptCFCb, NULL, 0);
   if( rc != KVSTORE_OK ) goto remenc_done;
 
-  /* Disable encryption before committing so new writes are plaintext */
-  kvstoreEncWipe(pKV->aEncKey, SNKV_ENC_KEY_LEN);
-  pKV->bEncrypted = 0;
-
   /* Delete contents of auth CF (clear all auth metadata) */
   {
+    static const char *azAuthKey[3] = {
+      SNKV_AUTH_KEY_VERIFY, SNKV_AUTH_KEY_PARAMS, SNKV_AUTH_KEY_SALT
+    };
     KVColumnFamily *pAuthCF = NULL;
     int arc = kvstoreCfOpenInternal(pKV, SNKV_AUTH_CF_NAME, &pAuthCF);
     if( arc == KVSTORE_OK ){
-      /* Delete the three auth keys */
-      kvstoreRawBtreeDelete(pKV, pAuthCF->iTable,
-                            SNKV_AUTH_KEY_VERIFY, (int)strlen(SNKV_AUTH_KEY_VERIFY));
-      kvstoreRawBtreeDelete(pKV, pAuthCF->iTable,
-                            SNKV_AUTH_KEY_PARAMS, (int)strlen(SNKV_AUTH_KEY_PARAMS));
-      kvstoreRawBtreeDelete(pKV, pAuthCF->iTable,
-                            SNKV_AUTH_KEY_SALT, (int)strlen(SNKV_AUTH_KEY_SALT));
+      for( int i = 0; i < 3 && rc == KVSTORE_OK; i++ ){
+        rc = kvstoreRawBtreeDelete(pKV, pAuthCF->iTable,
+                                   azAuthKey[i], (int)strlen(azAuthKey[i]));
+        if( rc == KVSTORE_NOTFOUND ) rc = KVSTORE_OK;
+      }
       kvstoreFreeCFStruct(pAuthCF);
+    }else if( arc != KVSTORE_NOTFOUND ){
+      rc = arc;
     }
   }
 
 remenc_done:
-  kvstoreFinishWrite(pKV, autoTrans, rc);
+  rc = kvstoreFinishWrite(pKV, autoTrans, rc);
+  if( rc == KVSTORE_OK ){
+    /* Committed: new writes are plaintext from now on. */
+    kvstoreEncWipe(pKV->aEncKey, SNKV_ENC_KEY_LEN);
+    pKV->bEncrypted = 0;
+  }else{
+    kvstoreSetError(pKV, "remove_encryption failed: error %d; store is "
+                          "still encrypted", rc);
+  }
   KV_LEAVE(pKV);
   return rc;
 }

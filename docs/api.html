@@ -691,23 +691,25 @@
 <span class="kw">struct</span> KVStoreConfig {
   <span class="kw">int</span> journalMode;   <span class="cm">/* KVSTORE_JOURNAL_WAL (default) or KVSTORE_JOURNAL_DELETE */</span>
   <span class="kw">int</span> syncLevel;     <span class="cm">/* KVSTORE_SYNC_NORMAL (default), _OFF, or _FULL */</span>
-  <span class="kw">int</span> cacheSize;     <span class="cm">/* page cache in pages (0 = default = 2000 pages ≈ 8 MB) */</span>
+  <span class="kw">int</span> cacheSize;     <span class="cm">/* page cache in pages (0 = default = 2000 pages ≈ 8 MB); &lt; 0 = budget in KiB */</span>
   <span class="kw">int</span> pageSize;      <span class="cm">/* page size in bytes (0 = 4096; new databases only) */</span>
   <span class="kw">int</span> readOnly;      <span class="cm">/* 1 = open read-only; default 0 */</span>
   <span class="kw">int</span> busyTimeout;   <span class="cm">/* ms to retry on SQLITE_BUSY (0 = fail immediately) */</span>
-  <span class="kw">int</span> walSizeLimit;  <span class="cm">/* auto-checkpoint every N commits in WAL mode (0 = off) */</span>
+  <span class="kw">int</span> allowEncrypted; <span class="cm">/* internal — leave 0 (use kvstore_open_encrypted) */</span>
   <span class="kw">int</span> fullMutex;     <span class="cm">/* 1 = serialize all ops with a recursive mutex (default 0) */</span>
+  <span class="kw">int</span> walAutoCheckpoint; <span class="cm">/* checkpoint when WAL ≥ N pages (0 = default 1000, &lt; 0 = off) */</span>
 };</pre>
         <div class="table-wrap"><table>
           <tr><th>Field</th><th>Default</th><th>Notes</th></tr>
           <tr><td><code>journalMode</code></td><td><code>KVSTORE_JOURNAL_WAL</code></td><td>WAL strongly recommended.</td></tr>
           <tr><td><code>syncLevel</code></td><td><code>KVSTORE_SYNC_NORMAL</code></td><td>Safe against process crash.</td></tr>
-          <tr><td><code>cacheSize</code></td><td>2000 (~8 MB)</td><td>Larger cache improves read-heavy loads.</td></tr>
+          <tr><td><code>cacheSize</code></td><td>2000 (~8 MB)</td><td>Larger cache improves read-heavy loads. A <strong>negative</strong> value is a memory budget in KiB (e.g. <code>-256</code> ≈ 256 KB of cache, whatever the page size) — the usual choice on small devices. The default can also be changed at build time with <code>-DKVSTORE_DEFAULT_CACHE_SIZE=N</code>.</td></tr>
           <tr><td><code>pageSize</code></td><td>4096 bytes</td><td>Ignored for existing databases.</td></tr>
           <tr><td><code>readOnly</code></td><td>0</td><td></td></tr>
           <tr><td><code>busyTimeout</code></td><td>0 (fail immediately)</td><td>Set &gt; 0 for multi-process workloads.</td></tr>
-          <tr><td><code>walSizeLimit</code></td><td>0 (disabled)</td><td>Auto-checkpoint every N committed writes.</td></tr>
+          <tr><td><code>allowEncrypted</code></td><td>0</td><td>Internal flag used by <code>kvstore_open_encrypted</code>. Leave it 0; zero-initialising the struct does this.</td></tr>
           <tr><td><code>fullMutex</code></td><td>0 (no mutex)</td><td>Set to 1 only when sharing one <code>KVStore*</code> across threads. One handle per thread does not need this — WAL enforces single-writer / multi-reader at the OS level.</td></tr>
+          <tr><td><code>walAutoCheckpoint</code></td><td>0 → 1000 pages</td><td>After a commit, run a PASSIVE (non-blocking) checkpoint once the WAL holds at least this many pages — the same rule SQLite uses. Keeps the WAL around 4 MB, so page lookups in it stay cheap (an unbounded WAL slowed reads by 8–16% on 1M rows). <code>N &gt; 0</code> = custom threshold; <code>N &lt; 0</code> = off (WAL grows until <code>kvstore_checkpoint</code> or close). Build-time default: <code>-DKVSTORE_DEFAULT_WAL_AUTOCHECKPOINT=N</code>.</td></tr>
         </table></div>
       </section>
 
@@ -783,7 +785,7 @@ ro.readOnly = <span class="nm">1</span>;
   <span class="kw">const void</span>  *pKey,   <span class="kw">int</span>   nKey,
   <span class="kw">void</span>       **ppValue, <span class="kw">int</span>  *pnValue
 );</div>
-          <p class="fn-desc">Retrieve a value by key. The returned buffer is heap-allocated by SNKV. Caller must free with <code>snkv_free()</code> / <code>snkv_free()</code>.</p>
+          <p class="fn-desc">Retrieve a value by key. The returned buffer is heap-allocated by SNKV. Caller must free with <code>snkv_free()</code>.</p>
           <pre><span class="kw">void</span> *value = <span class="kw">NULL</span>; <span class="kw">int</span> vlen = <span class="nm">0</span>;
 <span class="kw">int</span> rc = <span class="fn">kvstore_get</span>(kv, <span class="str">"user:1"</span>, <span class="nm">6</span>, &amp;value, &amp;vlen);
 <span class="kw">if</span> (rc == KVSTORE_OK) {
@@ -810,18 +812,20 @@ ro.readOnly = <span class="nm">1</span>;
       <!-- Column Families -->
       <section class="api-section" id="c-cf">
         <h2 class="section-title">Column Family Management</h2>
-        <p class="fn-desc" style="margin-bottom:1rem;">Column families provide multiple logical key-value namespaces within a single file. Each is stored in its own B-tree. Maximum <code>KVSTORE_MAX_COLUMN_FAMILIES</code> (64) per database.</p>
+        <p class="fn-desc" style="margin-bottom:1rem;">Column families provide multiple logical key-value namespaces within a single file. Each is stored in its own B-tree. Maximum <code>KVSTORE_MAX_COLUMN_FAMILIES</code> (64) per database, counting the default CF — i.e. up to 63 named CFs. Internal CFs (TTL indexes, encryption metadata, vector store) do not count towards the limit. Names starting with <code>__</code> or <code>_snkv_</code> are reserved for internal use.</p>
 
         <div class="fn-entry" id="c-cf-create">
           <h3 class="fn-name">kvstore_cf_create</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_create</span>(KVStore *pKV, <span class="kw">const char</span> *zName, KVColumnFamily **ppCF);</div>
-          <p class="fn-desc">Create a new column family. <code>zName</code> max 255 characters, must be unique. <code>*ppCF</code> receives the handle.</p>
+          <p class="fn-desc">Create a new column family. <code>zName</code> max 255 characters, must be unique and must not start with <code>__</code> or <code>_snkv_</code>. <code>*ppCF</code> receives the handle. Passing <code>"default"</code> returns the default CF.</p>
+          <div class="returns-label">Returns</div>
+          <p class="fn-desc"><code>KVSTORE_OK</code> · <code>KVSTORE_ERROR</code> if the name is invalid or reserved, the CF already exists, or 63 named CFs already exist · <code>KVSTORE_NOMEM</code> if the handle cannot be allocated (the CF may already be created — open it with <code>kvstore_cf_open</code>).</p>
         </div>
 
         <div class="fn-entry" id="c-cf-open">
           <h3 class="fn-name">kvstore_cf_open</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_open</span>(KVStore *pKV, <span class="kw">const char</span> *zName, KVColumnFamily **ppCF);</div>
-          <p class="fn-desc">Open an existing column family. Returns <code>KVSTORE_NOTFOUND</code> if it does not exist.</p>
+          <p class="fn-desc">Open an existing column family. Returns <code>KVSTORE_NOTFOUND</code> if it does not exist, <code>KVSTORE_ERROR</code> for a reserved name, <code>KVSTORE_NOMEM</code> if the handle cannot be allocated. Each call returns a new, independent handle; close every handle with <code>kvstore_cf_close</code>.</p>
         </div>
 
         <div class="fn-entry" id="c-cf-default">
@@ -833,13 +837,15 @@ ro.readOnly = <span class="nm">1</span>;
         <div class="fn-entry" id="c-cf-drop">
           <h3 class="fn-name">kvstore_cf_drop</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_drop</span>(KVStore *pKV, <span class="kw">const char</span> *zName);</div>
-          <p class="fn-desc">Delete a column family and all its data permanently. The default column family cannot be dropped. Also removes any hidden TTL index CFs.</p>
+          <p class="fn-desc">Delete a column family and all its data permanently. The default column family cannot be dropped. Also removes any hidden TTL index CFs. Other open CF handles stay valid (the file may move another table's root page; open handles follow it). The drop is all-or-nothing: on any error nothing is changed (inside your own transaction, roll it back).</p>
+          <div class="returns-label">Returns</div>
+          <p class="fn-desc"><code>KVSTORE_OK</code> · <code>KVSTORE_NOTFOUND</code> if it does not exist · <code>KVSTORE_ERROR</code> for <code>"default"</code> or a reserved name · <code>KVSTORE_BUSY</code> if a handle to this CF is still open, or if <strong>any iterator</strong> is open on the store — close them first.</p>
         </div>
 
         <div class="fn-entry" id="c-cf-list">
           <h3 class="fn-name">kvstore_cf_list</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_list</span>(KVStore *pKV, <span class="kw">char</span> ***pazNames, <span class="kw">int</span> *pnCount);</div>
-          <p class="fn-desc">List all column families. Caller must free each name and the array with <code>snkv_free()</code>.</p>
+          <p class="fn-desc">List the named column families (the default CF is not included). Internal CFs (names starting with <code>__</code> or <code>_snkv_</code>) are not listed. Caller must free each name and the array with <code>snkv_free()</code>.</p>
           <pre><span class="kw">char</span> **names = <span class="kw">NULL</span>; <span class="kw">int</span> count = <span class="nm">0</span>;
 <span class="fn">kvstore_cf_list</span>(kv, &amp;names, &amp;count);
 <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; count; i++) {
@@ -1032,6 +1038,8 @@ KVIterator *it = <span class="kw">NULL</span>;
 <span class="fn">kvstore_put</span>(kv, <span class="str">"key2"</span>, <span class="nm">4</span>, <span class="str">"val2"</span>, <span class="nm">4</span>);
 <span class="fn">kvstore_commit</span>(kv);   <span class="cm">/* both writes are atomic */</span></pre>
           <div class="note"><strong>KVSTORE_BUSY:</strong> Set <code>cfg.busyTimeout &gt; 0</code> to auto-retry on lock contention, or handle the return code and retry manually.</div>
+          <div class="note"><strong>If <code>kvstore_commit</code> fails</strong> (e.g. <code>KVSTORE_BUSY</code> or an I/O error) the transaction stays open: retry the commit, or call <code>kvstore_rollback</code>. Auto-commits inside other calls roll back automatically when they fail, so a failed call never leaves half its changes behind.</div>
+          <div class="note"><strong>Inside an explicit write transaction</strong>, <code>kvstore_sync</code>, <code>kvstore_reencrypt</code> and <code>kvstore_remove_encryption</code> return <code>KVSTORE_ERROR</code> and <code>kvstore_checkpoint</code> returns <code>KVSTORE_BUSY</code> — commit or roll back first. <code>kvstore_purge_expired</code> and <code>kvstore_cf_drop</code> work inside it and become part of your transaction.</div>
         </div>
       </section>
 
@@ -1082,7 +1090,7 @@ KVIterator *it = <span class="kw">NULL</span>;
         <div class="fn-entry" id="c-purge">
           <h3 class="fn-name">kvstore_purge_expired</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_purge_expired</span>(KVStore *pKV, <span class="kw">int</span> *pnDeleted);  <span class="cm">/* pnDeleted may be NULL */</span></div>
-          <p class="fn-desc">Scan the expiry index and delete all expired keys in one write transaction. O(expired keys) — uses sorted expire-time prefix to stop at first non-expired entry.</p>
+          <p class="fn-desc">Delete all expired keys, oldest expiry first. O(expired keys) — the expiry index is sorted by time, so it stops at the first key that has not expired. Works in batches of up to 256 keys per write transaction (build-time setting <code>KVSTORE_PURGE_BATCH</code>), releasing the lock between batches; memory use is one key at a time. If you have a write transaction open, it works inside it instead: the deletes commit or roll back with your transaction.</p>
         </div>
 
         <div class="note-info note" style="margin-top:1rem; margin-bottom:1rem;">
@@ -1120,7 +1128,7 @@ KVIterator *it = <span class="kw">NULL</span>;
         <div class="fn-entry" id="c-cf-purge">
           <h3 class="fn-name">kvstore_cf_purge_expired</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_cf_purge_expired</span>(KVColumnFamily *pCF, <span class="kw">int</span> *pnDeleted);  <span class="cm">/* pnDeleted may be NULL */</span></div>
-          <p class="fn-desc">Scan and delete all expired keys in this column family only, in a single write transaction. O(expired keys). Purging CF A never affects other column families.</p>
+          <p class="fn-desc">Delete all expired keys in this column family only. O(expired keys). Same batching and transaction behaviour as <code>kvstore_purge_expired</code>. Purging CF A never affects other column families.</p>
         </div>
       </section>
 
@@ -1185,7 +1193,7 @@ KVIterator *it = <span class="kw">NULL</span>;
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_count</span>(KVStore *pKV, <span class="kw">int64_t</span> *pnCount);
 <span class="kw">int</span> <span class="fn">kvstore_cf_count</span>(KVColumnFamily *pCF, <span class="kw">int64_t</span> *pnCount);</div>
           <p class="fn-desc">Counts only the main data B-tree of the column family. TTL index CFs are separate B-trees and are not included. Expired-but-not-yet-purged keys are included in the count — call <code>kvstore_purge_expired</code> first for an exact live count.</p>
-          <div class="note"><strong>Uncommitted writes:</strong> If a write transaction is active, the count reflects committed data only. Commit first for an accurate count that includes pending writes.</div>
+          <div class="note"><strong>Uncommitted writes:</strong> Inside your own write transaction the count includes that transaction's pending (uncommitted) writes. Other connections see committed data only.</div>
           <pre><span class="kw">int64_t</span> n;
 <span class="fn">kvstore_count</span>(kv, &amp;n);
 printf(<span class="str">"default CF has %lld entries\n"</span>, (<span class="kw">long long</span>)n);
@@ -1237,13 +1245,15 @@ printf(<span class="str">"live entries after purge: %lld\n"</span>, (<span class
         <div class="fn-entry" id="c-sync">
           <h3 class="fn-name">kvstore_sync</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_sync</span>(KVStore *pKV);</div>
-          <p class="fn-desc">Force all pending changes to disk. If a write transaction is active, performs a commit-and-reopen cycle to flush the WAL.</p>
+          <p class="fn-desc">Make every <strong>committed</strong> transaction durable: fsyncs the WAL file (or rollback journal) and the database file (<code>fsync</code> on Linux/macOS, <code>FlushFileBuffers</code> on Windows). Useful with <code>KVSTORE_SYNC_OFF</code> or <code>NORMAL</code>, where commits do not fsync: commit cheaply, then call <code>kvstore_sync</code> at points that must survive a power loss. It does not checkpoint — use <code>kvstore_checkpoint</code> for that.</p>
+          <div class="returns-label">Returns</div>
+          <p class="fn-desc"><code>KVSTORE_OK</code> · <code>KVSTORE_ERROR</code> while an explicit write transaction is open (commit or roll back first) · an I/O error code if the disk sync fails.</p>
         </div>
 
         <div class="fn-entry" id="c-vacuum">
           <h3 class="fn-name">kvstore_incremental_vacuum</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_incremental_vacuum</span>(KVStore *pKV, <span class="kw">int</span> nPage);</div>
-          <p class="fn-desc">Reclaim unused pages and shrink the database file. Pass <code>0</code> to free all unused pages, or a positive <code>nPage</code> to limit work per call (good for latency-sensitive apps).</p>
+          <p class="fn-desc">Reclaim unused pages and shrink the database file. Pass <code>0</code> to free all unused pages, or a positive <code>nPage</code> to limit work per call (good for latency-sensitive apps). Safe while iterators are open: they continue from their current key. Runs in its own write transaction, or inside yours if one is open.</p>
           <pre><span class="fn">kvstore_incremental_vacuum</span>(kv, <span class="nm">0</span>);    <span class="cm">/* free all */</span>
 <span class="fn">kvstore_incremental_vacuum</span>(kv, <span class="nm">50</span>);   <span class="cm">/* incremental: 50 pages */</span></pre>
         </div>
@@ -1280,7 +1290,7 @@ printf(<span class="str">"%d frames total, %d checkpointed\n"</span>, nLog, nCkp
       <section class="api-section" id="c-threads">
         <h2 class="section-title">Thread Safety</h2>
         <ul style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);line-height:2;padding-left:1.2rem;">
-          <li>All <code>kvstore_*</code> calls are mutex-protected — a single <code>KVStore</code> handle is safe across threads.</li>
+          <li>A single <code>KVStore</code> handle may be shared across threads <strong>only</strong> if it was opened with <code>cfg.fullMutex = 1</code>, which serialises every call on that handle. With the default (<code>fullMutex = 0</code>) only per-column-family locks are taken, which do not protect the state shared by the whole store (transactions, other CFs, iterators) — use one handle per thread instead.</li>
           <li>In WAL mode, multiple readers run concurrently with a single writer.</li>
           <li>Only one write transaction can be active at a time; concurrent writes return <code>KVSTORE_BUSY</code>.</li>
           <li>For maximum throughput, each thread can open its own <code>KVStore</code> to the same file.</li>
@@ -1301,7 +1311,7 @@ printf(<span class="str">"%d frames total, %d checkpointed\n"</span>, nLog, nCkp
   KVStore            **ppKV,
   <span class="kw">const</span> KVStoreConfig *pConfig      <span class="cm">/* may be NULL for defaults */</span>
 );</div>
-          <p class="fn-desc">Open or create an encrypted store. On a fresh file a new Argon2id-derived key is generated from the password. On an existing encrypted file the password is verified before access is granted. If the file is a plain (non-encrypted) store with existing data, all values are encrypted in-place using the supplied password — the store becomes fully encrypted transparently. Returns <code>KVSTORE_AUTH_FAILED</code> only if the password is wrong on an already-encrypted file. <code>*ppKV</code> is set to <code>NULL</code> on any error — no resource leak.</p>
+          <p class="fn-desc">Open or create an encrypted store. On a fresh file a new Argon2id-derived key is generated from the password. On an existing encrypted file the password is verified before access is granted. If the file is a plain (non-encrypted) store with existing data, all values are encrypted in-place using the supplied password — the store becomes fully encrypted transparently. Returns <code>KVSTORE_AUTH_FAILED</code> if the password is wrong on an already-encrypted file, <code>KVSTORE_CORRUPT</code> if the key-derivation parameters stored in the file are out of range (corrupt or crafted file — rejected before anything is allocated), and <code>KVSTORE_NOMEM</code> if the key-derivation memory cannot be allocated. <code>*ppKV</code> is set to <code>NULL</code> on any error — no resource leak.</p>
           <pre><span class="cm">/* Create / open encrypted */</span>
 KVStore *kv = <span class="kw">NULL</span>;
 <span class="kw">int</span> rc = <span class="fn">kvstore_open_encrypted</span>(<span class="str">"mydb.db"</span>, <span class="str">"hunter2"</span>, <span class="nm">7</span>, &amp;kv, <span class="kw">NULL</span>);
@@ -1321,7 +1331,7 @@ KVStore *kv = <span class="kw">NULL</span>;
         <div class="fn-entry" id="c-enc-reencrypt">
           <h3 class="fn-name">kvstore_reencrypt</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_reencrypt</span>(KVStore *pKV, <span class="kw">const void</span> *pNewPassword, <span class="kw">int</span> nNewPassword);</div>
-          <p class="fn-desc">Change the encryption password in-place. Derives a new key from the new password, re-encrypts every value in every column family, and updates the authentication metadata — all in a single atomic transaction. The old password is invalid immediately after this call returns.</p>
+          <p class="fn-desc">Change the encryption password in-place. Derives a new key from the new password, re-encrypts every value in every column family, and updates the authentication metadata — all in a single atomic transaction. On success the old password is invalid immediately. On <strong>any</strong> failure (including a failed commit) nothing is changed and the old password stays valid. Returns <code>KVSTORE_ERROR</code> if the store is not encrypted or an explicit transaction is open (commit or roll back first).</p>
           <pre><span class="fn">kvstore_reencrypt</span>(kv, <span class="str">"new-pass"</span>, <span class="nm">8</span>);
 <span class="cm">/* kv is still open and usable with the new password */</span></pre>
         </div>
@@ -1329,7 +1339,7 @@ KVStore *kv = <span class="kw">NULL</span>;
         <div class="fn-entry" id="c-enc-remove">
           <h3 class="fn-name">kvstore_remove_encryption</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_remove_encryption</span>(KVStore *pKV);</div>
-          <p class="fn-desc">Decrypt all values in-place and remove the authentication metadata. After this call the store is a plain (non-encrypted) SNKV database and can be opened with <code>kvstore_open</code> or <code>kvstore_open_v2</code>.</p>
+          <p class="fn-desc">Decrypt all values in-place and remove the authentication metadata. After this call the store is a plain (non-encrypted) SNKV database and can be opened with <code>kvstore_open</code> or <code>kvstore_open_v2</code>. Runs in one transaction: on any failure nothing is changed and the store stays encrypted. Returns <code>KVSTORE_ERROR</code> if the store is not encrypted or an explicit transaction is open.</p>
           <pre><span class="fn">kvstore_remove_encryption</span>(kv);
 <span class="fn">kvstore_close</span>(kv);
 
@@ -1347,7 +1357,7 @@ KVStore *plain = <span class="kw">NULL</span>;
         <div class="note" style="margin-top:1rem;">
           <strong>Cryptographic details:</strong>
           <ul style="margin:0.4rem 0 0 1.2rem;line-height:1.8;">
-            <li><strong>KDF:</strong> Argon2id (m=64 MB, t=3 iterations) — password → 256-bit key</li>
+            <li><strong>KDF:</strong> Argon2id (default m=64 MB, t=3 iterations) — password + 16-byte random salt → 256-bit key. The cost is stored in each file; on small devices build with e.g. <code>-DSNKV_ENC_M_COST=256u</code> (256 KB) for new keys</li>
             <li><strong>Cipher:</strong> XChaCha20-Poly1305 — 24-byte random nonce + 16-byte MAC per value</li>
             <li><strong>Overhead:</strong> 40 bytes per stored value (nonce + MAC)</li>
             <li><strong>Key scope:</strong> wiped from memory on <code>kvstore_close</code></li>
@@ -1486,7 +1496,7 @@ KVStore *plain = <span class="kw">NULL</span>;
   <span class="kw">int</span>               nItems,
   <span class="kw">int64_t</span>           expire_ms  <span class="cm">/* applied uniformly; 0 = no TTL */</span>
 );</div>
-          <p class="fn-desc">Insert or update <code>nItems</code> records in one atomic transaction. Last-write-wins for duplicate keys within the batch. All usearch insertions happen after the commit.</p>
+          <p class="fn-desc">Insert or update <code>nItems</code> records in one atomic transaction. Last-write-wins for duplicate keys within the batch — only the last vector for a repeated key enters the index. All usearch insertions happen after the commit.</p>
           <pre>KVVecItem items[3] = {
     { <span class="str">"k1"</span>, <span class="nm">2</span>, <span class="str">"val1"</span>, <span class="nm">4</span>, vec1, <span class="kw">NULL</span>, <span class="nm">0</span> },
     { <span class="str">"k2"</span>, <span class="nm">2</span>, <span class="str">"val2"</span>, <span class="nm">4</span>, vec2, <span class="kw">NULL</span>, <span class="nm">0</span> },
@@ -1515,13 +1525,13 @@ KVStore *plain = <span class="kw">NULL</span>;
         <div class="fn-entry">
           <h3 class="fn-name">kvstore_vec_get_vector</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_get_vector</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">float</span> **ppVec, <span class="kw">int</span> *pnFloats);</div>
-          <p class="fn-desc">Fetch the stored float32 vector. <code>*ppVec</code> is a flat array of <code>dim</code> floats. Caller must <code>snkv_free(*ppVec)</code>.</p>
+          <p class="fn-desc">Fetch the stored float32 vector. <code>*ppVec</code> is a flat array of <code>dim</code> floats. Caller must <code>snkv_free(*ppVec)</code>. TTL-aware: returns <code>KVSTORE_NOTFOUND</code> if the key is missing or expired. Returns <code>KVVEC_INDEX_DROPPED</code> after <code>kvstore_vec_drop_index</code>.</p>
         </div>
 
         <div class="fn-entry">
           <h3 class="fn-name">kvstore_vec_get_metadata</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_get_metadata</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey, <span class="kw">void</span> **ppMeta, <span class="kw">int</span> *pnMeta);</div>
-          <p class="fn-desc">Fetch JSON metadata bytes. Returns <code>KVSTORE_OK</code> with <code>*ppMeta=NULL</code> when no metadata has ever been written to this store (tags CF does not yet exist). Returns <code>KVSTORE_NOTFOUND</code> with <code>*ppMeta=NULL</code> when the tags CF exists but this specific key has no metadata. Both cases are not errors. Caller must <code>snkv_free(*ppMeta)</code> on <code>KVSTORE_OK</code> with non-NULL result.</p>
+          <p class="fn-desc">Fetch JSON metadata bytes. TTL-aware: returns <code>KVSTORE_NOTFOUND</code> with <code>*ppMeta=NULL</code> if the key is missing or expired. For a live key: returns <code>KVSTORE_OK</code> with <code>*ppMeta=NULL</code> when no metadata has ever been written to this store (tags CF does not yet exist), and <code>KVSTORE_NOTFOUND</code> with <code>*ppMeta=NULL</code> when this key has no metadata. Neither is an error. Metadata stays readable after the store is reopened. Caller must <code>snkv_free(*ppMeta)</code> on <code>KVSTORE_OK</code> with non-NULL result.</p>
         </div>
 
         <div class="fn-entry">
@@ -1553,7 +1563,7 @@ KVStore *plain = <span class="kw">NULL</span>;
   KVVecSearchResult  **ppResults,
   <span class="kw">int</span>                 *pnResults
 );</div>
-          <p class="fn-desc">Approximate nearest-neighbour search. Expired keys are filtered out transparently. Results are sorted ascending by distance. Caller must pass the array to <code>kvstore_vec_free_results</code>. Returns <code>KVVEC_INDEX_EMPTY</code> if no vectors have been inserted, <code>KVVEC_INDEX_DROPPED</code> after <code>kvstore_vec_drop_index</code>.</p>
+          <p class="fn-desc">Approximate nearest-neighbour search. Expired keys are filtered out transparently (without replacement, so fewer than <code>top_k</code> results can come back; rerank's oversampling makes this less likely). Values are read only for the results returned. Results are sorted ascending by distance. Caller must pass the array to <code>kvstore_vec_free_results</code>. Returns <code>KVVEC_INDEX_EMPTY</code> if no vectors have been inserted, <code>KVVEC_INDEX_DROPPED</code> after <code>kvstore_vec_drop_index</code>.</p>
           <pre><span class="kw">float</span> q[<span class="nm">128</span>] = { <span class="cm">/* ... */</span> };
 KVVecSearchResult *res = <span class="kw">NULL</span>; <span class="kw">int</span> n = <span class="nm">0</span>;
 
@@ -1590,7 +1600,7 @@ KVVecSearchResult *res = <span class="kw">NULL</span>; <span class="kw">int</spa
         <div class="fn-entry">
           <h3 class="fn-name">kvstore_vec_delete</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_delete</span>(KVVecStore *pVS, <span class="kw">const void</span> *pKey, <span class="kw">int</span> nKey);</div>
-          <p class="fn-desc">Delete the key from the KV store, all 5 vector CFs, and the HNSW index — all in one atomic transaction. Returns <code>KVSTORE_NOTFOUND</code> if the key does not exist.</p>
+          <p class="fn-desc">Delete the key's value and its vector, label and metadata rows in one atomic transaction, then remove it from the HNSW index after the commit. Returns <code>KVSTORE_NOTFOUND</code> if the key does not exist.</p>
         </div>
       </section>
 
@@ -1626,8 +1636,8 @@ KVVecSearchResult *res = <span class="kw">NULL</span>; <span class="kw">int</spa
             <tr><td><code>count</code></td><td>Active vectors in HNSW index (<code>usearch_size</code>)</td></tr>
             <tr><td><code>capacity</code></td><td>Allocated HNSW capacity</td></tr>
             <tr><td><code>fill_ratio</code></td><td><code>count / capacity</code> — 0–1 ratio (multiply by 100 for %). Auto-doubles at 0.9.</td></tr>
-            <tr><td><code>vec_cf_count</code></td><td>Entries in <code>_snkv_vec_</code> CF (may include expired)</td></tr>
-            <tr><td><code>has_metadata</code></td><td>1 if <code>_snkv_vec_tags_</code> CF exists</td></tr>
+            <tr><td><code>vec_cf_count</code></td><td>Entries in the <code>__snkv_vec__</code> CF (may include expired)</td></tr>
+            <tr><td><code>has_metadata</code></td><td>1 if the <code>__snkv_vec_tags__</code> CF exists</td></tr>
             <tr><td><code>sidecar_enabled</code></td><td>1 for unencrypted file-backed stores</td></tr>
           </table>
         </div>
@@ -1640,13 +1650,13 @@ KVVecSearchResult *res = <span class="kw">NULL</span>; <span class="kw">int</spa
         <div class="fn-entry">
           <h3 class="fn-name">kvstore_vec_purge_expired</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_purge_expired</span>(KVVecStore *pVS, <span class="kw">int</span> *pnDeleted);</div>
-          <p class="fn-desc">Scan the <code>_snkv_vec_</code> CF and delete all expired vectors from every CF and the HNSW index in one atomic transaction. <code>*pnDeleted</code> (may be <code>NULL</code>) is set to the number removed. Use this in preference to <code>kvstore_purge_expired</code> to keep vector CFs in sync. Returns <code>KVSTORE_OK</code> (0 deleted) when there are no TTL entries.</p>
+          <p class="fn-desc">Scan the <code>__snkv_vec__</code> CF and delete all expired (or orphaned) vectors from every vector CF and the HNSW index, in batches of up to 64 per transaction (build-time setting <code>KVVEC_PURGE_BATCH</code>), so memory stays bounded however many keys expired. If a later batch fails, earlier batches stay deleted and the error is returned. <code>*pnDeleted</code> (may be <code>NULL</code>) is set to the number removed. Use this in preference to <code>kvstore_purge_expired</code> to keep vector CFs in sync. Returns <code>KVSTORE_OK</code> (0 deleted) when there are no TTL entries.</p>
         </div>
 
         <div class="fn-entry">
           <h3 class="fn-name">kvstore_vec_drop_index</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_vec_drop_index</span>(KVVecStore *pVS);</div>
-          <p class="fn-desc">Drop all five <code>_snkv_vec*_</code> column families and free the in-memory HNSW index. KV data in the default CF is preserved and readable via <code>kvstore_vec_get</code>. After this call, <code>kvstore_vec_search</code> returns <code>KVVEC_INDEX_DROPPED</code>. Sidecar files are removed.</p>
+          <p class="fn-desc">Drop all five <code>__snkv_vec*__</code> column families in one transaction and free the in-memory HNSW index. KV data in the default CF is preserved and readable via <code>kvstore_vec_get</code>. After this call, <code>kvstore_vec_search</code> returns <code>KVVEC_INDEX_DROPPED</code>; the drop persists across reopen. Sidecar files are removed. Returns <code>KVSTORE_BUSY</code> if an iterator is open on the store; on any error the index is kept and the error is returned.</p>
           <pre><span class="fn">kvstore_vec_drop_index</span>(vs);    <span class="cm">/* index gone, KV intact */</span>
 
 <span class="kw">void</span> *v = <span class="kw">NULL</span>; <span class="kw">int</span> n = <span class="nm">0</span>;
@@ -1666,24 +1676,25 @@ make vector
 make vector-examples
 make run-vector-examples
 
-<span class="cm"># Build and run the test suite (150 tests)</span>
+<span class="cm"># Build and run the test suite</span>
 make test-vector</pre>
 
         <h3 style="margin:1rem 0 0.4rem;">Internal storage (5 Column Families)</h3>
         <table class="prop-table">
-          <tr><td><code>_snkv_vec_</code></td><td>key → float32[dim] — stored vector</td></tr>
-          <tr><td><code>_snkv_vec_idk_</code></td><td>key → uint64 label (8B big-endian) — maps key to HNSW label</td></tr>
-          <tr><td><code>_snkv_vec_idi_</code></td><td>uint64 label → key — reverse lookup used during search</td></tr>
-          <tr><td><code>_snkv_vec_meta_</code></td><td>config keys: <code>ndim</code>, <code>metric</code>, <code>connectivity</code>, <code>expansion_add</code>, <code>expansion_search</code>, <code>dtype</code>, <code>next_id</code></td></tr>
-          <tr><td><code>_snkv_vec_tags_</code></td><td>key → JSON bytes — created lazily on first metadata write</td></tr>
+          <tr><td><code>__snkv_vec__</code></td><td>key → float32[dim] — stored vector</td></tr>
+          <tr><td><code>__snkv_vec_idk__</code></td><td>key → uint64 label (8B big-endian) — maps key to HNSW label</td></tr>
+          <tr><td><code>__snkv_vec_idi__</code></td><td>uint64 label → key — reverse lookup used during search</td></tr>
+          <tr><td><code>__snkv_vec_meta__</code></td><td>config keys: <code>ndim</code>, <code>metric</code>, <code>connectivity</code>, <code>expansion_add</code>, <code>expansion_search</code>, <code>dtype</code>, <code>next_id</code></td></tr>
+          <tr><td><code>__snkv_vec_tags__</code></td><td>key → JSON bytes — created lazily on first metadata write</td></tr>
         </table>
+        <p class="fn-desc" style="margin-top:0.4rem;">Stores created by older versions used single-underscore names (<code>_snkv_vec_</code> …); they are renamed automatically on open.</p>
 
         <h3 style="margin:1rem 0 0.4rem;">Sidecar files</h3>
         <table class="prop-table">
           <tr><td><code>{path}.usearch</code></td><td>usearch HNSW binary graph — saved on close, loaded on open</td></tr>
           <tr><td><code>{path}.usearch.nid</code></td><td>8-byte big-endian next-id stamp — used to detect stale sidecars</td></tr>
         </table>
-        <div class="note" style="margin-top:0.8rem;">Sidecar persistence is disabled for encrypted stores and in-memory stores (<code>zPath=NULL</code>). If the stamp in <code>.usearch.nid</code> does not match the stored <code>next_id</code> the sidecar is discarded and the index is rebuilt from the CFs.</div>
+        <div class="note" style="margin-top:0.8rem;">Sidecar persistence is disabled for encrypted stores and in-memory stores (<code>zPath=NULL</code>). The sidecar is used only if the stamp in <code>.usearch.nid</code> matches the stored <code>next_id</code> <strong>and</strong> it holds exactly as many vectors as the database; otherwise it is discarded and the index is rebuilt from the CFs. Both files are deleted once loaded, so they exist only after a clean <code>kvstore_vec_close</code> — after a crash the next open rebuilds instead of loading a stale index. Opening a store with a password deletes any sidecar left by an earlier unencrypted session.</div>
       </section>
 
     </div><!-- /panel-c -->

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
 ** checkpoint_demo.c
-** Demonstrates: walSizeLimit auto-checkpoint and manual kvstore_checkpoint()
+** Demonstrates: walAutoCheckpoint (page-based auto-checkpoint, on by
+** default at 1000 pages) and manual kvstore_checkpoint()
 */
 
 #define SNKV_IMPLEMENTATION
@@ -12,17 +13,19 @@
 /* ------------------------------------------------------------------ */
 static void example_auto_checkpoint(void)
 {
-    printf("=== Auto-Checkpoint via walSizeLimit ===\n");
+    printf("=== Auto-Checkpoint via walAutoCheckpoint ===\n");
 
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    cfg.walSizeLimit = 20;   /* checkpoint every 20 committed write transactions */
+    cfg.walAutoCheckpoint = 20;   /* checkpoint once the WAL holds 20 pages
+                                  ** (0 = default 1000 pages, -1 = off) */
 
     KVStore *db;
     int rc = kvstore_open_v2("ckpt_auto.db", &db, &cfg);
-    printf("  open (walSizeLimit=20): %s\n", rc == KVSTORE_OK ? "OK" : "FAIL");
+    printf("  open (walAutoCheckpoint=20 pages): %s\n", rc == KVSTORE_OK ? "OK" : "FAIL");
 
-    /* Write 60 records -- 3 auto-checkpoints will fire automatically */
+    /* Write 60 records, one commit each -- the WAL passes 20 pages
+    ** repeatedly, so auto-checkpoints fire automatically */
     int i;
     for (i = 0; i < 60; i++) {
         char key[32], val[32];
@@ -30,7 +33,10 @@ static void example_auto_checkpoint(void)
         int nv = snprintf(val, sizeof(val), "val_%04d", i);
         kvstore_put(db, key, nk, val, nv);
     }
-    printf("  wrote 60 records (3 auto-checkpoints fired at commits 20, 40, 60)\n");
+    KVStoreStats st;
+    kvstore_stats(db, &st);
+    printf("  wrote 60 records (%llu auto-checkpoints fired)\n",
+           (unsigned long long)st.nCheckpoints);
 
     /* Manual PASSIVE checkpoint -- all frames already copied by auto-checkpoints */
     int nLog = 0, nCkpt = 0;
@@ -52,7 +58,7 @@ static void example_manual_checkpoint(void)
 
     KVStoreConfig cfg = {0};
     cfg.journalMode  = KVSTORE_JOURNAL_WAL;
-    cfg.walSizeLimit = 0;   /* no auto-checkpoint -- we control it manually */
+    cfg.walAutoCheckpoint = -1;   /* no auto-checkpoint -- we control it manually */
 
     KVStore *db;
     kvstore_open_v2("ckpt_manual.db", &db, &cfg);
