@@ -986,7 +986,8 @@ int kvstore_sync(KVStore *pKV);
 ** Reclaims unused pages and shrinks the database file.
 ** Databases are always opened with incremental auto-vacuum enabled,
 ** so this function can be called at any time to reclaim space.
-** Returns KVSTORE_BUSY while an iterator is open (vacuum moves pages).
+** Safe while iterators are open: cursor positions are saved before pages
+** move, so an iterator continues from its current key.
 **
 ** Parameters:
 **   pKV    - KVStore handle

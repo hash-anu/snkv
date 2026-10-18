@@ -719,8 +719,8 @@ static void test_sync_fsyncs(void){
 ** Test 14: incremental vacuum with cached read cursors and iterators
 ** Bug: vacuum upgraded the persistent read transaction in place, so the
 ** handles' cached read cursors stayed open while pages were moved, and the
-** read transaction was not restored afterwards.  An open iterator would be
-** left pointing at moved pages.
+** read transaction was not restored afterwards.  Vacuum is allowed while an
+** iterator is open: cursor positions are saved before pages move.
 ** -------------------------------------------------------------------- */
 static void test_vacuum_cursors(void){
   const char *db = "t_rf_vac.db";
@@ -746,10 +746,23 @@ static void test_vacuum_cursors(void){
   kvstore_cf_get(cf, "k01990", 6, &v, &n); if( v ){ snkv_free(v); v = NULL; }
   kvstore_get(kv, "k00005", 6, &v, &n);    if( v ){ snkv_free(v); v = NULL; }
 
+  /* Vacuum in the middle of an iteration: the iterator must carry on from
+  ** its key and see every kept key exactly once, in order. */
   KVIterator *it = NULL;
   CHECK(kvstore_cf_iterator_create(cf, &it) == KVSTORE_OK, "open an iterator");
-  CHECK(kvstore_incremental_vacuum(kv, 0) == KVSTORE_BUSY, "vacuum refused while an iterator is open");
+  int seen = 0, order = 1, vacRc = -1;
+  char prev[16] = "";
+  for( kvstore_iterator_first(it); !kvstore_iterator_eof(it); kvstore_iterator_next(it) ){
+    void *pk = NULL; int nk = 0;
+    if( kvstore_iterator_key(it, &pk, &nk) != KVSTORE_OK || nk >= (int)sizeof prev ){ order = 0; break; }
+    char cur[16]; memcpy(cur, pk, nk); cur[nk] = 0;
+    if( seen > 0 && strcmp(prev, cur) >= 0 ) order = 0;
+    memcpy(prev, cur, nk + 1);
+    if( ++seen == 100 ) vacRc = kvstore_incremental_vacuum(kv, 0);
+  }
   kvstore_iterator_close(it);
+  CHECK(vacRc == KVSTORE_OK, "vacuum ok while an iterator is open");
+  CHECK(seen == 200 && order, "iterator sees every kept key once, in order, across the vacuum");
 
   CHECK(kvstore_incremental_vacuum(kv, 0) == KVSTORE_OK, "vacuum ok");
   int bad = 0;
@@ -1000,6 +1013,89 @@ static void test_wal_auto_checkpoint(void){
   CHECK(nAuto == 0, "walAutoCheckpoint=-1: no auto-checkpoint");
 }
 
+/* ----------------------------------------------------------------------
+** Test 19: an orphan TTL index is emptied on open
+** A CF's TTL indexes come in pairs.  When only the expiry index exists, open
+** must empty it — even with an iterator open — or its stale rows purge the
+** CF's keys once a new key index is created.  The old cleanup dropped the
+** orphan, skipped that when an iterator was open, and a drop could move the
+** table of the CF being opened.
+** -------------------------------------------------------------------- */
+int kvstoreDropInternalCFs(KVStore *pKV, const char **azName, int nName);
+
+static void test_orphan_ttl_cleared(void){
+  const char *db = "t_rf_orphan.db";
+  printf("Test 19: orphan TTL index emptied on open\n");
+  cleanup(db);
+  KVStore *kv = NULL; KVColumnFamily *cf = NULL;
+  void *v = NULL; int n = 0, nDel = -1;
+  const char *zKeyIdx[] = { "__snkv_ttl_k__o" };
+  const char *zDefIdx[] = { "__snkv_ttl_k__default" };
+
+  /* User CF: leave only the expiry index, with a row due in 300 ms. */
+  kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL);
+  kvstore_cf_create(kv, "o", &cf);
+  kvstore_cf_put_ttl(cf, "a", 1, "1", 1, kvstore_now_ms() + 300);
+  kvstore_cf_close(cf); cf = NULL;
+  CHECK(kvstoreDropInternalCFs(kv, zKeyIdx, 1) == KVSTORE_OK, "drop the key index (orphan the expiry index)");
+
+  /* Open the CF with an iterator open (the old cleanup was skipped here). */
+  KVIterator *it = NULL;
+  kvstore_iterator_create(kv, &it);
+  CHECK(kvstore_cf_open(kv, "o", &cf) == KVSTORE_OK, "cf_open ok with an iterator open");
+  kvstore_iterator_close(it);
+  CHECK(kvstore_cf_put_ttl(cf, "b", 1, "2", 1, kvstore_now_ms() + 3600000) == KVSTORE_OK, "new TTL key (recreates the key index)");
+  usleep(400000);
+  CHECK(kvstore_cf_purge_expired(cf, &nDel) == KVSTORE_OK && nDel == 0, "purge deletes nothing: stale expiry row gone");
+  CHECK(kvstore_cf_get(cf, "a", 1, &v, &n) == KVSTORE_OK, "key whose TTL index was lost is still readable");
+  if( v ){ snkv_free(v); v = NULL; }
+  CHECK(kvstore_cf_put(cf, "c", 1, "3", 1) == KVSTORE_OK, "handle stays usable");
+  kvstore_cf_close(cf); cf = NULL;
+
+  /* Default CF: the orphan is found by kvstore_open itself. */
+  kvstore_put_ttl(kv, "d", 1, "4", 1, kvstore_now_ms() + 300);
+  kvstore_close(kv); kv = NULL;
+  kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL);
+  CHECK(kvstoreDropInternalCFs(kv, zDefIdx, 1) == KVSTORE_OK, "drop the default key index");
+  kvstore_close(kv); kv = NULL;
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL) == KVSTORE_OK, "reopen ok");
+  kvstore_put_ttl(kv, "e", 1, "5", 1, kvstore_now_ms() + 3600000);
+  usleep(400000);
+  nDel = -1;
+  CHECK(kvstore_purge_expired(kv, &nDel) == KVSTORE_OK && nDel == 0, "default CF: stale expiry row gone");
+  CHECK(kvstore_get(kv, "d", 1, &v, &n) == KVSTORE_OK, "default CF key still readable");
+  if( v ) snkv_free(v);
+  CHECK(kvstore_integrity_check(kv, NULL) == KVSTORE_OK, "integrity check");
+  kvstore_close(kv);
+  cleanup(db);
+}
+
+/* ----------------------------------------------------------------------
+** Test 20: creating an internal CF (vector store) inside kvstore_begin
+** must not commit the caller's transaction.
+** -------------------------------------------------------------------- */
+int kvstoreGetOrCreateInternalCF(KVStore *pKV, const char *zName, KVColumnFamily **ppCF);
+
+static void test_internal_cf_in_txn(void){
+  const char *db = "t_rf_icf.db";
+  printf("Test 20: internal CF created inside a caller transaction\n");
+  cleanup(db);
+  KVStore *kv = NULL; KVColumnFamily *icf = NULL;
+  void *v = NULL; int n = 0;
+  kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL);
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "begin");
+  kvstore_put(kv, "x", 1, "1", 1);
+  CHECK(kvstoreGetOrCreateInternalCF(kv, "__snkv_test_icf", &icf) == KVSTORE_OK, "create internal CF inside the transaction");
+  kvstore_cf_put(icf, "y", 1, "2", 1);
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "rollback");
+  CHECK(kvstore_get(kv, "x", 1, &v, &n) == KVSTORE_NOTFOUND, "caller's write rolled back (was not committed early)");
+  if( v ){ snkv_free(v); v = NULL; }
+  kvstore_cf_close(icf);
+  CHECK(kvstore_integrity_check(kv, NULL) == KVSTORE_OK, "integrity check");
+  kvstore_close(kv);
+  cleanup(db);
+}
+
 int main(void){
   printf("=== test_review_fixes ===\n");
   test_encrypt_user_cf_only();
@@ -1020,6 +1116,8 @@ int main(void){
   test_drop_rollback_restores_handles();
   test_enc_params_checked();
   test_wal_auto_checkpoint();
+  test_orphan_ttl_cleared();
+  test_internal_cf_in_txn();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

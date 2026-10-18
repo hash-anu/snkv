@@ -1594,13 +1594,13 @@ Write guard:
       <h2>Incremental Vacuum: Recovering Deleted Space</h2>
 
       <p>
-        Deleted data pages are placed on SQLite's internal freelist. The file does not shrink automatically. <code>kvstore_incremental_vacuum</code> uses the same auto-transaction pattern as put/delete (<code>kvstoreEnsureWrite</code> / <code>kvstoreFinishWrite</code>): it closes the cached read cursors, commits the persistent read, begins a write transaction (or joins the caller's), and restores the persistent read afterwards — on the error path too. Because vacuum moves pages, it returns <code>KVSTORE_BUSY</code> while any iterator is open. Root pages are never moved by incremental vacuum, so open CF handles stay valid.
+        Deleted data pages are placed on SQLite's internal freelist. The file does not shrink automatically. <code>kvstore_incremental_vacuum</code> uses the same auto-transaction pattern as put/delete (<code>kvstoreEnsureWrite</code> / <code>kvstoreFinishWrite</code>): it closes the cached read cursors, commits the persistent read, begins a write transaction (or joins the caller's), and restores the persistent read afterwards — on the error path too. Root pages are never moved by incremental vacuum, so open CF handles stay valid, and it is safe while iterators are open: the B-tree saves every cursor's position before moving pages, and an iterator re-seeks to its key on its next step.
       </p>
 
       <div class="diagram-block">
         <pre>Transaction handling in kvstore_incremental_vacuum:
 
-  iterator open → return KVSTORE_BUSY (vacuum would move its pages)
+  iterators open → allowed (cursor positions saved before pages move)
 
   inTrans == 1 → close cached read cursors, BtreeCommit(read)
   (read active)  → fall through ↓

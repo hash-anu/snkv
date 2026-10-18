@@ -1253,7 +1253,7 @@ printf(<span class="str">"live entries after purge: %lld\n"</span>, (<span class
         <div class="fn-entry" id="c-vacuum">
           <h3 class="fn-name">kvstore_incremental_vacuum</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_incremental_vacuum</span>(KVStore *pKV, <span class="kw">int</span> nPage);</div>
-          <p class="fn-desc">Reclaim unused pages and shrink the database file. Pass <code>0</code> to free all unused pages, or a positive <code>nPage</code> to limit work per call (good for latency-sensitive apps). Returns <code>KVSTORE_BUSY</code> while any iterator is open (vacuum moves pages) — close iterators first. Runs in its own write transaction, or inside yours if one is open.</p>
+          <p class="fn-desc">Reclaim unused pages and shrink the database file. Pass <code>0</code> to free all unused pages, or a positive <code>nPage</code> to limit work per call (good for latency-sensitive apps). Safe while iterators are open: they continue from their current key. Runs in its own write transaction, or inside yours if one is open.</p>
           <pre><span class="fn">kvstore_incremental_vacuum</span>(kv, <span class="nm">0</span>);    <span class="cm">/* free all */</span>
 <span class="fn">kvstore_incremental_vacuum</span>(kv, <span class="nm">50</span>);   <span class="cm">/* incremental: 50 pages */</span></pre>
         </div>

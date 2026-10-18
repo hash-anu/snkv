@@ -1151,6 +1151,7 @@ static void kvstoreAutoCheckpoint(KVStore *pKV){
 
 /* Early forward declarations needed by kvstore_open_v2. */
 static int kvstoreCfOpenInternal(KVStore*, const char*, KVColumnFamily**);
+static void kvstoreClearOrphanTtl(KVStore*, KVColumnFamily*, KVColumnFamily*);
 static int kvstoreRawBtreeGet(KVStore*, int, const void*, int, void**, int*);
 static int kvstoreRegisterCF(KVStore*, KVColumnFamily*);
 static void kvstoreUnregisterCF(KVStore*, KVColumnFamily*);
@@ -1452,12 +1453,16 @@ int kvstore_open_v2(
     snprintf(zExpName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_EXP_PREFIX, DEFAULT_CF_NAME);
     KVColumnFamily *pKeyCF = NULL, *pExpCF = NULL;
     KV_ENTER(pKV);
-    if( kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF) == KVSTORE_OK &&
-        kvstoreCfOpenInternal(pKV, zExpName, &pExpCF) == KVSTORE_OK ){
+    int rcKey = kvstoreCfOpenInternal(pKV, zKeyName, &pKeyCF);
+    int rcExp = kvstoreCfOpenInternal(pKV, zExpName, &pExpCF);
+    if( rcKey == KVSTORE_OK && rcExp == KVSTORE_OK ){
       pKV->pDefaultCF->pTtlKeyCF    = pKeyCF;
       pKV->pDefaultCF->pTtlExpiryCF = pExpCF;
       pKV->pDefaultCF->hasTtl       = 1;
       pKV->pDefaultCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF);
+    } else if( !readOnly ){
+      /* One TTL index without the other: a partial-write orphan. */
+      kvstoreClearOrphanTtl(pKV, pKeyCF, pExpCF);
     } else {
       if( pKeyCF ) kvstoreFreeCFStruct(pKeyCF);
       if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
@@ -1660,6 +1665,50 @@ int kvstore_begin(KVStore *pKV, int wrflag){
 
 /* Forward declaration — defined near kvstoreEnsureWrite below. */
 static void kvstoreRestorePersistentRead(KVStore *pKV);
+
+/*
+** A CF's TTL indexes come in pairs (__snkv_ttl_k__ + __snkv_ttl_e__).  If only
+** one exists — a partial-write orphan — EMPTY it (sqlite3BtreeClearTable)
+** rather than drop it.  Clearing keeps the root page, so no table moves: a
+** drop could move the table of a CF whose handle is being opened and not yet
+** registered, leaving that handle on a stale root.  Because nothing moves,
+** this is safe with iterators open, and inside the caller's write
+** transaction it simply becomes part of it (if they roll back, the next open
+** clears again).  The emptied table is reused by the next put_ttl, so stale
+** index rows can never apply to the CF's keys.  Best effort: on failure the
+** orphan is left for the next open.  Frees both structs (either may be NULL).
+** Caller holds pKV->pMutex.
+*/
+static void kvstoreClearOrphanTtl(
+  KVStore *pKV, KVColumnFamily *pKeyCF, KVColumnFamily *pExpCF
+){
+  if( pKeyCF || pExpCF ){
+    int callerTrans = (pKV->inTrans == 2);
+    int rc = SQLITE_OK;
+    if( !callerTrans ){
+      if( pKV->inTrans == 1 ){
+        kvstoreInvalidateReadCursors(pKV);
+        kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
+      }
+      rc = sqlite3BtreeBeginTrans(pKV->pBt, 1, 0);
+      if( rc == SQLITE_OK ) pKV->inTrans = 2;
+    }
+    if( rc == SQLITE_OK && pKeyCF ){
+      rc = sqlite3BtreeClearTable(pKV->pBt, pKeyCF->iTable, NULL);
+    }
+    if( rc == SQLITE_OK && pExpCF ){
+      rc = sqlite3BtreeClearTable(pKV->pBt, pExpCF->iTable, NULL);
+    }
+    if( !callerTrans && pKV->inTrans == 2 ){
+      if( rc == SQLITE_OK ) kvstoreBtreeCommit(pKV);   /* rolls back on failure */
+      else kvstoreBtreeRollback(pKV);
+      pKV->inTrans = 0;
+    }
+    if( !callerTrans ) kvstoreRestorePersistentRead(pKV);
+  }
+  if( pKeyCF ) kvstoreFreeCFStruct(pKeyCF);
+  if( pExpCF ) kvstoreFreeCFStruct(pExpCF);
+}
 
 /*
 ** Commit the current transaction.
@@ -2182,6 +2231,16 @@ int kvstoreGetOrCreateInternalCF(KVStore *pKV, const char *zName, KVColumnFamily
     /* Register like a user handle so that kvstore_close frees it, rollbacks
     ** mark it stale, and a drop that moves its root page re-points it.
     ** kvstore_cf_close unregisters it. */
+    if( rc == KVSTORE_OK && kvstoreRegisterCF(pKV, *ppCF) != KVSTORE_OK ){
+      kvstoreFreeCFStruct(*ppCF); *ppCF = NULL; rc = KVSTORE_NOMEM;
+    }
+    KV_LEAVE(pKV);
+    return rc;
+  }
+  if( pKV->inTrans == 2 ){
+    /* The caller owns a write transaction: create the CF inside it.
+    ** Committing here would commit the caller's work behind their back. */
+    rc = kvstoreCreateOrOpenHiddenCF(pKV, zName, ppCF);
     if( rc == KVSTORE_OK && kvstoreRegisterCF(pKV, *ppCF) != KVSTORE_OK ){
       kvstoreFreeCFStruct(*ppCF); *ppCF = NULL; rc = KVSTORE_NOMEM;
     }
@@ -2877,31 +2936,8 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
       pCF->hasTtl       = 1;
       pCF->nTtlActive   = kvstoreCountCFEntries(pKV, pKeyCF2);
     } else {
-      if( pKeyCF2 ){ kvstoreFreeCFStruct(pKeyCF2); pKeyCF2 = NULL; }
-      if( pExpCF2 ){ kvstoreFreeCFStruct(pExpCF2); pExpCF2 = NULL; }
-      /* One CF exists without the other — partial-write orphan. Drop it
-      ** (later, if an iterator is open: a drop may move its table's root;
-      ** or if the caller has a write transaction open: this cleanup commits
-      ** its own transaction and must not commit the caller's). */
-      if( (rcKey == KVSTORE_OK || rcExp == KVSTORE_OK) && !pKV->pIterList
-          && pKV->inTrans != 2 ){
-        if( pKV->inTrans == 1 ){
-          kvstoreInvalidateReadCursors(pKV);
-          kvstoreBtreeCommit(pKV); pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 1, 0) == SQLITE_OK ){
-          int drc = SQLITE_OK;
-          pKV->inTrans = 2;
-          if( rcKey == KVSTORE_OK ) drc = kvstoreDropHiddenCFNoLock(pKV, zKeyName);
-          if( drc == SQLITE_OK && rcExp == KVSTORE_OK )
-            drc = kvstoreDropHiddenCFNoLock(pKV, zExpName);
-          /* All or nothing: a half-done drop must not be committed. */
-          if( drc == SQLITE_OK ) kvstoreBtreeCommit(pKV);
-          else kvstoreBtreeRollback(pKV);
-          pKV->inTrans = 0;
-        }
-        if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
-      }
+      /* One TTL index exists without the other: a partial-write orphan. */
+      kvstoreClearOrphanTtl(pKV, pKeyCF2, pExpCF2);
     }
   }
 
@@ -4788,13 +4824,10 @@ int kvstore_incremental_vacuum(KVStore *pKV, int nPage){
     return KVSTORE_CORRUPT;
   }
 
-  /* Vacuum moves pages; an open iterator's cursor would be left pointing
-  ** at the old locations.  Same rule as kvstore_cf_drop. */
-  if( pKV->pIterList ){
-    kvstoreSetError(pKV, "cannot vacuum: an iterator is open");
-    KV_LEAVE(pKV);
-    return KVSTORE_BUSY;
-  }
+  /* Open iterators need no check: incremental vacuum saves every cursor's
+  ** position (saveAllCursors) before moving pages and never moves a root
+  ** page, so an iterator re-seeks to its key on its next step.  (Dropping a
+  ** CF is different: it can move another table's root page.) */
 
   /* Begin a write transaction unless the caller already has one.  The
   ** persistent read transaction is ended properly (cached read cursors
@@ -5752,6 +5785,7 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
 
   for(;;){
     int   nExpired = 0;       /* expired entries deleted in this batch */
+    int   nBatchDel = 0;      /* data rows deleted in this batch */
     int   rc = SQLITE_OK;
 
     sqlite3_mutex_enter(pCF->pMutex);
@@ -5839,13 +5873,15 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
 
         int nUserKey         = storedKeyLen - 8;
         const void *pUserKey = pExpKey + 8;
-        int rcd = kvstoreRawBtreeDelete(pKV, pCF->iTable, pUserKey, nUserKey);
-        if( rcd == SQLITE_OK ){
-          nDeleted++;
-          pKV->stats.nTtlPurged++;
-          if( pCF->nTtlActive > 0 ) pCF->nTtlActive--;
-        }
-        kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pUserKey, nUserKey);
+        /* A missing data or key-index row is tolerated (already gone); any
+        ** other error aborts the batch so it is rolled back as a whole. */
+        rc = kvstoreRawBtreeDelete(pKV, pCF->iTable, pUserKey, nUserKey);
+        if( rc == SQLITE_OK ) nBatchDel++;
+        else if( rc == KVSTORE_NOTFOUND ) rc = SQLITE_OK;
+        if( rc != SQLITE_OK ) break;
+        rc = kvstoreRawBtreeDelete(pKV, pCF->pTtlKeyCF->iTable, pUserKey, nUserKey);
+        if( rc == KVSTORE_NOTFOUND ) rc = SQLITE_OK;
+        if( rc != SQLITE_OK ) break;
         /* The expiry row must go, or the next round finds it again. */
         rc = kvstoreRawBtreeDelete(pKV, pCF->pTtlExpiryCF->iTable,
                                    pExpKey, storedKeyLen);
@@ -5871,10 +5907,21 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
       if( sqlite3BtreeBeginTrans(pKV->pBt, 0, 0) == SQLITE_OK ) pKV->inTrans = 1;
     }
 
+    /* Count the batch only once its deletes stand: a rolled-back batch
+    ** deleted nothing. */
+    if( callerTrans || rc == SQLITE_OK ){
+      nDeleted += nBatchDel;
+      pKV->stats.nTtlPurged += nBatchDel;
+      pCF->nTtlActive = pCF->nTtlActive > nBatchDel ? pCF->nTtlActive - nBatchDel : 0;
+    }
+
     KV_LEAVE(pKV);
     sqlite3_mutex_leave(pCF->pMutex);
 
-    if( rc != SQLITE_OK ) return rc;
+    if( rc != SQLITE_OK ){
+      if( pnDeleted ) *pnDeleted = nDeleted;     /* committed before the error */
+      return rc;
+    }
     /* If we found fewer than a full batch, there are no more expired keys. */
     if( nExpired < KVSTORE_PURGE_BATCH ) break;
   }
@@ -6724,7 +6771,9 @@ static int kvstoreRewriteCFTable(
                              pText, (size_t)nText) != 0 ){
         rc = KVSTORE_AUTH_FAILED; break;
       }
-      platformRandBytes(pVal, SNKV_ENC_NONCE_LEN);
+      if( platformRandBytes(pVal, SNKV_ENC_NONCE_LEN) != 0 ){
+        rc = KVSTORE_ERROR; break;                 /* never reuse a nonce */
+      }
       crypto_aead_lock(pText, pMac, aNewKey, pVal, NULL, 0,
                        pText, (size_t)nText);
     }else if( aOldKey ){
