@@ -929,6 +929,77 @@ static void test_enc_params_checked(void){
   cleanup(db);
 }
 
+/* ----------------------------------------------------------------------
+** Test 18: page-based WAL auto-checkpoint keeps the WAL bounded
+** Before: SNKV never checkpointed by default (only an opt-in commit-count
+** setting existed), so the WAL
+** grew to the size of the database and every page-cache miss had to search
+** an ever larger WAL index.  Now a PASSIVE checkpoint runs whenever the WAL
+** reaches walAutoCheckpoint pages (default 1000, as in SQLite).
+** The WAL size is read through kvstore_checkpoint()'s pnLog (frames in the
+** WAL), which works on Windows too (stat() sizes of open files do not).
+** -------------------------------------------------------------------- */
+/* Write nCommit transactions of 100 x 1 KB values; return the WAL size in
+** frames (measured by a PASSIVE checkpoint) and the auto-checkpoint count. */
+static void walauto_run(const char *db, int walAutoCheckpoint, int nCommit,
+                        int *pnLog, long long *pnAuto){
+  KVStoreConfig cfg; memset(&cfg, 0, sizeof cfg);
+  cfg.journalMode = KVSTORE_JOURNAL_WAL;
+  cfg.walAutoCheckpoint = walAutoCheckpoint;
+  KVStore *kv = NULL;
+  cleanup(db);
+  *pnLog = -1; *pnAuto = -1;
+  if( kvstore_open_v2(db, &kv, &cfg) != KVSTORE_OK ) return;
+  static char val[1024];
+  memset(val, 'w', sizeof val);
+  char key[32];
+  for( int c = 0; c < nCommit; c++ ){
+    kvstore_begin(kv, 1);
+    for( int i = 0; i < 100; i++ ){
+      snprintf(key, sizeof key, "k%06d", c * 100 + i);
+      kvstore_put(kv, key, (int)strlen(key), val, (int)sizeof val);
+    }
+    kvstore_commit(kv);
+  }
+  KVStoreStats st;
+  kvstore_stats(kv, &st);
+  *pnAuto = (long long)st.nCheckpoints;
+  int nLog = -1, nCkpt = -1;
+  kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+  *pnLog = nLog;
+  /* The data must be intact whatever the checkpoint setting. */
+  void *v = NULL; int n = 0;
+  snprintf(key, sizeof key, "k%06d", nCommit * 100 - 1);
+  if( kvstore_get(kv, key, (int)strlen(key), &v, &n) != KVSTORE_OK || n != (int)sizeof val ) *pnLog = -2;
+  if( v ) snkv_free(v);
+  if( kvstore_integrity_check(kv, NULL) != KVSTORE_OK ) *pnLog = -3;
+  kvstore_close(kv);
+  cleanup(db);
+}
+
+static void test_wal_auto_checkpoint(void){
+  const char *db = "t_rf_walauto.db";
+  int nLog; long long nAuto;
+  char msg[128];
+  printf("Test 18: page-based WAL auto-checkpoint\n");
+
+  /* 80 commits x ~30 pages each ≈ 2400 WAL pages written in total. */
+  walauto_run(db, 0, 80, &nLog, &nAuto);           /* default: 1000 pages */
+  snprintf(msg, sizeof msg, "default: WAL stays bounded (%d frames, limit 1000 + one commit)", nLog);
+  CHECK(nLog >= 0 && nLog < KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT + 200, msg);
+  CHECK(nAuto >= 1, "default: auto-checkpoint ran");
+
+  walauto_run(db, 200, 80, &nLog, &nAuto);         /* custom: 200 pages */
+  snprintf(msg, sizeof msg, "walAutoCheckpoint=200: WAL stays bounded (%d frames)", nLog);
+  CHECK(nLog >= 0 && nLog < 200 + 200, msg);
+  CHECK(nAuto >= 5, "walAutoCheckpoint=200: checkpoints ran repeatedly");
+
+  walauto_run(db, -1, 80, &nLog, &nAuto);          /* disabled */
+  snprintf(msg, sizeof msg, "walAutoCheckpoint=-1: WAL grows (%d frames)", nLog);
+  CHECK(nLog > KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT + 200, msg);
+  CHECK(nAuto == 0, "walAutoCheckpoint=-1: no auto-checkpoint");
+}
+
 int main(void){
   printf("=== test_review_fixes ===\n");
   test_encrypt_user_cf_only();
@@ -948,6 +1019,7 @@ int main(void){
   test_cf_limit();
   test_drop_rollback_restores_handles();
   test_enc_params_checked();
+  test_wal_auto_checkpoint();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

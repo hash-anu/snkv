@@ -798,15 +798,14 @@
   ├─ pKeyInfo     → KeyInfo*           shared BLOBKEY comparator (all CFs)
   ├─ iMetaTable   → int                INTKEY B-tree root for CF metadata
   ├─ inTrans      → int                0=none  1=read  2=write
-  ├─ isCorrupted  → int                set by integrity_check on failure
+  ├─ isCorrupted  → int                set when SQLITE_CORRUPT is seen
   ├─ closing      → int                set to 1 in kvstore_close()
-  ├─ zErrMsg      → char*              last error string (owned)
-  ├─ pMutex       → sqlite3_mutex*     SQLITE_MUTEX_RECURSIVE (store-level)
+  ├─ zErrMsg[256] → char[]             last error string (fixed buffer, never freed)
+  ├─ pMutex       → sqlite3_mutex*     RECURSIVE store lock, only if fullMutex=1 (else NULL)
   ├─ pDefaultCF   → KVColumnFamily*    always-open default column family
   ├─ apCF[]       → KVColumnFamily**   open named column families
   ├─ stats        → KVStoreStats       {nPuts nGets nDeletes nIterations nErrors}
-  ├─ walSizeLimit → int                auto-checkpoint every N commits (0=off)
-  └─ walCommits   → int                commits since last auto-checkpoint
+  └─ walAutoCkptPages → int            checkpoint when WAL ≥ N pages (default 1000, 0=off)
 
 KVColumnFamily
   ├─ pKV          → KVStore*           parent store (back-pointer)
@@ -926,11 +925,15 @@ Step 2  Resolve config defaults (zero → default)
         journalMode == 0   →  KVSTORE_JOURNAL_WAL
         syncLevel   == 0   →  KVSTORE_SYNC_NORMAL
         cacheSize   == 0   →  2000 pages   (~8 MB at 4 KiB/page)
+        cacheSize   &lt;  0   →  memory budget in KiB (e.g. -256 ≈ 256 KB)
         pageSize    == 0   →  4096 bytes   (only applies to new DBs)
         busyTimeout == 0   →  no busy retry
-        walSizeLimit== 0   →  WAL auto-checkpoint disabled
+        walAutoCheckpoint==0 → 1000 pages  (page-based auto-checkpoint, as SQLite;
+                              &lt; 0 = off)
 
-Step 3  Allocate KVStore { db, pMutex=RECURSIVE, inTrans=0, closing=0 }
+Step 3  Allocate KVStore { db, inTrans=0, closing=0 }
+        pMutex = RECURSIVE only if cfg.fullMutex == 1, else NULL
+        (KV_ENTER / KV_LEAVE are no-ops when pMutex is NULL)
 
 Step 4  sqlite3BtreeOpen(vfs, path, db, &pBt, 0, flags)
         flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
@@ -971,8 +974,8 @@ Step 11 Detect new vs. existing database
 Step 12 Allocate shared KeyInfo { enc=UTF8, nKeyField=1, db=pKV->db }
         Used by ALL BLOBKEY cursor comparisons across all CFs
 
-Step 13 pKV->walSizeLimit = cfg.walSizeLimit
-        pKV->walCommits   = 0
+Step 13 WAL auto-checkpoint threshold:
+        pKV->walAutoCkptPages = cfg.walAutoCheckpoint (0 → 1000, &lt; 0 → 0 = off)
 
 Step 14 Open persistent read transaction
         sqlite3BtreeBeginTrans(pBt, 0, 0)
@@ -984,7 +987,7 @@ Step 14 Open persistent read transaction
       <h3 id="close-sequence">Closing a Store</h3>
 
       <p>
-        <code>kvstore_close</code> sets <code>closing=1</code> under the mutex before freeing anything. Every public API function checks this flag immediately after acquiring the mutex and returns an error if set. This prevents any use-after-free scenario when another thread is mid-operation as close begins.
+        <code>kvstore_close</code> sets <code>closing=1</code> before freeing anything (under the store mutex when the store was opened with <code>fullMutex=1</code>). Every public API function checks this flag on entry and returns an error if set. With <code>fullMutex=1</code> this prevents use-after-free when another thread is mid-operation as close begins; without it, a handle must not be used from another thread while it is being closed.
       </p>
 
       <div class="code-block">
@@ -992,7 +995,7 @@ Step 14 Open persistent read transaction
           <span class="code-block-label">kvstore_close — teardown order</span>
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
-        <pre>sqlite3_mutex_enter(pKV->pMutex)
+        <pre>KV_ENTER(pKV)                      ← store mutex, only if fullMutex=1
 pKV->closing = 1                   ← racing threads bail here
 
 if inTrans > 0:
@@ -1011,8 +1014,8 @@ free(pKeyInfo), free(zErrMsg)
 sqlite3_mutex_free(db->mutex)
 free(db)
 
-sqlite3_mutex_leave(pKV->pMutex)
-sqlite3_mutex_free(pKV->pMutex)    ← freed LAST, after all resources gone
+KV_LEAVE(pKV)
+sqlite3_mutex_free(pKV->pMutex)    ← freed LAST (if it exists)
 free(pKV)</pre>
       </div>
     </div>
@@ -1119,6 +1122,12 @@ WHY commit before upgrading to write (WAL mode)?
 [FAILURE + autoTrans]:
   sqlite3BtreeRollback(pBt, SQLITE_OK, 0)
   inTrans = 0
+
+[COMMIT FAILS + autoTrans]  (e.g. SQLITE_BUSY, I/O error):
+  kvstoreBtreeCommit rolls back at once — a failed internal commit
+  never leaves half-applied changes for a later commit to pick up.
+  (Explicit kvstore_commit instead keeps the transaction open so the
+   caller can retry or roll back.)
   // put/delete: persistent read NOT restored on error path
   // rollback(): persistent read IS always restored if !closing
   //   → kvstore_rollback always calls BtreeBeginTrans(0) after rollback
@@ -1144,7 +1153,7 @@ Benefit:
       <h3 id="put">Put — Stack-First Encoding + Write Cursor</h3>
 
       <p>
-        Every <code>kvstore_put</code> acquires the CF mutex, then the store mutex (in that order — always), validates key/value sizes (key: 1–64 KiB; value: 0–10 MiB), and encodes the blob on the stack before touching the B-tree.
+        Every <code>kvstore_put</code> acquires the CF mutex, then the store mutex if the store was opened with <code>fullMutex=1</code> (in that order — always), validates key/value sizes (key: 1–64 KiB; value: 0–10 MiB), and encodes the blob on the stack before touching the B-tree.
       </p>
 
       <div class="code-block">
@@ -1153,7 +1162,7 @@ Benefit:
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
         <pre>sqlite3_mutex_enter(pCF->pMutex)        ← CF lock first
-sqlite3_mutex_enter(pKV->pMutex)        ← then store lock
+KV_ENTER(pKV)                           ← then store lock (fullMutex=1 only)
 
 // Encode on stack — no heap alloc for small payloads
 unsigned char stackBuf[512];
@@ -1180,8 +1189,11 @@ pKV->stats.nPuts++
 
 // autoTrans commit + persistent read restore (see §auto-txn)
 
-sqlite3_mutex_leave(pKV->pMutex)
-sqlite3_mutex_leave(pCF->pMutex)</pre>
+KV_LEAVE(pKV)
+sqlite3_mutex_leave(pCF->pMutex)
+
+// Encrypted store: the value is encrypted straight into the blob
+// ([len][key][nonce][ciphertext][mac]) — one copy, not two.</pre>
       </div>
 
       <h3 id="get">Get — Zero-Malloc Fast Path</h3>
@@ -1234,7 +1246,8 @@ if res != 0: return KVSTORE_NOTFOUND
 // Cell: [00 00 00 06][user:1][Alice]
 BtreePayload(pCur, 0, 4, hdr)      → storedKeyLen = 6
 valLen = payloadSz - 4 - 6         = 5
-BtreePayload(pCur, 4+6, 5, buf)    → "Alice"
+BtreePayload(pCur, 4+6, 5, buf)    → "Alice"   (value part only)
+// encrypted store: verify MAC + decrypt in place in buf (no 2nd buffer)
 
 // pReadCur stays open — no close, no free
 pKV->stats.nGets++
@@ -1244,7 +1257,7 @@ pKV->stats.nGets++
 
       <div class="callout">
         <div class="callout-title">Cursor Safety After Writes</div>
-        <p>SQLite cursors transition to <code>REQUIRESSEEK</code> state when pages they reference are modified by a concurrent write. The next call to <code>BtreeIndexMoveto</code> transparently restores the cursor position. This makes reusing <code>pReadCur</code> across writes correct — no explicit invalidation is needed.</p>
+        <p>Within a transaction, SQLite cursors transition to <code>REQUIRESSEEK</code> when pages they reference are modified by a write on the same connection, and the next <code>BtreeIndexMoveto</code> transparently restores the position — so <code>pReadCur</code> can be reused across writes inside one transaction. Cached cursors are explicitly closed (<code>kvstoreInvalidateReadCursors</code>) whenever the persistent read transaction is ended for a write, and before a table is dropped, since a drop can move another table's root page.</p>
       </div>
 
       <h3 id="delete">Delete</h3>
@@ -1289,9 +1302,13 @@ Leaf after:  [user:0][user:2]
         <pre>kvstore_cf_create(kv, "logs", &cf)
 
   Validate name: non-null · 1–255 chars · not "default"
+                 · must not start with "__" or "_snkv_" (reserved)
 
   Check CF does not already exist:
     kvstoreMetaSeekKey("logs") → found? → error (already exists)
+
+  Enforce the limit (KVSTORE_MAX_COLUMN_FAMILIES = 64 incl. default):
+    kvstoreCountUserCFs() ≥ 63 → error (internal CFs not counted)
 
   Create new BLOBKEY table:
     sqlite3BtreeCreateTable(pBt, &pgno, BTREE_BLOBKEY)
@@ -1328,7 +1345,7 @@ Leaf after:  [user:0][user:2]
       </p>
 
       <p>
-        <code>kvstore_cf_drop</code> performs its steps in this exact order: (1) delete the metadata row from the INTKEY table via <code>BtreeDelete</code>, (2) drop the CF's data B-tree via <code>BtreeDropTable</code> (moves all pages to freelist), (3) decrement the CF count via <code>UpdateMeta</code>. The metadata row is removed <em>before</em> the table is dropped — not after — so a crash mid-sequence leaves an orphaned metadata entry rather than an unreferenced live table, which is the safer failure mode.
+        <code>kvstore_cf_drop</code> refuses with <code>KVSTORE_BUSY</code> while a handle to that CF or any iterator is open. Then, in one write transaction: (1) overwrite the metadata row with a <em>tombstone</em> (not a delete, so other CFs' hash-probe chains stay intact), (2) close cached read cursors and drop the data B-tree via <code>BtreeDropTable</code>, (3) because auto-vacuum moves the table with the highest root page into the freed slot, rewrite that table's metadata row and re-point every open handle to it (each move is logged so a rollback can undo it), (4) drop the CF's two TTL index CFs if present, (5) decrement the CF count. Steps 3–5 are all-or-nothing: any error rolls the whole drop back. Since everything is one transaction, a crash leaves either the old or the new state, never a half-dropped CF.
       </p>
     </div>
 
@@ -1413,7 +1430,10 @@ Note: contrast with kvstoreSeekKey() (get/exists/delete) which uses
       <h2>Two-Level Recursive Mutex Locking</h2>
 
       <p>
-        SNKV uses two levels of <code>SQLITE_MUTEX_RECURSIVE</code> mutexes. The CF-level mutex protects per-CF state (<code>pReadCur</code>, <code>refCount</code>); the store-level mutex protects global state (<code>inTrans</code>, <code>stats</code>, <code>closing</code>). The lock order is always CF mutex first, then store mutex — consistent ordering eliminates deadlock.
+        SNKV uses two levels of <code>SQLITE_MUTEX_RECURSIVE</code> mutexes. The CF-level mutex protects per-CF state (<code>pReadCur</code>, <code>refCount</code>) and is always allocated. The store-level mutex protects global state (<code>inTrans</code>, <code>stats</code>, <code>closing</code>) and is <strong>opt-in</strong>: it exists only when the store is opened with <code>KVStoreConfig.fullMutex = 1</code>; otherwise <code>KV_ENTER</code> / <code>KV_LEAVE</code> compile to a NULL check and cost nothing. The lock order is always CF mutex first, then store mutex — consistent ordering eliminates deadlock.
+      </p>
+      <p>
+        So: share one <code>KVStore*</code> across threads only with <code>fullMutex = 1</code>. The default (single-threaded use, or one handle per thread — WAL coordinates separate handles) skips the store lock entirely. The diagram below shows the <code>fullMutex = 1</code> case.
       </p>
 
       <div class="diagram-block">
@@ -1470,10 +1490,10 @@ unlock(logs.pMutex)                       unlock(metrics.pMutex)</pre>
       <div class="section-label">09 — WAL &amp; Checkpointing</div>
       <h2>WAL Growth and Auto-Checkpoint</h2>
 
-      <h3>Why the WAL Grows Unboundedly by Default</h3>
+      <h3>Why SNKV Needs Its Own Auto-Checkpoint</h3>
 
       <p>
-        SQLite's built-in 1000-frame WAL auto-checkpoint hook is registered inside <code>sqlite3OpenTail</code> via <code>sqlite3_wal_hook</code>. Because SNKV opens via <code>sqlite3BtreeOpen</code> — not <code>sqlite3Open</code> — that hook is never installed. The WAL appends frames indefinitely until <code>kvstore_close</code> triggers <code>sqlite3WalClose</code>, which performs a final checkpoint.
+        SQLite's built-in 1000-frame WAL auto-checkpoint hook is registered inside <code>sqlite3OpenTail</code> via <code>sqlite3_wal_hook</code>. Because SNKV opens via <code>sqlite3BtreeOpen</code> — not <code>sqlite3Open</code> — that hook is never installed. Without a replacement the WAL would append frames indefinitely until <code>kvstore_close</code> triggers <code>sqlite3WalClose</code>, growing to roughly the size of the database. That is not just a disk-space issue: every page-cache miss must look the page up in the WAL index (<code>walFindFrame</code> probes one hash table per 4096 frames) and read it from the WAL file. On a 1M-row store an unbounded WAL (129 MB) cost SNKV 8–16% on random reads, exists checks and the mixed workload.
       </p>
 
       <div class="diagram-block">
@@ -1482,20 +1502,20 @@ unlock(logs.pMutex)                       unlock(metrics.pMutex)</pre>
 │ sqlite3Open()                 │          │ sqlite3BtreeOpen()             │
 │  └── sqlite3OpenTail()        │          │   (no OpenTail → no wal hook)  │
 │        └── sqlite3_wal_hook() │          │                                │
-│              registers        │          │  WAL frames accumulate freely  │
-│              1000-frame        │          │  until kvstore_close() calls   │
-│              auto-checkpoint  │          │  sqlite3WalClose() on last conn │
+│              registers        │          │  kvstoreAutoCheckpoint() runs  │
+│              1000-frame        │          │  after each commit: same rule, │
+│              auto-checkpoint  │          │  walAutoCheckpoint = 1000 pages│
 └───────────────────────────────┘          └────────────────────────────────┘</pre>
       </div>
 
       <h3>kvstoreAutoCheckpoint — the TRANS_NONE Window</h3>
 
       <p>
-        SNKV solves this with a commit counter checked in the <em>TRANS_NONE window</em> — the brief period after <code>BtreeCommit</code> releases the write lock but before the persistent read transaction is restored. A PASSIVE checkpoint can run safely here because no lock is held.
+        After every committed write, SNKV checks its triggers in the <em>TRANS_NONE window</em> — the brief period after <code>BtreeCommit</code> releases the write lock but before the persistent read transaction is restored. A PASSIVE checkpoint can run safely here because this connection holds no lock.
       </p>
 
       <p>
-        The implementation counts commits rather than WAL frames because <code>Btree</code> is an opaque typedef in <code>kvstore.c</code> — accessing <code>pBt->pPager</code> to read the WAL frame counter would be a compile error against the internal header. A commit counter is sufficient and cannot overflow: it resets to 0 on every checkpoint fire, so its maximum value is <code>walSizeLimit - 1</code>.
+        The primary trigger is <strong>page-based</strong>, exactly like SQLite: <code>sqlite3PagerWalCallback(sqlite3BtreePager(pBt))</code> returns the number of frames in the WAL as of the last commit (and resets it, as SQLite's VDBE does before calling its wal hook). If that is at least <code>walAutoCheckpoint</code> pages (default 1000 ≈ 4 MB), a PASSIVE checkpoint runs. Counting pages rather than commits keeps the WAL bounded whatever the commit size — one commit may write 1 page or 10,000.
       </p>
 
       <div class="code-block">
@@ -1504,23 +1524,24 @@ unlock(logs.pMutex)                       unlock(metrics.pMutex)</pre>
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
         <pre>kvstoreAutoCheckpoint(pKV):
-  if walSizeLimit == 0: return        ← disabled
+  nFrame = sqlite3PagerWalCallback(sqlite3BtreePager(pBt))
+           // frames in the WAL after the last commit; 0 if not WAL mode
 
-  walCommits++
-  if walCommits < walSizeLimit: return  ← threshold not reached
+  if walAutoCkptPages &gt; 0 and nFrame &gt;= walAutoCkptPages:  checkpoint
 
-  walCommits = 0                       ← reset counter
-  sqlite3BtreeCheckpoint(pKV->pBt, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL)
+  checkpoint = sqlite3BtreeCheckpoint(pBt, SQLITE_CHECKPOINT_PASSIVE)
   // runs in TRANS_NONE window:
   //   write lock already released by BtreeCommit
   //   persistent read not yet opened
-  //   → checkpoint can acquire WAL write lock without contention
+  //   PASSIVE never blocks: if another connection still reads old frames,
+  //   it copies what it can and is retried after a later commit
+  // once every frame is copied, the next write transaction restarts the
+  // WAL from frame 0 — the file stops growing (it is reused, not truncated)
 
-Timeline with walSizeLimit=3:
-  commit #1 → walCommits=1  (no checkpoint)
-  commit #2 → walCommits=2  (no checkpoint)
-  commit #3 → walCommits=3  ≥ limit → PASSIVE checkpoint → walCommits=0
-  commit #4 → walCommits=1  (no checkpoint)
+Timeline with walAutoCheckpoint = 1000, ~120 pages per commit:
+  commit #1..#8 → WAL 120 … 960 frames   (no checkpoint)
+  commit #9     → WAL 1080 ≥ 1000 → PASSIVE checkpoint copies all frames
+  commit #10    → WAL restarts at frame 0 → 120 frames
   ···</pre>
       </div>
 
@@ -1560,8 +1581,8 @@ Write guard:
       </div>
 
       <div class="callout">
-        <div class="callout-title">Choosing walSizeLimit vs. kvstore_checkpoint</div>
-        <p><strong>walSizeLimit=N</strong> (auto, PASSIVE) — set-and-forget; fires every N committed writes with no caller involvement. Best for most workloads. <strong>kvstore_checkpoint</strong> (any mode) — explicit control at shutdown, after large batches, or to shrink the WAL with TRUNCATE mode. Combine with <code>walSizeLimit=0</code> for fully manual checkpoint scheduling.</p>
+        <div class="callout-title">Choosing walAutoCheckpoint vs. kvstore_checkpoint</div>
+        <p><strong>walAutoCheckpoint</strong> (auto, PASSIVE, <strong>on by default</strong> at 1000 pages) — set-and-forget; keeps the WAL bounded and reads fast. Lower it on small devices to cap WAL disk use; raise it for slightly faster bulk writes (checkpoints cost about 6% on sequential writes). <strong>kvstore_checkpoint</strong> (any mode) — explicit control at shutdown, after large batches, or to shrink the WAL file with TRUNCATE mode (auto-checkpoints reuse the WAL file but do not shrink it). Set <code>walAutoCheckpoint = -1</code> for fully manual checkpoint scheduling.</p>
       </div>
     </div>
 
@@ -1573,21 +1594,23 @@ Write guard:
       <h2>Incremental Vacuum: Recovering Deleted Space</h2>
 
       <p>
-        Deleted data pages are placed on SQLite's internal freelist. The file does not shrink automatically. <code>kvstore_incremental_vacuum</code> requires a write transaction with <code>wrflag=2</code> (exclusive), not the normal <code>wrflag=1</code> used by put/delete. Importantly, the vacuum path does <em>not</em> commit an active read transaction first — if <code>inTrans==1</code> it calls <code>BtreeBeginTrans(pBt, 2, 0)</code> directly to attempt an upgrade. This differs from the put/delete pattern which always commits the read before beginning a write.
+        Deleted data pages are placed on SQLite's internal freelist. The file does not shrink automatically. <code>kvstore_incremental_vacuum</code> uses the same auto-transaction pattern as put/delete (<code>kvstoreEnsureWrite</code> / <code>kvstoreFinishWrite</code>): it closes the cached read cursors, commits the persistent read, begins a write transaction (or joins the caller's), and restores the persistent read afterwards — on the error path too. Because vacuum moves pages, it returns <code>KVSTORE_BUSY</code> while any iterator is open. Root pages are never moved by incremental vacuum, so open CF handles stay valid.
       </p>
 
       <div class="diagram-block">
         <pre>Transaction handling in kvstore_incremental_vacuum:
 
-  inTrans == 0 → BtreeBeginTrans(pBt, 2, 0)  ← wrflag=2 (exclusive)
+  iterator open → return KVSTORE_BUSY (vacuum would move its pages)
+
+  inTrans == 1 → close cached read cursors, BtreeCommit(read)
+  (read active)  → fall through ↓
+
+  inTrans == 0 → BtreeBeginTrans(pBt, 1, 0)
                  autoTrans = 1, inTrans = 2
 
-  inTrans == 1 → BtreeBeginTrans(pBt, 2, 0)  ← upgrade attempt (no commit first)
-  (read active)  autoTrans = 1, inTrans = 2
-                 NOTE: unlike put/delete which commit the read before writing,
-                 vacuum calls BeginTrans(2) directly over the read transaction.
+  inTrans == 2 → already in caller's write txn, proceed (autoTrans = 0)
 
-  inTrans == 2 → already in write txn, proceed (autoTrans = 0)
+  after the steps: commit (or roll back on error), restore persistent read
 
 BtreeIncrVacuum step (each call reclaims one page):
   1. Identify last page (P8)
@@ -1623,7 +1646,7 @@ File size timeline:
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
         <pre>[L4 kvstore.c]
-  lock CF mutex → lock KV mutex
+  lock CF mutex → lock KV mutex (fullMutex=1 only)
   if inTrans==1: BtreeCommit(read)     → inTrans=0
   BtreeBeginTrans(1, 0)                → inTrans=2   (autoTrans)
   kvstoreEncodeBlob()   [stack buf]    → [00 00 00 05][hello][world]
@@ -1644,15 +1667,15 @@ File size timeline:
 
 [L1 os.c / os_unix.c / os_win.c / os_kv.c]
   sqlite3OsWrite()   → pwrite(fd, buf, amt, offset)
-  sqlite3OsSync()    → fsync(fd)      (on commit, SYNC_NORMAL or FULL)
+  sqlite3OsSync()    → fsync(fd)      (on commit: rollback journal with NORMAL/FULL; WAL only with FULL — WAL+NORMAL syncs at checkpoint, or call kvstore_sync)
   sqlite3OsLock()    → fcntl(fd, F_SETLK, ...)
 
 [L4 kvstore.c — return path]
   BtreeCloseCursor(write cursor)
   BtreeCommit()                        → autoTrans commit
-  kvstoreAutoCheckpoint(pKV)           → PASSIVE ckpt if walSizeLimit hit
+  kvstoreAutoCheckpoint(pKV)           → PASSIVE ckpt if WAL ≥ walAutoCheckpoint pages
   BtreeBeginTrans(0, 0)                → inTrans=1 (persistent read restored)
-  unlock KV mutex → unlock CF mutex</pre>
+  unlock KV mutex (fullMutex=1 only) → unlock CF mutex</pre>
       </div>
 
       <h4>kvstore → btree mapping (quick reference)</h4>
@@ -1672,9 +1695,9 @@ File size timeline:
             <tr><td><code>kvstore_delete</code></td><td><code>BtreeCursor(write), BtreeIndexMoveto, BtreeDelete</code></td></tr>
             <tr><td><code>kvstore_exists</code></td><td><code>GetReadCursor (cached), BtreeIndexMoveto</code></td></tr>
             <tr><td><code>kvstore_cf_create</code></td><td><code>BtreeCreateTable(BLOBKEY), BtreeInsert (meta), UpdateMeta</code></td></tr>
-            <tr><td><code>kvstore_cf_drop</code></td><td><code>BtreeDelete (meta row first), BtreeDropTable, UpdateMeta (CF count)</code></td></tr>
+            <tr><td><code>kvstore_cf_drop</code></td><td><code>meta-row tombstone, BtreeDropTable, rewrite moved root + re-point handles, drop TTL CFs, UpdateMeta (CF count) — all or nothing</code></td></tr>
             <tr><td><code>kvstore_iterator_*</code></td><td><code>BtreeCursor (own), BtreeFirst, BtreeNext, BtreePayload; prefix seek uses heap-allocated UnpackedRecord (sqlite3VdbeAllocUnpackedRecord)</code></td></tr>
-            <tr><td><code>kvstore_incremental_vacuum</code></td><td><code>BtreeBeginTrans(wrflag=2, exclusive), BtreeIncrVacuum (loop until DONE or nPage reached)</code></td></tr>
+            <tr><td><code>kvstore_incremental_vacuum</code></td><td><code>normal write path (EnsureWrite/FinishWrite), BtreeIncrVacuum (loop until DONE or nPage reached)</code></td></tr>
             <tr><td><code>kvstore_integrity_check</code></td><td><code>BtreeIntegrityCheck (all root pages)</code></td></tr>
             <tr><td><code>kvstore_checkpoint</code></td><td><code>BtreeCommit (drop read) + BtreeCheckpoint(mode) + BtreeBeginTrans(0)</code></td></tr>
           </tbody>

@@ -158,14 +158,6 @@ struct KVStoreConfig {
   */
   int busyTimeout;
 
-  /*
-  ** walSizeLimit — WAL auto-checkpoint threshold in committed write transactions.
-  **   0 (default) — no auto-checkpoint.
-  **   N > 0       — after every N committed write transactions a PASSIVE checkpoint
-  **                 is attempted automatically. Only effective in WAL journal mode.
-  */
-  int walSizeLimit;
-
   /* Internal flag — set by kvstore_open_encrypted to bypass the plain-open
   ** encryption guard.  Not part of the public API; zero-init leaves it 0. */
   int allowEncrypted;
@@ -181,7 +173,33 @@ struct KVStoreConfig {
   ** Default 0 (no mutex).  kvstore_open() always uses 0.
   */
   int fullMutex;
+
+  /*
+  ** walAutoCheckpoint — WAL auto-checkpoint threshold in WAL *pages*
+  ** (frames), the same rule SQLite uses by default.  After a write
+  ** transaction commits, if the WAL holds at least this many pages a PASSIVE
+  ** checkpoint runs (it never blocks readers or writers).  This keeps the
+  ** WAL — and the cost of finding pages in it — small no matter how large or
+  ** small individual commits are.
+  **   0 (default) — KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT pages (1000 ≈ 4 MB
+  **                 with 4 KB pages).
+  **   N > 0       — checkpoint once the WAL holds N or more pages.
+  **   N < 0       — disabled: the WAL grows until kvstore_checkpoint() or
+  **                 the last connection closes.
+  ** Only effective in WAL journal mode.  kvstore_open() uses the default.
+  ** (This replaces the former commit-count setting walSizeLimit: commits
+  ** vary widely in size, WAL pages do not.)
+  */
+  int walAutoCheckpoint;
 };
+
+/*
+** Default walAutoCheckpoint threshold in WAL pages (SQLite's default too).
+** Override at build time with -DKVSTORE_DEFAULT_WAL_AUTOCHECKPOINT=N.
+*/
+#ifndef KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT
+# define KVSTORE_DEFAULT_WAL_AUTOCHECKPOINT 1000
+#endif
 
 /*
 ** Memory helpers — wrappers around the SQLite allocator.

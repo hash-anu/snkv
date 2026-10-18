@@ -759,8 +759,8 @@ KVStoreStats st = {<span class="nm">0</span>};
 <span class="fn">kvstore_checkpoint</span>(pKV, KVSTORE_CHECKPOINT_TRUNCATE, &amp;nLog, &amp;nCkpt);
 <span class="fn">printf</span>(<span class="str">"WAL frames: %d total, %d checkpointed\n"</span>, nLog, nCkpt);
 
-<span class="cm">/* Auto-checkpoint: open with wal_size_limit
-   (available via kvstore_open_ex / config struct) */</span></pre>
+<span class="cm">/* Auto-checkpoint is ON by default (PASSIVE, every 1000 WAL pages).
+   Tune or disable it: KVStoreConfig.walAutoCheckpoint = N pages (-1 = off), open with kvstore_open_v2 */</span></pre>
         </div>
       </section>
 

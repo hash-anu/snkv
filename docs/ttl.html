@@ -789,7 +789,8 @@
 
       <div class="callout">
         <div class="callout-title">Transaction upgrade</div>
-        <p>A lazy expiry delete must upgrade the transaction from read to write. SNKV first commits the existing read transaction (releasing the WAL read slot), then begins a write transaction, performs the three deletes atomically, and commits. The cached read cursor is invalidated before the upgrade to avoid dangling cursor state.</p>
+        <p>A lazy expiry delete must upgrade the transaction from read to write. SNKV first commits the existing read transaction (releasing the WAL read slot), then begins a write transaction, performs the three deletes atomically, and commits. The cached read cursor is invalidated before the upgrade to avoid dangling cursor state. If the <em>caller</em> has a write transaction open (<code>kvstore_begin</code>), the get still returns <code>KVSTORE_NOTFOUND</code> but does not delete anything — it never commits the caller's transaction; a later get or <code>purge_expired</code> reclaims the key.</p>
+        <p>The code above is simplified. The real check is <code>kvstoreTtlActive()</code>: <code>nTtlActive</code> is an in-memory counter, so after a rollback (which can undo TTL writes and deletes) it is marked stale and recounted from the key index before a 0 is trusted.</p>
       </div>
 
       <p>The three deletes — data CF, key index, expiry index — happen in a single write transaction. Either all three succeed and commit, or none do. An expired key can never be in a partially-cleaned state.</p>
@@ -870,45 +871,40 @@
 
       <h3 id="purge-batch">Batched Deletion</h3>
 
-      <p>The purge loop processes up to <code>KVSTORE_PURGE_BATCH = 256</code> expired keys per transaction. After each batch it commits, releases the mutex briefly, then continues. This prevents a single large purge from holding the write lock for an unbounded time.</p>
+      <p>The purge loop deletes up to <code>KVSTORE_PURGE_BATCH = 256</code> expired keys per transaction (overridable at build time). After each batch it commits, releases the mutex briefly, then continues. This prevents a single large purge from holding the write lock for an unbounded time. If the caller already has a write transaction open, purge works inside it and does not commit: the deletes commit or roll back with the caller's transaction.</p>
 
       <div class="code-block">
         <div class="code-block-header">
           <span class="code-block-label">src/kvstore.c — purge batch loop</span>
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
-        <pre><span class="nm">#define</span> KVSTORE_PURGE_BATCH <span class="nm">256</span>
+        <pre><span class="nm">#ifndef</span> KVSTORE_PURGE_BATCH
+<span class="nm"># define</span> KVSTORE_PURGE_BATCH <span class="nm">256</span>
+<span class="nm">#endif</span>
 
-<span class="kw">for</span>(;;){
-  <span class="cm">/* Stack-allocated batch arrays — no heap per batch */</span>
-  <span class="kw">void</span> *apExpKeys[KVSTORE_PURGE_BATCH];
-  <span class="kw">int</span>   anExpKeys[KVSTORE_PURGE_BATCH];
-  <span class="kw">int</span>   nExpired = <span class="nm">0</span>;
-
+<span class="kw">for</span>(;;){                                  <span class="cm">/* one batch per iteration */</span>
   <span class="fn">sqlite3_mutex_enter</span>(pCF->pMutex);
-  <span class="fn">sqlite3_mutex_enter</span>(pKV->pMutex);
+  <span class="fn">KV_ENTER</span>(pKV);
+  <span class="cm">/* begin a write transaction (or join the caller's) */</span>
 
-  <span class="cm">/* Scan expiry index until batch full or first unexpired entry */</span>
-  <span class="cm">/* ... cursor scan ... */</span>
-
-  <span class="kw">if</span>( nExpired == <span class="nm">0</span> ){
-    <span class="cm">/* Nothing left to purge */</span>
-    <span class="fn">sqlite3_mutex_leave</span>(pKV->pMutex);
-    <span class="fn">sqlite3_mutex_leave</span>(pCF->pMutex);
-    <span class="kw">break</span>;
+  <span class="kw">while</span>( nExpired &lt; KVSTORE_PURGE_BATCH ){
+    <span class="cm">/* position on the FIRST expiry entry = the next one due */</span>
+    <span class="cm">/* stop if none left or its time is in the future       */</span>
+    <span class="cm">/* copy [expire_ms][key] into ONE reusable buffer        */</span>
+    <span class="cm">/* close the cursor, then delete the data row, the key   */</span>
+    <span class="cm">/* index row and this expiry row                         */</span>
+    nExpired++;
   }
 
-  <span class="cm">/* Delete batch from all three tables, commit, release mutex */</span>
-  <span class="cm">/* ... delete loop ... */</span>
-
-  <span class="fn">sqlite3BtreeCommit</span>(pKV->pBt);
-  <span class="fn">sqlite3_mutex_leave</span>(pKV->pMutex);
+  <span class="cm">/* commit our own transaction (the caller's is left open) */</span>
+  <span class="fn">KV_LEAVE</span>(pKV);
   <span class="fn">sqlite3_mutex_leave</span>(pCF->pMutex);
-  <span class="cm">/* other threads can run here before next batch */</span>
+  <span class="cm">/* other threads can run here before the next batch */</span>
+  <span class="kw">if</span>( nExpired &lt; KVSTORE_PURGE_BATCH ) <span class="kw">break</span>;   <span class="cm">/* nothing left */</span>
 }</pre>
       </div>
 
-      <p>The batch arrays live on the stack and hold only pointers and lengths — approximately 3 KB per iteration (256 × 8-byte pointer + 256 × 4-byte int). The actual key bytes are heap-allocated during the scan and freed immediately after each batch commit.</p>
+      <p>Expired entries are deleted one at a time: because the expiry index is sorted by time, the next entry due is always the first one, so purge re-positions on it, copies its key into a single reusable buffer, and deletes its three rows. Memory use is one cursor and one key, whatever the batch size — no per-batch key arrays, nothing large on the stack, which matters on small embedded devices.</p>
     </div>
 
     <hr class="section-divider">
@@ -973,7 +969,7 @@
 
       <p>Purging expired keys in <code>sessions</code> has no effect on <code>tokens</code>. The <code>nTtlActive</code> counter is per-CF. TTL state is completely isolated between column families — a CF with no active TTL keys skips the check even if another CF in the same store has thousands of expiring keys.</p>
 
-      <p>The <code>__snkv_ttl_</code> prefix is reserved. The public API rejects any user attempt to create a CF whose name starts with <code>__</code>, preventing accidental collision with internal index CFs.</p>
+      <p>The <code>__snkv_ttl_</code> prefix is reserved. The public API rejects any user attempt to create a CF whose name starts with <code>__</code> or <code>_snkv_</code>, preventing accidental collision with internal index CFs. TTL index CFs do not count towards the column-family limit and are not shown by <code>kvstore_cf_list</code>.</p>
     </div>
 
     <hr class="section-divider">
@@ -983,9 +979,9 @@
       <div class="section-label">Iteration</div>
       <h2 id="iterator-ttl">Iterator TTL Handling</h2>
 
-      <p>The prefix iterator and full iterator also perform lazy TTL checks on each key they visit. Expired keys are evicted during iteration — they are deleted from all three tables and the iterator advances past them transparently. The caller never sees an expired key from an iterator.</p>
+      <p>All iterators (forward, reverse, prefix) check the TTL of each key they visit and <strong>skip</strong> expired keys transparently — the caller never sees an expired key from an iterator. Iterators only skip; they do not delete. Expired keys are removed by a later <code>get</code> (lazy expiry) or by <code>purge_expired</code>.</p>
 
-      <p>Because the iterator holds its own B-tree cursor (separate from <code>pReadCur</code>), the upgrade from read to write transaction during lazy expiry requires the iterator cursor to be closed before the write, and re-opened and re-positioned after commit. SNKV saves the last seen key before the write and restores the cursor position after.</p>
+      <p>Skipping needs no write transaction, so the iterator's cursor never has to be closed and re-positioned. Like <code>get</code>, the check is skipped entirely when the column family has no TTL keys.</p>
     </div>
 
     <hr class="section-divider">
@@ -1005,7 +1001,7 @@
             <tr><td><code>kvstore_cf_put_ttl(pCF, key, nKey, val, nVal, expire_ms)</code></td><td>Same, on named CF</td></tr>
             <tr><td><code>kvstore_get_ttl(pKV, key, nKey, ...)</code></td><td>Get with TTL, lazy expiry on read</td></tr>
             <tr><td><code>kvstore_cf_get_ttl(pCF, key, nKey, ...)</code></td><td>Same, on named CF</td></tr>
-            <tr><td><code>kvstore_ttl_remaining(pKV, key, nKey, &amp;remaining)</code></td><td>Seconds remaining for key; <code>KVSTORE_NO_TTL</code> if no TTL set</td></tr>
+            <tr><td><code>kvstore_ttl_remaining(pKV, key, nKey, &amp;remaining)</code></td><td>Milliseconds remaining for key; <code>KVSTORE_NO_TTL</code> (-1) if no TTL set; 0 if it just expired</td></tr>
             <tr><td><code>kvstore_cf_ttl_remaining(pCF, key, nKey, &amp;remaining)</code></td><td>Same, on named CF</td></tr>
             <tr><td><code>kvstore_purge_expired(pKV, &amp;nDeleted)</code></td><td>Bulk delete all expired keys on default CF</td></tr>
             <tr><td><code>kvstore_cf_purge_expired(pCF, &amp;nDeleted)</code></td><td>Same, on named CF</td></tr>

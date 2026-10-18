@@ -117,8 +117,9 @@ struct KVStoreConfig {
   int pageSize;     /* Page size in bytes (0 = default = 4096; new databases only) */
   int readOnly;     /* 1 = open read-only; default 0 */
   int busyTimeout;   /* ms to retry on SQLITE_BUSY (0 = fail immediately; default 0) */
-  int walSizeLimit;  /* auto-checkpoint every N commits in WAL mode (0 = disabled) */
+  int allowEncrypted; /* internal — leave 0 (use kvstore_open_encrypted) */
   int fullMutex;     /* 1 = serialize all ops with a recursive mutex (default 0) */
+  int walAutoCheckpoint; /* checkpoint when WAL >= N pages (0 = default 1000, < 0 = off) */
 };
 ```
 
@@ -132,8 +133,9 @@ struct KVStoreConfig {
 | `pageSize` | 4096 bytes | Ignored for existing databases |
 | `readOnly` | 0 (read-write) | |
 | `busyTimeout` | 0 (fail immediately) | Set > 0 for multi-process workloads |
-| `walSizeLimit` | 0 (disabled) | Auto-checkpoint every N commits; 0 = no auto-checkpoint |
+| `allowEncrypted` | 0 | Internal flag used by `kvstore_open_encrypted`; leave it 0 |
 | `fullMutex` | 0 (no mutex) | Set to 1 only when sharing one `KVStore*` across threads. One handle per thread does not need this — WAL enforces concurrency at the OS level. |
+| `walAutoCheckpoint` | 1000 pages | After a commit, run a PASSIVE checkpoint once the WAL holds at least this many pages (same rule as SQLite). `N > 0` = custom threshold, `N < 0` = off. Build-time default: `-DKVSTORE_DEFAULT_WAL_AUTOCHECKPOINT=N` |
 
 ---
 
@@ -948,14 +950,15 @@ int kvstore_checkpoint(KVStore *pKV, int mode, int *pnLog, int *pnCkpt);
 - If `*pnLog == *pnCkpt` after a `PASSIVE` checkpoint, all WAL frames have been successfully copied (no frames are blocked by readers).
 - Use `TRUNCATE` to also shrink the WAL file to zero bytes, which frees disk space.
 
-**WAL auto-checkpoint via `walSizeLimit`:**
+**WAL auto-checkpoint (`walAutoCheckpoint`, on by default):**
 
-As an alternative to calling `kvstore_checkpoint()` manually, set `cfg.walSizeLimit = N` when opening the store. SNKV then automatically runs a `PASSIVE` checkpoint after every N committed write transactions, keeping WAL growth bounded without any application-level calls.
+SNKV automatically runs a `PASSIVE` checkpoint after a commit once the WAL holds at least `walAutoCheckpoint` pages (default 1000 ≈ 4 MB with 4 KB pages) — the same rule SQLite uses. This keeps the WAL file and the cost of page lookups in it bounded without any application-level calls. Auto-checkpoints reuse the WAL file; they do not shrink it (use `TRUNCATE` for that).
 
 ```c
 KVStoreConfig cfg = {0};
-cfg.journalMode  = KVSTORE_JOURNAL_WAL;
-cfg.walSizeLimit = 500;   /* PASSIVE checkpoint every 500 committed writes */
+cfg.journalMode       = KVSTORE_JOURNAL_WAL;
+cfg.walAutoCheckpoint = 250;   /* checkpoint once the WAL holds 250 pages */
+/* cfg.walAutoCheckpoint = -1;    disable: checkpoint manually */
 kvstore_open_v2("mydb.db", &kv, &cfg);
 ```
 
