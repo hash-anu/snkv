@@ -1096,6 +1096,21 @@ static void test_internal_cf_in_txn(void){
   cleanup(db);
 }
 
+/* ----------------------------------------------------------------------
+** Test 21: library version API matches the header macros.
+** -------------------------------------------------------------------- */
+static void test_version(void){
+  printf("Test 21: library version\n");
+  char want[32];
+  snprintf(want, sizeof want, "%d.%d.%d", KVSTORE_VERSION_MAJOR,
+           KVSTORE_VERSION_MINOR, KVSTORE_VERSION_PATCH);
+  CHECK(strcmp(KVSTORE_VERSION, want) == 0, "KVSTORE_VERSION matches MAJOR.MINOR.PATCH");
+  CHECK(strcmp(kvstore_libversion(), KVSTORE_VERSION) == 0, "kvstore_libversion() == KVSTORE_VERSION");
+  CHECK(kvstore_libversion_number() == KVSTORE_VERSION_NUMBER, "kvstore_libversion_number() == KVSTORE_VERSION_NUMBER");
+  CHECK(KVSTORE_VERSION_NUMBER == KVSTORE_VERSION_MAJOR*1000000 + KVSTORE_VERSION_MINOR*1000
+                                  + KVSTORE_VERSION_PATCH, "number encodes MAJOR*1e6 + MINOR*1e3 + PATCH");
+}
+
 int main(void){
   printf("=== test_review_fixes ===\n");
   test_encrypt_user_cf_only();
@@ -1118,6 +1133,7 @@ int main(void){
   test_wal_auto_checkpoint();
   test_orphan_ttl_cleared();
   test_internal_cf_in_txn();
+  test_version();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

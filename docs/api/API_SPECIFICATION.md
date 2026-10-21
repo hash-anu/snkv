@@ -836,6 +836,17 @@ const char *kvstore_errmsg(KVStore *pKV);
 
 **Returns:** Error message string. **Do not free.** The string is valid until the next operation on the same handle. When several threads share one handle, use `kvstore_errmsg_copy()`.
 
+### kvstore_libversion / kvstore_libversion_number
+
+Version of the library actually linked.
+
+```c
+const char *kvstore_libversion(void);        /* "0.9.0" */
+int kvstore_libversion_number(void);         /* 9000 */
+```
+
+The header defines the same values as macros for compile-time checks: `KVSTORE_VERSION`, `KVSTORE_VERSION_MAJOR` / `_MINOR` / `_PATCH`, and `KVSTORE_VERSION_NUMBER` (= MAJOR×1000000 + MINOR×1000 + PATCH). Comparing `kvstore_libversion_number()` with `KVSTORE_VERSION_NUMBER` detects a header/library mismatch when SNKV is used as a shared library.
+
 ### kvstore_errmsg_copy
 
 Copy the last error message into a caller-supplied buffer (thread-safe).

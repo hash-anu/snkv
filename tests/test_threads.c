@@ -12,6 +12,7 @@
 **   Test 4: kvstore_errmsg_copy under concurrent errors
 **   Test 5: close inside your own transaction (lock released before free)
 **   Test 6: close waits for another thread's open transaction
+**   Test 7: CF handles opened/closed while other threads use the handle
 **
 ** A watchdog fails the run (exit 2) if anything deadlocks.  Run it under
 ** ThreadSanitizer with `make test-tsan`.
@@ -82,15 +83,17 @@ static void *watchdog(void *arg) {
 ** transaction is open.  B must wait for A (not join it), so A's rollback
 ** removes "a" only and "b" survives.
 ** ==================================================================== */
-#define F_A_BEGAN 0
-#define F_A_DONE  1
+#define F_A_BEGAN  0
+#define F_A_DONE   1
+#define F_B_TRYING 2   /* the other thread is about to call into the handle */
 
 static void *t1_A(void *arg) {
     KVStore *kv = (KVStore*)arg;
     kvstore_begin(kv, 1);
     kvstore_put(kv, "a", 1, "1", 1);
     flag_set(F_A_BEGAN);
-    usleep(200000);                     /* give B time to try its write */
+    flag_wait(F_B_TRYING);              /* B is now calling kvstore_put ... */
+    usleep(200000);                     /* ... and must still be blocked */
     flag_set(F_A_DONE);
     kvstore_rollback(kv);
     return NULL;
@@ -102,6 +105,7 @@ static int t1_putRc = -1;
 static void *t1_B(void *arg) {
     KVStore *kv = (KVStore*)arg;
     flag_wait(F_A_BEGAN);
+    flag_set(F_B_TRYING);
     t1_putRc = kvstore_put(kv, "b", 1, "2", 1);   /* must block until A ends */
     t1_waitedForA = flag_get(F_A_DONE);
     return NULL;
@@ -370,6 +374,7 @@ static void *t6_owner(void *arg) {
     kvstore_begin(kv, 1);
     kvstore_put(kv, "late", 4, "1", 1);
     flag_set(F_A_BEGAN);
+    flag_wait(F_B_TRYING);              /* main is now calling kvstore_close */
     usleep(200000);
     flag_set(F_A_DONE);
     kvstore_commit(kv);                 /* close may proceed only after this */
@@ -386,6 +391,7 @@ static void test_close_waits(void) {
     pthread_t t;
     pthread_create(&t, NULL, t6_owner, kv);
     flag_wait(F_A_BEGAN);
+    flag_set(F_B_TRYING);
     kvstore_close(kv);                  /* blocks until the owner commits */
     int waited = flag_get(F_A_DONE);
     pthread_join(t, NULL);
@@ -395,6 +401,84 @@ static void test_close_waits(void) {
     void *v = NULL; int n = 0;
     CHECK(kvstore_get(kv, "late", 4, &v, &n) == KVSTORE_OK, "owner's committed write is on disk");
     if (v) snkv_free(v);
+    kvstore_close(kv);
+    cleanup(db);
+}
+
+/* ======================================================================
+** Test 7: column-family handles opened and closed while other threads
+** use the same handle.  Closing the last handle to a CF frees its cached
+** read cursor, which touches the handle's shared page cache — it must
+** happen under the handle lock (run under TSan to check).
+** ==================================================================== */
+#define T7_ROUNDS 300
+
+typedef struct { KVStore *kv; int errors; } T7Arg;
+
+static void *t7_churn(void *arg) {               /* open → read → close, repeatedly */
+    T7Arg *a = (T7Arg*)arg;
+    for (int i = 0; i < T7_ROUNDS; i++) {
+        KVColumnFamily *cf = NULL;
+        if (kvstore_cf_open(a->kv, "churn", &cf) != KVSTORE_OK) { a->errors++; continue; }
+        void *v = NULL; int n = 0;
+        if (kvstore_cf_get(cf, "c", 1, &v, &n) != KVSTORE_OK) a->errors++;   /* caches a read cursor */
+        snkv_free(v);
+        if (i % 10 == 0) {                        /* sometimes an iterator too */
+            KVIterator *it = NULL;
+            if (kvstore_cf_iterator_create(cf, &it) == KVSTORE_OK) {
+                for (kvstore_iterator_first(it); !kvstore_iterator_eof(it); kvstore_iterator_next(it)) {}
+                kvstore_iterator_close(it);
+            } else a->errors++;
+        }
+        kvstore_cf_close(cf);                     /* last handle: frees the cursor */
+    }
+    return NULL;
+}
+
+static void *t7_writer(void *arg) {
+    T7Arg *a = (T7Arg*)arg; char key[32];
+    for (int i = 0; i < T7_ROUNDS * 2; i++) {
+        snprintf(key, sizeof key, "w%05d", i);
+        if (kvstore_put(a->kv, key, (int)strlen(key), "v", 1) != KVSTORE_OK) a->errors++;
+    }
+    return NULL;
+}
+
+static void *t7_reader(void *arg) {
+    T7Arg *a = (T7Arg*)arg;
+    for (int i = 0; i < T7_ROUNDS; i++) {
+        void *v = NULL; int n = 0;
+        int rc = kvstore_get(a->kv, "w00000", 6, &v, &n);
+        if (rc != KVSTORE_OK && rc != KVSTORE_NOTFOUND) a->errors++;
+        snkv_free(v);
+    }
+    return NULL;
+}
+
+static void test_cf_churn(void) {
+    const char *db = "t_thr_c7.db";
+    printf("\nTest 7: CF handles opened/closed while other threads use the handle\n");
+    cleanup(db);
+    KVStore *kv = open_shared(db);
+    CHECK(kv != NULL, "open shared handle");
+    if (!kv) return;
+    KVColumnFamily *cf = NULL;
+    kvstore_cf_create(kv, "churn", &cf);
+    kvstore_cf_put(cf, "c", 1, "x", 1);
+    kvstore_cf_close(cf);
+
+    T7Arg ac = {kv, 0}, aw = {kv, 0}, ar = {kv, 0};
+    pthread_t th[3];
+    pthread_create(&th[0], NULL, t7_churn,  &ac);
+    pthread_create(&th[1], NULL, t7_writer, &aw);
+    pthread_create(&th[2], NULL, t7_reader, &ar);
+    for (int i = 0; i < 3; i++) pthread_join(th[i], NULL);
+
+    CHECK(ac.errors == 0, "open/get/iterate/close loop: no errors");
+    CHECK(aw.errors == 0 && ar.errors == 0, "writer and reader: no errors");
+    int64_t n = -1; kvstore_count(kv, &n);
+    CHECK(n == T7_ROUNDS * 2, "every write landed");
+    CHECK(kvstore_integrity_check(kv, NULL) == KVSTORE_OK, "integrity check");
     kvstore_close(kv);
     cleanup(db);
 }
@@ -414,6 +498,7 @@ int main(void) {
     test_errmsg_copy();
     test_close_in_own_txn();
     test_close_waits();
+    test_cf_churn();
 
     flag_set(7);                        /* stop the watchdog */
     pthread_join(dog, NULL);

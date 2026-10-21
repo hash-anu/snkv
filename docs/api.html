@@ -584,6 +584,8 @@
       <li class="toc-section"><a href="#c-diag">Diagnostics</a>
         <ul class="toc-sub">
           <li><a href="#c-errmsg">errmsg</a></li>
+          <li><a href="#c-errmsg-copy">errmsg_copy</a></li>
+          <li><a href="#c-version">libversion</a></li>
           <li><a href="#c-stats">stats</a></li>
           <li><a href="#c-integrity">integrity_check</a></li>
           <li><a href="#c-sync">sync</a></li>
@@ -1210,6 +1212,13 @@ printf(<span class="str">"live entries after purge: %lld\n"</span>, (<span class
           <h3 class="fn-name">kvstore_errmsg</h3>
           <div class="fn-sig"><span class="kw">const char</span> *<span class="fn">kvstore_errmsg</span>(KVStore *pKV);</div>
           <p class="fn-desc">Return the last error message string. Do not free. Valid until the next operation on the same handle. When several threads share one handle, use <code>kvstore_errmsg_copy</code> instead.</p>
+        </div>
+
+        <div class="fn-entry" id="c-version">
+          <h3 class="fn-name">kvstore_libversion / kvstore_libversion_number</h3>
+          <div class="fn-sig"><span class="kw">const char</span> *<span class="fn">kvstore_libversion</span>(<span class="kw">void</span>);          <span class="cm">/* "0.9.0" */</span>
+<span class="kw">int</span> <span class="fn">kvstore_libversion_number</span>(<span class="kw">void</span>);          <span class="cm">/* 9000 */</span></div>
+          <p class="fn-desc">Version of the library actually linked. The header defines the same values as macros for compile-time checks: <code>KVSTORE_VERSION</code> (<code>"0.9.0"</code>), <code>KVSTORE_VERSION_MAJOR</code> / <code>_MINOR</code> / <code>_PATCH</code>, and <code>KVSTORE_VERSION_NUMBER</code> = MAJOR×1000000 + MINOR×1000 + PATCH. Comparing <code>kvstore_libversion_number()</code> with <code>KVSTORE_VERSION_NUMBER</code> detects a header/library mismatch when SNKV is used as a shared library.</p>
         </div>
 
         <div class="fn-entry" id="c-errmsg-copy">

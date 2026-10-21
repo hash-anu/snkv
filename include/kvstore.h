@@ -34,6 +34,24 @@ extern "C" {
 #endif
 
 /*
+** Library version.  KVSTORE_VERSION_NUMBER is MAJOR*1000000 + MINOR*1000 +
+** PATCH, so it compares as an integer (0.9.0 -> 9000).  Compile-time checks
+** use the macros; kvstore_libversion() / kvstore_libversion_number() report
+** the version of the library actually linked, which can differ from the
+** header when SNKV is used as a shared library.
+*/
+#define KVSTORE_VERSION_MAJOR   0
+#define KVSTORE_VERSION_MINOR   9
+#define KVSTORE_VERSION_PATCH   0
+#define KVSTORE_VERSION         "0.9.0"
+#define KVSTORE_VERSION_NUMBER  (KVSTORE_VERSION_MAJOR*1000000 + \
+                                 KVSTORE_VERSION_MINOR*1000 + \
+                                 KVSTORE_VERSION_PATCH)
+
+const char *kvstore_libversion(void);
+int kvstore_libversion_number(void);
+
+/*
 ** KVStore handle - represents an open key-value store
 */
 typedef struct KVStore KVStore;

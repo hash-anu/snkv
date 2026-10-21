@@ -629,6 +629,10 @@ const char *kvstore_errmsg(KVStore *pKV){
   return zMsg;
 }
 
+/* Version of the linked library (see KVSTORE_VERSION in kvstore.h). */
+const char *kvstore_libversion(void){ return KVSTORE_VERSION; }
+int kvstore_libversion_number(void){ return KVSTORE_VERSION_NUMBER; }
+
 /*
 ** Copy the last error message into the caller's buffer (always
 ** NUL-terminated, truncated to fit).  The copy is made under the handle
@@ -2997,7 +3001,6 @@ static void kvstoreUnregisterCF(KVStore *pKV, KVColumnFamily *pCF){
 */
 void kvstore_cf_close(KVColumnFamily *pCF){
   KVStore *pKV;
-  int shouldFree = 0;
 
   if( !pCF ) return;
 
@@ -3008,14 +3011,12 @@ void kvstore_cf_close(KVColumnFamily *pCF){
   pCF->refCount--;
   if( pCF->refCount <= 0 && pCF != pKV->pDefaultCF ){
     kvstoreUnregisterCF(pKV, pCF);
-    shouldFree = 1;
+    /* Free under the lock: this closes the CF's cached read cursor, which
+    ** releases pages in the handle's shared page cache. */
+    kvstoreFreeCFStruct(pCF);
   }
 
   KV_LEAVE(pKV);
-
-  if( shouldFree ){
-    kvstoreFreeCFStruct(pCF);
-  }
 }
 
 /*
@@ -3883,13 +3884,12 @@ static int kvstoreIterCheckPrefix(KVIterator *pIter){
 ** No locks are held on entry; acquires pKV->pMutex internally
 ** for each TTL lookup.
 */
+/* Caller holds pKV->pMutex (called only from the iterator ...Impl functions). */
 static int kvstoreIterSkipExpired(KVIterator *pIter){
   KVColumnFamily *pCF = pIter->pCF;
   KVStore *pKV = pCF->pKV;
 
-  KV_ENTER(pKV);
   int ttlActive = kvstoreTtlActive(pCF);
-  KV_LEAVE(pKV);
   if( !ttlActive ) return SQLITE_OK;
 
   for(;;){
@@ -3914,11 +3914,9 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
     if( rc != SQLITE_OK ) return rc;
 
     /* Look up the TTL entry for this key (plain — TTL CFs are unencrypted). */
-    KV_ENTER(pKV);
     void *pTtlVal = NULL; int nTtlVal = 0;
     kvstoreRawBtreeGetPlain(pKV, pCF->pTtlKeyCF->iTable,
                             pIter->pKeyBuf, keyLen, &pTtlVal, &nTtlVal);
-    KV_LEAVE(pKV);
 
     if( !pTtlVal || nTtlVal != 8 ){
       if( pTtlVal ) sqlite3_free(pTtlVal);
@@ -3948,13 +3946,12 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
 ** entries WITHOUT deleting, stepping backwards.
 ** No locks are held on entry; acquires pKV->pMutex internally.
 */
+/* Caller holds pKV->pMutex (called only from the iterator ...Impl functions). */
 static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
   KVColumnFamily *pCF = pIter->pCF;
   KVStore *pKV = pCF->pKV;
 
-  KV_ENTER(pKV);
   int ttlActive = kvstoreTtlActive(pCF);
-  KV_LEAVE(pKV);
   if( !ttlActive ) return SQLITE_OK;
 
   for(;;){
@@ -3977,11 +3974,9 @@ static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
     rc = sqlite3BtreePayload(pIter->pCur, 4, keyLen, pIter->pKeyBuf);
     if( rc != SQLITE_OK ) return rc;
 
-    KV_ENTER(pKV);
     void *pTtlVal = NULL; int nTtlVal = 0;
     kvstoreRawBtreeGetPlain(pKV, pCF->pTtlKeyCF->iTable,
                             pIter->pKeyBuf, keyLen, &pTtlVal, &nTtlVal);
-    KV_LEAVE(pKV);
 
     if( !pTtlVal || nTtlVal != 8 ){
       if( pTtlVal ) sqlite3_free(pTtlVal);
@@ -4438,7 +4433,7 @@ static int kvstoreIterSeekImpl(KVIterator *pIter, const void *pKey, int nKey){
 }
 
 /*
-** Public iterator calls.  Each one takes the handle mutex:
+** Public iterator calls.  Each one (except eof) takes the handle mutex:
 ** an iterator reads the handle's shared B-tree and page cache, so it must
 ** not run at the same time as another thread's call on the same handle.
 ** pIter->pCF is NULL once kvstore_close() has force-closed the iterator;
@@ -4484,13 +4479,9 @@ int kvstore_iterator_prev(KVIterator *pIter){
   return rc;
 }
 int kvstore_iterator_eof(KVIterator *pIter){
-  KVStore *pKV = kvstoreIterStore(pIter);
-  int rc;
-  if( !pKV ) return kvstoreIterEofImpl(pIter);
-  KV_ENTER(pKV);
-  rc = kvstoreIterEofImpl(pIter);
-  KV_LEAVE(pKV);
-  return rc;
+  /* No lock: reads only the iterator's own fields (an iterator is used by
+  ** one thread at a time), and it is called once per row in scan loops. */
+  return kvstoreIterEofImpl(pIter);
 }
 int kvstore_iterator_key(KVIterator *pIter, void **ppKey, int *pnKey){
   KVStore *pKV = kvstoreIterStore(pIter);
