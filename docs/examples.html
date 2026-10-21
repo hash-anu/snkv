@@ -868,11 +868,11 @@ KVColumnFamily *pCF = <span class="kw">NULL</span>;
       <section class="ex-section" id="c-concurrent-rw">
         <div class="section-label">Concurrency</div>
         <h2 class="section-title">Multi-reader / Single-writer</h2>
-        <p class="section-desc">Each thread opens its own <code>KVStore</code> handle with <code>fullMutex=0</code> (the default). WAL byte-range locks in the <code>-shm</code> file enforce single-writer / multi-reader isolation at the OS level — no application mutex is needed. A second writer attempting to begin while one is active receives <code>KVSTORE_BUSY</code> immediately.</p>
+        <p class="section-desc">Each thread opens its own <code>KVStore</code> handle. WAL byte-range locks in the <code>-shm</code> file enforce single-writer / multi-reader isolation at the OS level — no application mutex is needed. A second writer attempting to begin while one is active receives <code>KVSTORE_BUSY</code> immediately.</p>
 
         <div class="ex-card">
           <div class="ex-card-header">
-            <span class="ex-card-title">1 writer + N readers — per-thread handles, fullMutex=0</span>
+            <span class="ex-card-title">1 writer + N readers — per-thread handles</span>
             <span class="ex-card-file">examples/concurrent_rw.c</span>
           </div>
 <pre><span class="cm">/* Each thread opens its OWN handle — no shared pointer, no mutex needed */</span>
@@ -880,7 +880,7 @@ KVColumnFamily *pCF = <span class="kw">NULL</span>;
     KVStoreConfig cfg = {<span class="nm">0</span>};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;
     cfg.busyTimeout = busy_timeout_ms;
-    <span class="cm">/* fullMutex stays 0 — WAL handles cross-handle coordination */</span>
+    <span class="cm">/* separate handles never wait for each other's lock — WAL coordinates them */</span>
     KVStore *kv = <span class="kw">NULL</span>;
     <span class="fn">kvstore_open_v2</span>(DB_FILE, &amp;kv, &amp;cfg);
     <span class="kw">return</span> kv;
@@ -928,18 +928,16 @@ KVStore *kv2 = <span class="fn">open_store</span>(<span class="nm">0</span>);
 
         <div class="ex-card">
           <div class="ex-card-header">
-            <span class="ex-card-title">When to use fullMutex=1</span>
+            <span class="ex-card-title">Sharing one handle between threads</span>
             <span class="ex-card-file">examples/concurrent_rw.c</span>
           </div>
-<pre><span class="cm">/* Only needed when a SINGLE KVStore* is shared across threads */</span>
-KVStoreConfig cfg = {<span class="nm">0</span>};
-cfg.journalMode = KVSTORE_JOURNAL_WAL;
-cfg.fullMutex   = <span class="nm">1</span>;   <span class="cm">/* serialize all ops — protects the in-memory struct */</span>
+<pre><span class="cm">/* Every handle has one lock: a SINGLE KVStore* may be shared */</span>
 KVStore *shared = <span class="kw">NULL</span>;
-<span class="fn">kvstore_open_v2</span>(<span class="str">"mydb.db"</span>, &amp;shared, &amp;cfg);
+<span class="fn">kvstore_open</span>(<span class="str">"mydb.db"</span>, &amp;shared, KVSTORE_JOURNAL_WAL);
 
-<span class="cm">/* Thread A and Thread B can now safely call kvstore_put/get on 'shared' */</span>
-<span class="cm">/* For better throughput, prefer one handle per thread with fullMutex=0  */</span></pre>
+<span class="cm">/* Thread A and Thread B can safely call kvstore_put/get on 'shared';  */</span>
+<span class="cm">/* a kvstore_begin/commit stays with the thread that called begin.     */</span>
+<span class="cm">/* For parallel reads, prefer one handle per thread.                   */</span></pre>
         </div>
       </section>
 

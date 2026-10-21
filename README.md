@@ -59,7 +59,8 @@ int main(void) {
 - **Column families**: logical namespaces within one database
 - **Iterators**: forward and reverse, prefix, and seek
 - **Vector search**: HNSW index via [usearch](https://github.com/unum-cloud/usearch) (`make vector`), stored in the same `.db` file. See [examples/vector.c](examples/vector.c).
-- **Thread-safe**, **single-header**, **Valgrind-clean**
+- **Thread-safe**: share one handle (one lock per handle; a transaction stays with the thread that began it), or give each thread its own handle for parallel reads in WAL
+- **Single-header**, **Valgrind-clean**
 - **Compatible with SQLite page/WAL-level tools** such as LiteFS. Tools that need SQLite's schema layer (the `sqlite3` CLI) do not work.
 
 ```c

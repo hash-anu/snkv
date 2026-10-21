@@ -1,17 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright 2025 SNKV Contributors */
 /*
-** test_fullmutex.c
+** test_shared_handle.c
 **
-** Tests for the fullMutex configuration flag.
+** Every KVStore handle has one lock, so a handle may be shared between
+** threads; separate handles coordinate through WAL.
 **
 ** Covers:
-**  1. fullMutex=0 via NULL config  — basic roundtrip, no mutex allocated
-**  2. fullMutex=0 explicit         — same, via KVStoreConfig
-**  3. fullMutex=1 explicit         — recursive mutex serialises all ops
-**  4. fullMutex=1 shared handle    — N threads share one KVStore; no corruption
-**  5. Second writer rejected       — KVSTORE_BUSY when write lock already held
-**  6. Per-thread handles           — N threads each open their own handle (fullMutex=0)
+**  1. NULL config                  — basic roundtrip
+**  2. Explicit config              — same, via KVStoreConfig
+**  3. Shared handle                — N threads share one KVStore; no corruption
+**  4. Second writer rejected       — KVSTORE_BUSY when write lock already held
+**  5. Per-thread handles           — N threads each open their own handle
 */
 
 #include "kvstore.h"
@@ -42,20 +42,19 @@ static void cleanup(const char *db) {
     snprintf(buf, sizeof(buf), "%s-shm", db);  remove(buf);
 }
 
-static KVStore *open_cfg(const char *path, int fullMutex, int busyTimeout) {
+static KVStore *open_cfg(const char *path, int busyTimeout) {
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;
-    cfg.fullMutex   = fullMutex;
     cfg.busyTimeout = busyTimeout;
     KVStore *kv = NULL;
     kvstore_open_v2(path, &kv, &cfg);
     return kv;
 }
 
-/* ---- Test 1: fullMutex=0 via NULL config -------------------------------- */
+/* ---- Test 1: NULL config ------------------------------------------------ */
 
-static void test_null_config_no_mutex(void) {
-    printf("\n--- Test 1: NULL config (fullMutex defaults to 0) ---\n");
+static void test_null_config(void) {
+    printf("\n--- Test 1: NULL config ---\n");
     const char *db = "fm_null.db";
     cleanup(db);
 
@@ -78,15 +77,15 @@ static void test_null_config_no_mutex(void) {
     cleanup(db);
 }
 
-/* ---- Test 2: fullMutex=0 explicit --------------------------------------- */
+/* ---- Test 2: explicit config -------------------------------------------- */
 
-static void test_fullmutex_zero(void) {
-    printf("\n--- Test 2: fullMutex=0 explicit ---\n");
+static void test_explicit_config(void) {
+    printf("\n--- Test 2: explicit config ---\n");
     const char *db = "fm_zero.db";
     cleanup(db);
 
-    KVStore *kv = open_cfg(db, 0, 0);
-    CHECK(kv != NULL, "open fullMutex=0");
+    KVStore *kv = open_cfg(db, 0);
+    CHECK(kv != NULL, "open with KVStoreConfig");
 
     if (kv) {
         int rc = kvstore_put(kv, "zero", 4, "val", 3);
@@ -108,37 +107,7 @@ static void test_fullmutex_zero(void) {
     cleanup(db);
 }
 
-/* ---- Test 3: fullMutex=1 explicit --------------------------------------- */
-
-static void test_fullmutex_one(void) {
-    printf("\n--- Test 3: fullMutex=1 explicit ---\n");
-    const char *db = "fm_one.db";
-    cleanup(db);
-
-    KVStore *kv = open_cfg(db, 1, 0);
-    CHECK(kv != NULL, "open fullMutex=1");
-
-    if (kv) {
-        int rc = kvstore_put(kv, "one", 3, "val", 3);
-        CHECK(rc == KVSTORE_OK, "put OK");
-
-        void *val; int len;
-        rc = kvstore_get(kv, "one", 3, &val, &len);
-        CHECK(rc == KVSTORE_OK && len == 3, "get OK");
-        if (rc == KVSTORE_OK) snkv_free(val);
-
-        rc = kvstore_delete(kv, "one", 3);
-        CHECK(rc == KVSTORE_OK, "delete OK");
-
-        rc = kvstore_get(kv, "one", 3, &val, &len);
-        CHECK(rc == KVSTORE_NOTFOUND, "key gone after delete");
-
-        kvstore_close(kv);
-    }
-    cleanup(db);
-}
-
-/* ---- Test 4: fullMutex=1 shared handle across threads ------------------- */
+/* ---- Test 3: one handle shared across threads ---------------------------- */
 
 #define T4_THREADS   8
 #define T4_OPS       50
@@ -176,13 +145,13 @@ static void *t4_worker(void *arg) {
     return NULL;
 }
 
-static void test_shared_handle_fullmutex(void) {
-    printf("\n--- Test 4: fullMutex=1 shared handle (%d threads) ---\n",
+static void test_shared_handle(void) {
+    printf("\n--- Test 3: shared handle (%d threads) ---\n",
            T4_THREADS);
     const char *db = "fm_shared.db";
     cleanup(db);
 
-    KVStore *kv = open_cfg(db, 1, 5000);
+    KVStore *kv = open_cfg(db, 5000);
     if (!kv) {
         CHECK(0, "open shared handle");
         cleanup(db);
@@ -205,7 +174,7 @@ static void test_shared_handle_fullmutex(void) {
         total_errors += args[i].errors;
 
     CHECK(total_errors == 0,
-          "no errors across all threads sharing one handle (fullMutex=1)");
+          "no errors across all threads sharing one handle");
 
     /* Post-run integrity check */
     char *errmsg = NULL;
@@ -217,15 +186,15 @@ static void test_shared_handle_fullmutex(void) {
     cleanup(db);
 }
 
-/* ---- Test 5: Second writer rejected with KVSTORE_BUSY ------------------- */
+/* ---- Test 4: Second writer rejected with KVSTORE_BUSY ------------------- */
 
 static void test_second_writer_busy(void) {
-    printf("\n--- Test 5: Second writer rejected (KVSTORE_BUSY) ---\n");
+    printf("\n--- Test 4: Second writer rejected (KVSTORE_BUSY) ---\n");
     const char *db = "fm_busy.db";
     cleanup(db);
 
     /* Writer 1 opens and begins a write transaction */
-    KVStore *kv1 = open_cfg(db, 0, 0);
+    KVStore *kv1 = open_cfg(db, 0);
     CHECK(kv1 != NULL, "writer 1 opens");
     if (!kv1) { cleanup(db); return; }
 
@@ -239,7 +208,7 @@ static void test_second_writer_busy(void) {
     kvstore_put(kv1, "sentinel", 8, "1", 1);
 
     /* Writer 2: busyTimeout=0 — fail immediately */
-    KVStore *kv2 = open_cfg(db, 0, 0);
+    KVStore *kv2 = open_cfg(db, 0);
     int rc2 = kv2 ? kvstore_begin(kv2, 1) : KVSTORE_ERROR;
     int is_busy = ((rc2 & 0xFF) == KVSTORE_BUSY ||
                    (rc2 & 0xFF) == KVSTORE_LOCKED);
@@ -251,7 +220,7 @@ static void test_second_writer_busy(void) {
     kvstore_close(kv1);
 
     /* Writer 2 can now succeed */
-    KVStore *kv3 = open_cfg(db, 0, 0);
+    KVStore *kv3 = open_cfg(db, 0);
     int rc3 = kv3 ? kvstore_begin(kv3, 1) : KVSTORE_ERROR;
     CHECK(rc3 == KVSTORE_OK, "writer 2 succeeds after writer 1 releases lock");
     if (rc3 == KVSTORE_OK) kvstore_rollback(kv3);
@@ -260,7 +229,7 @@ static void test_second_writer_busy(void) {
     cleanup(db);
 }
 
-/* ---- Test 6: Per-thread handles, fullMutex=0 ---------------------------- */
+/* ---- Test 5: Per-thread handles ----------------------------------------- */
 
 #define T6_THREADS 8
 #define T6_KEYS    20
@@ -273,7 +242,7 @@ typedef struct {
 
 static void *t6_worker(void *arg) {
     T6Args *a = (T6Args *)arg;
-    KVStore *kv = open_cfg(a->db, 0, 5000);
+    KVStore *kv = open_cfg(a->db, 5000);
     if (!kv) { a->errors++; return NULL; }
 
     kvstore_begin(kv, 1);
@@ -311,7 +280,7 @@ static void *t6_worker(void *arg) {
 }
 
 static void test_per_thread_handles(void) {
-    printf("\n--- Test 6: Per-thread handles, fullMutex=0 (%d threads) ---\n",
+    printf("\n--- Test 5: Per-thread handles (%d threads) ---\n",
            T6_THREADS);
     const char *db = "fm_perthread.db";
     cleanup(db);
@@ -337,10 +306,10 @@ static void test_per_thread_handles(void) {
         total_errors += args[i].errors;
 
     CHECK(total_errors == 0,
-          "no errors across per-thread handles (fullMutex=0)");
+          "no errors across per-thread handles");
 
     /* Post-run: verify total key count */
-    KVStore *verify = open_cfg(db, 0, 0);
+    KVStore *verify = open_cfg(db, 0);
     if (verify) {
         int count = 0;
         for (i = 0; i < T6_THREADS; i++) {
@@ -367,13 +336,12 @@ static void test_per_thread_handles(void) {
 /* ---- main --------------------------------------------------------------- */
 
 int main(void) {
-    printf("=== SNKV fullMutex Test Suite ===\n");
+    printf("=== SNKV Shared-Handle Test Suite ===\n");
     enable_ansi_colors();
 
-    test_null_config_no_mutex();
-    test_fullmutex_zero();
-    test_fullmutex_one();
-    test_shared_handle_fullmutex();
+    test_null_config();
+    test_explicit_config();
+    test_shared_handle();
     test_second_writer_busy();
     test_per_thread_handles();
 

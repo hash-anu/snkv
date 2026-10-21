@@ -163,18 +163,6 @@ struct KVStoreConfig {
   int allowEncrypted;
 
   /*
-  ** fullMutex — set to 1 to protect all operations with a recursive mutex.
-  **
-  ** Only needed when a single KVStore* is shared across multiple threads.
-  ** The recommended pattern — one handle per thread — does NOT need this:
-  ** WAL byte-range locks in the -shm file enforce single-writer /
-  ** multi-reader isolation at the OS level without any application mutex.
-  **
-  ** Default 0 (no mutex).  kvstore_open() always uses 0.
-  */
-  int fullMutex;
-
-  /*
   ** walAutoCheckpoint — WAL auto-checkpoint threshold in WAL *pages*
   ** (frames), the same rule SQLite uses by default.  After a write
   ** transaction commits, if the WAL holds at least this many pages a PASSIVE
@@ -192,6 +180,29 @@ struct KVStoreConfig {
   */
   int walAutoCheckpoint;
 };
+
+/*
+** Thread safety
+**
+** Every KVStore handle has ONE recursive lock (column families have no lock
+** of their own): calls on one handle run one at a time, so a KVStore* may
+** be shared between threads.  Calls on different handles never wait for
+** each other's lock — for parallel reads, give each thread its own handle
+** (WAL lets readers run alongside one writer).
+**
+** Rules when threads share one handle:
+**   - kvstore_begin(kv, 1) keeps the handle locked until kvstore_commit or
+**     kvstore_rollback, which MUST be called by the same thread.  Other
+**     threads' calls on the handle wait until then (they never join or roll
+**     back another thread's transaction).
+**   - An iterator must be used by one thread at a time.
+**   - Use kvstore_errmsg_copy() rather than kvstore_errmsg().
+**   - Do not call kvstore_close() while other threads may still use the
+**     handle.
+**
+** Single-threaded builds that want no locking cost at all can compile with
+** -DSQLITE_THREADSAFE=0 (all mutexes become no-ops).
+*/
 
 /*
 ** Default walAutoCheckpoint threshold in WAL pages (SQLite's default too).
@@ -894,8 +905,28 @@ int kvstore_rollback(KVStore *pKV);
 **
 ** Returns:
 **   Error message string (do not free)
+**
+** Thread safety: the returned pointer is the handle's error buffer.  When
+** several threads share one handle, another thread's error can overwrite
+** it — use kvstore_errmsg_copy() instead.
 */
 const char *kvstore_errmsg(KVStore *pKV);
+
+/*
+** Copy the last error message into a caller-supplied buffer.
+**
+** Parameters:
+**   pKV  - KVStore handle (NULL gives "no error")
+**   zBuf - destination buffer; always NUL-terminated, truncated to fit
+**   nBuf - size of zBuf in bytes (> 0)
+**
+** Returns:
+**   KVSTORE_OK, or KVSTORE_ERROR if zBuf is NULL or nBuf <= 0
+**
+** Safe when several threads share one handle: the copy is taken under the
+** handle mutex.
+*/
+int kvstore_errmsg_copy(KVStore *pKV, char *zBuf, int nBuf);
 
 /*
 ** Statistics structure

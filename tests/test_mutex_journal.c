@@ -402,14 +402,12 @@ static void* thread_worker(void *arg) {
 }
 
 /*
-** Helper: open a shared handle with fullMutex=1 (required when one KVStore*
-** is shared across threads; the default fullMutex=0 only works with
-** per-thread handles).
+** Helper: open a handle that the test threads share (every handle has its
+** own lock, so this is safe).
 */
 static int open_shared(const char *path, KVStore **ppKV) {
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_DELETE;
-    cfg.fullMutex   = 1;
     return kvstore_open_v2(path, ppKV, &cfg);
 }
 
