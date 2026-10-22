@@ -1765,6 +1765,7 @@ int kvstore_commit(KVStore *pKV){
 
   if( !pKV->inTrans ){
     kvstoreSetError(pKV, "no active transaction to commit");
+    kvstoreReleaseTxnHold(pKV);   /* never leave the handle locked */
     KV_LEAVE(pKV);
     return KVSTORE_ERROR;
   }
