@@ -101,7 +101,8 @@ all: $(LIB)
 
 # ---- Single-header amalgamation ----
 snkv.h: include/*.h src/*.c scripts/gen_snkv_header.sh
-	sh scripts/gen_snkv_header.sh > $@
+	@$(if $(V),,echo "  GEN     $@";)
+	$(if $(V),,@)sh scripts/gen_snkv_header.sh > $@
 
 $(LIB): $(LIB_OBJ)
 	ar rcs $@ $^
@@ -116,10 +117,12 @@ examples: snkv.h $(EXAMPLE_BIN)
 # (WSL /mnt/c) an editor or virus scanner may briefly hold the file open,
 # and each extra overwrite is another chance to fail with "Permission denied".
 examples/snkv.h: snkv.h
-	cp snkv.h $@
+	@cp snkv.h $@
 
+# Short build lines; `make V=1 examples` shows the full compiler command.
 examples/%$(TARGET_EXT): examples/%.c examples/snkv.h
-	$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
+	@$(if $(V),,echo "  CC      $@";)
+	$(if $(V),,@)$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
 
 run-examples: examples
 	@for e in $(EXAMPLE_BIN); do \
