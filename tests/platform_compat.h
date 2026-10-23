@@ -20,7 +20,11 @@
   #include <process.h>
   /* Windows doesn't have unistd.h - provide alternatives */
   #define unlink _unlink
-  #define snprintf _snprintf
+  /* Only pre-2015 MSVC lacks snprintf.  _snprintf does not NUL-terminate
+  ** on truncation, so never substitute it where a real snprintf exists. */
+  #if defined(_MSC_VER) && _MSC_VER < 1900
+    #define snprintf _snprintf
+  #endif
   
   /* Sleep/usleep compatibility */
   #define sleep(x) Sleep((x)*1000)
@@ -33,20 +37,44 @@
   /* ===================================================================
   ** Windows Threading (pthread compatibility layer)
   ** =================================================================== */
-  typedef HANDLE pthread_t;
+  /* _beginthreadex, not _beginthread: _beginthread's handle closes itself
+  ** when the thread exits, so a later join could wait on a closed (or
+  ** reused) handle.  The start routine's return value is kept in the
+  ** pthread_t so pthread_join can hand it back like POSIX does. */
+  #include <stdlib.h>
+  typedef struct pthread_compat_s {
+    HANDLE h;
+    void *(*fn)(void*);
+    void *arg;
+    void *ret;
+  } *pthread_t;
   typedef struct { int dummy; } pthread_attr_t;
-  
-  static inline int pthread_create(pthread_t *thread, void *attr, 
+
+  static inline unsigned __stdcall pthread_compat_start(void *p) {
+    pthread_t t = (pthread_t)p;
+    t->ret = t->fn(t->arg);
+    return 0;
+  }
+
+  static inline int pthread_create(pthread_t *thread, void *attr,
                                     void *(*start_routine)(void*), void *arg) {
     (void)attr; /* unused */
-    *thread = (HANDLE)_beginthread((void(*)(void*))start_routine, 0, arg);
-    return (*thread == (HANDLE)-1L) ? -1 : 0;
+    pthread_t t = (pthread_t)calloc(1, sizeof(*t));
+    if (!t) return -1;
+    t->fn  = start_routine;
+    t->arg = arg;
+    t->h   = (HANDLE)_beginthreadex(NULL, 0, pthread_compat_start, t, 0, NULL);
+    if (!t->h) { free(t); return -1; }
+    *thread = t;
+    return 0;
   }
-  
+
   static inline int pthread_join(pthread_t thread, void **retval) {
-    (void)retval; /* unused */
-    WaitForSingleObject(thread, INFINITE);
-    CloseHandle(thread);
+    if (!thread) return -1;
+    WaitForSingleObject(thread->h, INFINITE);
+    CloseHandle(thread->h);
+    if (retval) *retval = thread->ret;
+    free(thread);
     return 0;
   }
   
