@@ -18,10 +18,10 @@ endif
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME_S),Linux)
-  LDFLAGS = -lpthread -lm
+  LDFLAGS = -lpthread
 endif
 ifeq ($(UNAME_S),Darwin)
-  LDFLAGS = -lpthread -lm
+  LDFLAGS = -lpthread
 endif
 ifeq ($(UNAME_S),Windows)
   # Native Windows (MSVC / Git-Bash without uname) — no winpthreads
@@ -144,7 +144,7 @@ examples/vector.o: examples/vector.c
 	$(CC) $(VEC_CFLAGS) -c -o $@ $<
 
 $(VEC_EXAMPLE_BIN): examples/vector.o $(LIB_OBJ) $(VEC_OBJ)
-	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS) -lm
+	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS)
 
 run-vector-examples: vector-examples
 	@echo "=== Running $(VEC_EXAMPLE_BIN) ==="; \
@@ -212,7 +212,7 @@ tests/test_vec.o: tests/test_vec.c
 	$(CC) $(VEC_CFLAGS) -c -o $@ $<
 
 $(VEC_TEST_BIN): tests/test_vec.o $(LIB_OBJ) $(VEC_OBJ)
-	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS) -lm
+	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS)
 
 # ============================================================
 
