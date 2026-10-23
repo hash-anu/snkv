@@ -112,8 +112,13 @@ $(LIB): $(LIB_OBJ)
 # ---- Example targets (header-only via snkv.h) ----
 examples: snkv.h $(EXAMPLE_BIN)
 
-examples/%$(TARGET_EXT): examples/%.c snkv.h
-	cp snkv.h examples/snkv.h
+# Copy the header once per run, not once per example: on a Windows drive
+# (WSL /mnt/c) an editor or virus scanner may briefly hold the file open,
+# and each extra overwrite is another chance to fail with "Permission denied".
+examples/snkv.h: snkv.h
+	cp snkv.h $@
+
+examples/%$(TARGET_EXT): examples/%.c examples/snkv.h
 	$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
 
 run-examples: examples
