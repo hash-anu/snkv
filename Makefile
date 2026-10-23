@@ -18,10 +18,10 @@ endif
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME_S),Linux)
-  LDFLAGS = -lpthread -lm
+  LDFLAGS = -lpthread
 endif
 ifeq ($(UNAME_S),Darwin)
-  LDFLAGS = -lpthread -lm
+  LDFLAGS = -lpthread
 endif
 ifeq ($(UNAME_S),Windows)
   # Native Windows (MSVC / Git-Bash without uname) — no winpthreads
@@ -101,7 +101,8 @@ all: $(LIB)
 
 # ---- Single-header amalgamation ----
 snkv.h: include/*.h src/*.c scripts/gen_snkv_header.sh
-	sh scripts/gen_snkv_header.sh > $@
+	@$(if $(V),,echo "  GEN     $@";)
+	$(if $(V),,@)sh scripts/gen_snkv_header.sh > $@
 
 $(LIB): $(LIB_OBJ)
 	ar rcs $@ $^
@@ -112,9 +113,16 @@ $(LIB): $(LIB_OBJ)
 # ---- Example targets (header-only via snkv.h) ----
 examples: snkv.h $(EXAMPLE_BIN)
 
-examples/%$(TARGET_EXT): examples/%.c snkv.h
-	cp snkv.h examples/snkv.h
-	$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
+# Copy the header once per run, not once per example: on a Windows drive
+# (WSL /mnt/c) an editor or virus scanner may briefly hold the file open,
+# and each extra overwrite is another chance to fail with "Permission denied".
+examples/snkv.h: snkv.h
+	@cp snkv.h $@
+
+# Short build lines; `make V=1 examples` shows the full compiler command.
+examples/%$(TARGET_EXT): examples/%.c examples/snkv.h
+	@$(if $(V),,echo "  CC      $@";)
+	$(if $(V),,@)$(CC) -g -Wall -Iexamples -o $@ $< $(LDFLAGS)
 
 run-examples: examples
 	@for e in $(EXAMPLE_BIN); do \
@@ -136,7 +144,7 @@ examples/vector.o: examples/vector.c
 	$(CC) $(VEC_CFLAGS) -c -o $@ $<
 
 $(VEC_EXAMPLE_BIN): examples/vector.o $(LIB_OBJ) $(VEC_OBJ)
-	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS) -lm
+	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS)
 
 run-vector-examples: vector-examples
 	@echo "=== Running $(VEC_EXAMPLE_BIN) ==="; \
@@ -204,7 +212,7 @@ tests/test_vec.o: tests/test_vec.c
 	$(CC) $(VEC_CFLAGS) -c -o $@ $<
 
 $(VEC_TEST_BIN): tests/test_vec.o $(LIB_OBJ) $(VEC_OBJ)
-	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS) -lm
+	$(CXX) -o $@ $< $(LIB_OBJ) $(VEC_OBJ) $(LDFLAGS)
 
 # ============================================================
 
