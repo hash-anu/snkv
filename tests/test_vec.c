@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "kvstore_vec.h"
+#include "platform_compat.h"   /* pthread_create / pthread_join (T32) */
 
 /* -----------------------------------------------------------------------
 ** Test harness
@@ -1220,6 +1221,67 @@ static void test_purge_batches(void) {
     rm_db();
 }
 
+/* -----------------------------------------------------------------------
+** T32: one KVVecStore shared by several threads.  get / get_vector /
+** contains / kv_put used to skip the store mutex and could touch the
+** B-tree at the same time as a put on another thread.
+** ----------------------------------------------------------------------- */
+#define T32_THREADS 4
+#define T32_KEYS    60
+
+typedef struct { KVVecStore *vs; int id; int errors; } T32Arg;
+
+static void *t32_worker(void *arg) {
+    T32Arg *a = (T32Arg*)arg;
+    char key[32]; float v[DIM];
+    for (int i = 0; i < T32_KEYS; i++) {
+        snprintf(key, sizeof key, "t%d_%03d", a->id, i);
+        fill_vec(v, (float)(a->id * 1000 + i));
+        if (kvstore_vec_put(a->vs, key, (int)strlen(key), "val", 3, v, 0, NULL, 0) != KVSTORE_OK) a->errors++;
+        void *pv = NULL; int nv = 0;
+        if (kvstore_vec_get(a->vs, key, (int)strlen(key), &pv, &nv) != KVSTORE_OK || nv != 3) a->errors++;
+        snkv_free(pv);
+        float *pf = NULL; int nf = 0;
+        if (kvstore_vec_get_vector(a->vs, key, (int)strlen(key), &pf, &nf) != KVSTORE_OK || nf != DIM) a->errors++;
+        snkv_free(pf);
+        if (!kvstore_vec_contains(a->vs, key, (int)strlen(key))) a->errors++;
+        if (kvstore_vec_kv_put(a->vs, "plain", 5, "p", 1) != KVSTORE_OK) a->errors++;
+        KVVecSearchResult *res = NULL; int nRes = 0;
+        int rc = kvstore_vec_search(a->vs, v, 2, (i & 1), 3, 0.0f, &res, &nRes);
+        if (rc != KVSTORE_OK && rc != KVVEC_INDEX_EMPTY) a->errors++;
+        kvstore_vec_free_results(res, nRes);
+        (void)kvstore_vec_count(a->vs);
+    }
+    for (int i = 0; i < T32_KEYS; i += 2) {             /* delete every other key */
+        snprintf(key, sizeof key, "t%d_%03d", a->id, i);
+        if (kvstore_vec_delete(a->vs, key, (int)strlen(key)) != KVSTORE_OK) a->errors++;
+    }
+    return NULL;
+}
+
+static void test_shared_threads(void) {
+    section("T32: one vector store shared by several threads");
+    rm_db();
+    KVVecStore *vs = NULL;
+    ASSERT_OK(kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0,
+                               KVVEC_DTYPE_F32, NULL, 0, &vs), "open");
+    pthread_t th[T32_THREADS]; T32Arg args[T32_THREADS];
+    for (int i = 0; i < T32_THREADS; i++) {
+        args[i].vs = vs; args[i].id = i; args[i].errors = 0;
+        pthread_create(&th[i], NULL, t32_worker, &args[i]);
+    }
+    int errors = 0;
+    for (int i = 0; i < T32_THREADS; i++) { pthread_join(th[i], NULL); errors += args[i].errors; }
+    ASSERT_EQ(errors, 0, "no errors from put/get/get_vector/contains/kv_put/search/delete");
+    ASSERT_EQ(kvstore_vec_count(vs), T32_THREADS * T32_KEYS / 2, "index holds exactly the undeleted vectors");
+    KVVecStats st; kvstore_vec_stats(vs, &st);
+    ASSERT_EQ(st.vec_cf_count, T32_THREADS * T32_KEYS / 2, "vector CF agrees with the index");
+    ASSERT(!kvstore_vec_contains(vs, "t2_010", 6) && kvstore_vec_contains(vs, "t2_011", 6),
+           "deleted key gone, kept key present");
+    kvstore_vec_close(vs);
+    rm_db();
+}
+
 int main(void) {
     printf("=== SNKV Vector Store Tests ===\n");
 
@@ -1254,6 +1316,7 @@ int main(void) {
     test_stale_sidecar();
     test_get_vector_ttl();
     test_purge_batches();
+    test_shared_threads();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

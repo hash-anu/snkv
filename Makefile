@@ -80,7 +80,8 @@ TEST_SRC = tests/test_prod.c tests/test_columnfamily.c tests/test_benchmark.c \
            tests/test_regressions.c \
            tests/test_fault_inject.c \
            tests/test_new_gaps.c \
-           tests/test_fullmutex.c \
+           tests/test_shared_handle.c \
+           tests/test_threads.c \
 	   tests/test_review_fixes.c \
            tests/test_large_values.c \
            tests/test_oom.c
@@ -226,7 +227,8 @@ test-ubsan:
 
 test-tsan:
 	$(MAKE) clean
-	$(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
+	TSAN_OPTIONS="suppressions=$(CURDIR)/tests/tsan.supp $(TSAN_OPTIONS)" \
+	  $(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
 
 test-coverage:
 	$(MAKE) clean

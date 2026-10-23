@@ -118,7 +118,6 @@ struct KVStoreConfig {
   int readOnly;     /* 1 = open read-only; default 0 */
   int busyTimeout;   /* ms to retry on SQLITE_BUSY (0 = fail immediately; default 0) */
   int allowEncrypted; /* internal — leave 0 (use kvstore_open_encrypted) */
-  int fullMutex;     /* 1 = serialize all ops with a recursive mutex (default 0) */
   int walAutoCheckpoint; /* checkpoint when WAL >= N pages (0 = default 1000, < 0 = off) */
 };
 ```
@@ -134,7 +133,6 @@ struct KVStoreConfig {
 | `readOnly` | 0 (read-write) | |
 | `busyTimeout` | 0 (fail immediately) | Set > 0 for multi-process workloads |
 | `allowEncrypted` | 0 | Internal flag used by `kvstore_open_encrypted`; leave it 0 |
-| `fullMutex` | 0 (no mutex) | Set to 1 only when sharing one `KVStore*` across threads. One handle per thread does not need this — WAL enforces concurrency at the OS level. |
 | `walAutoCheckpoint` | 1000 pages | After a commit, run a PASSIVE checkpoint once the WAL holds at least this many pages (same rule as SQLite). `N > 0` = custom threshold, `N < 0` = off. Build-time default: `-DKVSTORE_DEFAULT_WAL_AUTOCHECKPOINT=N` |
 
 ---
@@ -836,7 +834,28 @@ Get the last error message.
 const char *kvstore_errmsg(KVStore *pKV);
 ```
 
-**Returns:** Error message string. **Do not free.** The string is valid until the next operation on the same handle.
+**Returns:** Error message string. **Do not free.** The string is valid until the next operation on the same handle. When several threads share one handle, use `kvstore_errmsg_copy()`.
+
+### kvstore_libversion / kvstore_libversion_number
+
+Version of the library actually linked.
+
+```c
+const char *kvstore_libversion(void);        /* "0.9.0" */
+int kvstore_libversion_number(void);         /* 9000 */
+```
+
+The header defines the same values as macros for compile-time checks: `KVSTORE_VERSION`, `KVSTORE_VERSION_MAJOR` / `_MINOR` / `_PATCH`, and `KVSTORE_VERSION_NUMBER` (= MAJOR×1000000 + MINOR×1000 + PATCH). Comparing `kvstore_libversion_number()` with `KVSTORE_VERSION_NUMBER` detects a header/library mismatch when SNKV is used as a shared library.
+
+### kvstore_errmsg_copy
+
+Copy the last error message into a caller-supplied buffer (thread-safe).
+
+```c
+int kvstore_errmsg_copy(KVStore *pKV, char *zBuf, int nBuf);
+```
+
+**Returns:** `KVSTORE_OK`; `KVSTORE_ERROR` if `zBuf` is NULL or `nBuf <= 0`. The message is always NUL-terminated and truncated to fit. The copy is taken under the handle mutex.
 
 ### kvstore_stats
 
@@ -1177,8 +1196,10 @@ Iterator key/value pointers (`kvstore_iterator_key`, `kvstore_iterator_value`) a
 
 ## Thread Safety
 
-- All `kvstore_*` operations are protected by a mutex — a single `KVStore` handle is safe to use from multiple threads.
-- In WAL mode, multiple readers can proceed concurrently with a single writer.
-- Only one write transaction can be active at a time. Concurrent write attempts return `SQLITE_BUSY`.
-- For maximum concurrency, each thread can open its own `KVStore` connection to the same database file.
-- The `KVIterator` handle is **not** thread-safe — do not share an iterator between threads.
+- **One lock per handle.** Every `KVStore` handle has one lock, so it may be shared between threads: calls on it run one at a time. Column families have no lock of their own.
+- **Transactions belong to one thread.** `kvstore_begin(kv, 1)` keeps the handle locked until `kvstore_commit` / `kvstore_rollback`, which must be called by the same thread. Other threads' calls on the handle wait — they never join or roll back another thread's transaction.
+- **Different handles run in parallel.** For maximum concurrency, each thread opens its own `KVStore` on the same file. In WAL mode readers proceed concurrently with one writer; a second writer gets `KVSTORE_BUSY` (or waits up to `busyTimeout`).
+- Use `kvstore_errmsg_copy()` when threads share a handle; the pointer returned by `kvstore_errmsg()` can be overwritten by another thread's error.
+- The `KVIterator` handle is **not** thread-safe — use each iterator from one thread.
+- Do not call `kvstore_close()` while other threads may still use the handle (close waits for another thread's open transaction to finish).
+- A `KVVecStore` is safe to share between threads: every vector call takes the store's own mutex.

@@ -3,14 +3,14 @@
 /*
 ** examples/concurrent_rw.c
 **
-** Demonstrates multi-reader / single-writer concurrency with fullMutex=0.
+** Demonstrates multi-reader / single-writer concurrency with one handle
+** per thread.
 **
 ** HOW CONCURRENCY WORKS IN SNKV / WAL MODE
 ** ------------------------------------------
 ** Each thread opens its OWN KVStore handle.  No handle is shared between
-** threads.  fullMutex=0 (the default) is correct and safe in this pattern:
-** the application-level recursive mutex (pKV->pMutex) is skipped entirely,
-** eliminating ~20 ns of overhead per API call.
+** threads, so no thread ever waits for another thread's handle lock: the
+** threads only coordinate through the database file.
 **
 ** Thread safety comes from WAL byte-range locks in the -shm file:
 **   WRITE_LOCK  (byte 120) — at most one writer holds this at a time.
@@ -20,11 +20,11 @@
 ** other.  A second writer trying to grab WRITE_LOCK while one is held gets
 ** SQLITE_BUSY, surfaced as KVSTORE_BUSY.
 **
-** WHEN fullMutex=1 IS NEEDED
+** SHARING ONE HANDLE INSTEAD
 ** --------------------------
-** Only when a SINGLE KVStore* is shared across threads.  In that case the
-** in-memory struct (inTrans, stats, …) would race without the mutex.
-** The recommended pattern — one handle per thread — never needs fullMutex.
+** Every handle has its own recursive lock, so one KVStore* may also be
+** shared between threads: calls on it then run one at a time.  That is
+** simpler but gives no parallel reads — the pattern below is faster.
 **
 ** PART 1: 1 writer + N readers run concurrently.
 **   The writer commits N keys.  Each reader verifies every key it can find
@@ -76,7 +76,7 @@ static KVStore *open_store(int busy_timeout_ms) {
     KVStoreConfig cfg = {0};
     cfg.journalMode = KVSTORE_JOURNAL_WAL;
     cfg.busyTimeout = busy_timeout_ms;
-    /* fullMutex stays 0 — each thread has its own handle */
+    /* each thread has its own handle — no lock is shared between threads */
     KVStore *kv = NULL;
     int rc = kvstore_open_v2(DB_FILE, &kv, &cfg);
     if (rc != KVSTORE_OK) {
@@ -141,7 +141,7 @@ static void *writer_thread(void *arg) {
 }
 
 static void part1_concurrent(void) {
-    printf("\n=== Part 1: 1 writer + %d readers (fullMutex=0) ===\n",
+    printf("\n=== Part 1: 1 writer + %d readers (one handle per thread) ===\n",
            NUM_READERS);
 
     pthread_t wt, rt[NUM_READERS];

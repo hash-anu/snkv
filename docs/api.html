@@ -584,6 +584,8 @@
       <li class="toc-section"><a href="#c-diag">Diagnostics</a>
         <ul class="toc-sub">
           <li><a href="#c-errmsg">errmsg</a></li>
+          <li><a href="#c-errmsg-copy">errmsg_copy</a></li>
+          <li><a href="#c-version">libversion</a></li>
           <li><a href="#c-stats">stats</a></li>
           <li><a href="#c-integrity">integrity_check</a></li>
           <li><a href="#c-sync">sync</a></li>
@@ -696,7 +698,6 @@
   <span class="kw">int</span> readOnly;      <span class="cm">/* 1 = open read-only; default 0 */</span>
   <span class="kw">int</span> busyTimeout;   <span class="cm">/* ms to retry on SQLITE_BUSY (0 = fail immediately) */</span>
   <span class="kw">int</span> allowEncrypted; <span class="cm">/* internal — leave 0 (use kvstore_open_encrypted) */</span>
-  <span class="kw">int</span> fullMutex;     <span class="cm">/* 1 = serialize all ops with a recursive mutex (default 0) */</span>
   <span class="kw">int</span> walAutoCheckpoint; <span class="cm">/* checkpoint when WAL ≥ N pages (0 = default 1000, &lt; 0 = off) */</span>
 };</pre>
         <div class="table-wrap"><table>
@@ -708,7 +709,6 @@
           <tr><td><code>readOnly</code></td><td>0</td><td></td></tr>
           <tr><td><code>busyTimeout</code></td><td>0 (fail immediately)</td><td>Set &gt; 0 for multi-process workloads.</td></tr>
           <tr><td><code>allowEncrypted</code></td><td>0</td><td>Internal flag used by <code>kvstore_open_encrypted</code>. Leave it 0; zero-initialising the struct does this.</td></tr>
-          <tr><td><code>fullMutex</code></td><td>0 (no mutex)</td><td>Set to 1 only when sharing one <code>KVStore*</code> across threads. One handle per thread does not need this — WAL enforces single-writer / multi-reader at the OS level.</td></tr>
           <tr><td><code>walAutoCheckpoint</code></td><td>0 → 1000 pages</td><td>After a commit, run a PASSIVE (non-blocking) checkpoint once the WAL holds at least this many pages — the same rule SQLite uses. Keeps the WAL around 4 MB, so page lookups in it stay cheap (an unbounded WAL slowed reads by 8–16% on 1M rows). <code>N &gt; 0</code> = custom threshold; <code>N &lt; 0</code> = off (WAL grows until <code>kvstore_checkpoint</code> or close). Build-time default: <code>-DKVSTORE_DEFAULT_WAL_AUTOCHECKPOINT=N</code>.</td></tr>
         </table></div>
       </section>
@@ -1211,7 +1211,20 @@ printf(<span class="str">"live entries after purge: %lld\n"</span>, (<span class
         <div class="fn-entry" id="c-errmsg">
           <h3 class="fn-name">kvstore_errmsg</h3>
           <div class="fn-sig"><span class="kw">const char</span> *<span class="fn">kvstore_errmsg</span>(KVStore *pKV);</div>
-          <p class="fn-desc">Return the last error message string. Do not free. Valid until the next operation on the same handle.</p>
+          <p class="fn-desc">Return the last error message string. Do not free. Valid until the next operation on the same handle. When several threads share one handle, use <code>kvstore_errmsg_copy</code> instead.</p>
+        </div>
+
+        <div class="fn-entry" id="c-version">
+          <h3 class="fn-name">kvstore_libversion / kvstore_libversion_number</h3>
+          <div class="fn-sig"><span class="kw">const char</span> *<span class="fn">kvstore_libversion</span>(<span class="kw">void</span>);          <span class="cm">/* "0.9.0" */</span>
+<span class="kw">int</span> <span class="fn">kvstore_libversion_number</span>(<span class="kw">void</span>);          <span class="cm">/* 9000 */</span></div>
+          <p class="fn-desc">Version of the library actually linked. The header defines the same values as macros for compile-time checks: <code>KVSTORE_VERSION</code> (<code>"0.9.0"</code>), <code>KVSTORE_VERSION_MAJOR</code> / <code>_MINOR</code> / <code>_PATCH</code>, and <code>KVSTORE_VERSION_NUMBER</code> = MAJOR×1000000 + MINOR×1000 + PATCH. Comparing <code>kvstore_libversion_number()</code> with <code>KVSTORE_VERSION_NUMBER</code> detects a header/library mismatch when SNKV is used as a shared library.</p>
+        </div>
+
+        <div class="fn-entry" id="c-errmsg-copy">
+          <h3 class="fn-name">kvstore_errmsg_copy</h3>
+          <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_errmsg_copy</span>(KVStore *pKV, <span class="kw">char</span> *zBuf, <span class="kw">int</span> nBuf);</div>
+          <p class="fn-desc">Copy the last error message into <code>zBuf</code> (always NUL-terminated, truncated to fit). The copy is taken under the handle mutex, so it is safe when threads share a handle. Returns <code>KVSTORE_ERROR</code> if <code>zBuf</code> is NULL or <code>nBuf &lt;= 0</code>.</p>
         </div>
 
         <div class="fn-entry" id="c-stats">
@@ -1290,11 +1303,13 @@ printf(<span class="str">"%d frames total, %d checkpointed\n"</span>, nLog, nCkp
       <section class="api-section" id="c-threads">
         <h2 class="section-title">Thread Safety</h2>
         <ul style="font-family:'DM Sans',sans-serif;font-size:0.9rem;color:var(--ink-3);line-height:2;padding-left:1.2rem;">
-          <li>A single <code>KVStore</code> handle may be shared across threads <strong>only</strong> if it was opened with <code>cfg.fullMutex = 1</code>, which serialises every call on that handle. With the default (<code>fullMutex = 0</code>) only per-column-family locks are taken, which do not protect the state shared by the whole store (transactions, other CFs, iterators) — use one handle per thread instead.</li>
-          <li>In WAL mode, multiple readers run concurrently with a single writer.</li>
-          <li>Only one write transaction can be active at a time; concurrent writes return <code>KVSTORE_BUSY</code>.</li>
-          <li>For maximum throughput, each thread can open its own <code>KVStore</code> to the same file.</li>
-          <li><code>KVIterator</code> handles are <strong>not</strong> thread-safe — do not share across threads.</li>
+          <li><strong>One lock per handle.</strong> Every <code>KVStore</code> handle has one lock, so it may be shared across threads: calls on it run one at a time. Column families have no lock of their own.</li>
+          <li><strong>Transactions belong to one thread.</strong> <code>kvstore_begin(kv, 1)</code> keeps the handle locked until <code>kvstore_commit</code> / <code>kvstore_rollback</code>, which must be called by the same thread. Other threads' calls on that handle wait until then — they never join or roll back another thread's transaction.</li>
+          <li><strong>Different handles run in parallel.</strong> For maximum throughput, give each thread its own <code>KVStore</code> on the same file: in WAL mode readers run concurrently with one writer; a second writer gets <code>KVSTORE_BUSY</code> (or waits up to <code>busyTimeout</code>).</li>
+          <li>Use <code>kvstore_errmsg_copy</code> when threads share a handle — the pointer from <code>kvstore_errmsg</code> can be overwritten by another thread's error.</li>
+          <li><code>KVIterator</code> handles are <strong>not</strong> thread-safe — use each iterator from one thread.</li>
+          <li>Do not call <code>kvstore_close</code> while other threads may still use the handle. (Close waits for another thread's open transaction to finish.)</li>
+          <li>A <code>KVVecStore</code> is safe to share between threads: every vector call takes the store's own mutex.</li>
         </ul>
       </section>
 

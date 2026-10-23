@@ -801,7 +801,7 @@
   ├─ isCorrupted  → int                set when SQLITE_CORRUPT is seen
   ├─ closing      → int                set to 1 in kvstore_close()
   ├─ zErrMsg[256] → char[]             last error string (fixed buffer, never freed)
-  ├─ pMutex       → sqlite3_mutex*     RECURSIVE store lock, only if fullMutex=1 (else NULL)
+  ├─ pMutex       → sqlite3_mutex*     RECURSIVE store lock (one per handle, always)
   ├─ pDefaultCF   → KVColumnFamily*    always-open default column family
   ├─ apCF[]       → KVColumnFamily**   open named column families
   ├─ stats        → KVStoreStats       {nPuts nGets nDeletes nIterations nErrors}
@@ -932,7 +932,7 @@ Step 2  Resolve config defaults (zero → default)
                               &lt; 0 = off)
 
 Step 3  Allocate KVStore { db, inTrans=0, closing=0 }
-        pMutex = RECURSIVE only if cfg.fullMutex == 1, else NULL
+        pMutex = RECURSIVE (one per handle, always)
         (KV_ENTER / KV_LEAVE are no-ops when pMutex is NULL)
 
 Step 4  sqlite3BtreeOpen(vfs, path, db, &pBt, 0, flags)
@@ -987,7 +987,7 @@ Step 14 Open persistent read transaction
       <h3 id="close-sequence">Closing a Store</h3>
 
       <p>
-        <code>kvstore_close</code> sets <code>closing=1</code> before freeing anything (under the store mutex when the store was opened with <code>fullMutex=1</code>). Every public API function checks this flag on entry and returns an error if set. With <code>fullMutex=1</code> this prevents use-after-free when another thread is mid-operation as close begins; without it, a handle must not be used from another thread while it is being closed.
+        <code>kvstore_close</code> sets <code>closing=1</code> before freeing anything (under the store mutex). Every public API function checks this flag on entry and returns an error if set. Close waits for any call already running on the handle (and for another thread's open write transaction), but a handle must not be used by other threads after close starts: once it returns, the handle's memory is freed.
       </p>
 
       <div class="code-block">
@@ -995,7 +995,7 @@ Step 14 Open persistent read transaction
           <span class="code-block-label">kvstore_close — teardown order</span>
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
-        <pre>KV_ENTER(pKV)                      ← store mutex, only if fullMutex=1
+        <pre>KV_ENTER(pKV)                      ← store mutex (the handle's one lock)
 pKV->closing = 1                   ← racing threads bail here
 
 if inTrans > 0:
@@ -1004,7 +1004,6 @@ if inTrans > 0:
 
 for each open CF (default + named):
   if pCF->pReadCur: kvstoreFreeCursor(pCF->pReadCur)
-  sqlite3_mutex_free(pCF->pMutex)
   free(pCF->zName), free(pCF)
 
 sqlite3BtreeClose(pBt)             ← PagerClose → OsClose → close(fd)
@@ -1153,7 +1152,7 @@ Benefit:
       <h3 id="put">Put — Stack-First Encoding + Write Cursor</h3>
 
       <p>
-        Every <code>kvstore_put</code> acquires the CF mutex, then the store mutex if the store was opened with <code>fullMutex=1</code> (in that order — always), validates key/value sizes (key: 1–64 KiB; value: 0–10 MiB), and encodes the blob on the stack before touching the B-tree.
+        Every <code>kvstore_put</code> acquires the store mutex (the handle's one lock; column families have none), validates key/value sizes (key: 1–64 KiB; value: 0–10 MiB), and encodes the blob on the stack before touching the B-tree.
       </p>
 
       <div class="code-block">
@@ -1161,8 +1160,7 @@ Benefit:
           <span class="code-block-label">kvstore_put — critical path</span>
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
-        <pre>sqlite3_mutex_enter(pCF->pMutex)        ← CF lock first
-KV_ENTER(pKV)                           ← then store lock (fullMutex=1 only)
+        <pre>KV_ENTER(pKV)                           ← the handle's one lock
 
 // Encode on stack — no heap alloc for small payloads
 unsigned char stackBuf[512];
@@ -1190,7 +1188,6 @@ pKV->stats.nPuts++
 // autoTrans commit + persistent read restore (see §auto-txn)
 
 KV_LEAVE(pKV)
-sqlite3_mutex_leave(pCF->pMutex)
 
 // Encrypted store: the value is encrypted straight into the blob
 // ([len][key][nonce][ciphertext][mac]) — one copy, not two.</pre>
@@ -1427,23 +1424,22 @@ Note: contrast with kvstoreSeekKey() (get/exists/delete) which uses
     <!-- 8. CONCURRENCY -->
     <div class="section" id="concurrency">
       <div class="section-label">08 — Thread Safety</div>
-      <h2>Two-Level Recursive Mutex Locking</h2>
+      <h2>One Recursive Mutex per Handle</h2>
 
       <p>
-        SNKV uses two levels of <code>SQLITE_MUTEX_RECURSIVE</code> mutexes. The CF-level mutex protects per-CF state (<code>pReadCur</code>, <code>refCount</code>) and is always allocated. The store-level mutex protects global state (<code>inTrans</code>, <code>stats</code>, <code>closing</code>) and is <strong>opt-in</strong>: it exists only when the store is opened with <code>KVStoreConfig.fullMutex = 1</code>; otherwise <code>KV_ENTER</code> / <code>KV_LEAVE</code> compile to a NULL check and cost nothing. The lock order is always CF mutex first, then store mutex — consistent ordering eliminates deadlock.
+        Every <code>KVStore</code> handle has one <code>SQLITE_MUTEX_RECURSIVE</code> mutex, always allocated. It protects everything the handle owns: the B-tree and page cache, <code>inTrans</code>, <code>stats</code>, <code>closing</code>, and every CF's <code>pReadCur</code> / <code>refCount</code>. It is the only lock on a handle — column families have no lock of their own — so there is no lock order to get wrong. An explicit write transaction (<code>kvstore_begin(kv, 1)</code>) keeps it held until commit or rollback, so other threads sharing the handle wait instead of joining that transaction.
       </p>
       <p>
-        So: share one <code>KVStore*</code> across threads only with <code>fullMutex = 1</code>. The default (single-threaded use, or one handle per thread — WAL coordinates separate handles) skips the store lock entirely. The diagram below shows the <code>fullMutex = 1</code> case.
+        So one <code>KVStore*</code> can be shared across threads: calls on it run one at a time. For parallel reads, give each thread its own handle — handles never wait for each other's lock; WAL coordinates them through the file. An uncontended lock costs a few tens of nanoseconds per call (the old per-CF lock, which every call took, cost the same).
       </p>
 
       <div class="diagram-block">
         <pre>Thread 1: kvstore_cf_put("logs", k, v)    Thread 2: kvstore_cf_put("metrics", k, v)
 ─────────────────────────────────────     ──────────────────────────────────────────
-lock(logs.pMutex)                         lock(metrics.pMutex)
 lock(pKV->pMutex)   ← contended ──┐      lock(pKV->pMutex)   acquired ─────────────┐
 BtreeInsert(...)                   │      BtreeInsert(...)                           │
 unlock(pKV->pMutex)   ◄────────── ┘      unlock(pKV->pMutex) ──────────────────────┘
-unlock(logs.pMutex)                       unlock(metrics.pMutex)</pre>
+(different CFs, same handle → same lock: the calls run one after the other)</pre>
       </div>
 
       <div class="callout">
@@ -1646,7 +1642,7 @@ File size timeline:
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
         <pre>[L4 kvstore.c]
-  lock CF mutex → lock KV mutex (fullMutex=1 only)
+  lock KV mutex
   if inTrans==1: BtreeCommit(read)     → inTrans=0
   BtreeBeginTrans(1, 0)                → inTrans=2   (autoTrans)
   kvstoreEncodeBlob()   [stack buf]    → [00 00 00 05][hello][world]
@@ -1675,7 +1671,7 @@ File size timeline:
   BtreeCommit()                        → autoTrans commit
   kvstoreAutoCheckpoint(pKV)           → PASSIVE ckpt if WAL ≥ walAutoCheckpoint pages
   BtreeBeginTrans(0, 0)                → inTrans=1 (persistent read restored)
-  unlock KV mutex (fullMutex=1 only) → unlock CF mutex</pre>
+  unlock KV mutex</pre>
       </div>
 
       <h4>kvstore → btree mapping (quick reference)</h4>

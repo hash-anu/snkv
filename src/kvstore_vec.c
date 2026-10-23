@@ -78,7 +78,12 @@ static const char META_NEXT_ID[] = "next_id";
 struct KVVecStore {
     KVStore        *pKV;
     usearch_index_t pIdx;      /* NULL if index dropped */
-    sqlite3_mutex  *pMutex;    /* Recursive mutex protecting pIdx, nextId, pTagsCF */
+    sqlite3_mutex  *pMutex;    /* Recursive mutex: every public call except
+                               ** open/close holds it, so one KVVecStore is safe
+                               ** to share between threads, and a multi-step
+                               ** call (e.g. put: read old label, then write)
+                               ** runs as one unit.  Lock order: this mutex,
+                               ** then pKV's handle lock. */
 
     int     dim;
     int     space;             /* KVVEC_SPACE_* */
@@ -624,9 +629,12 @@ int kvstore_vec_put(
 ) {
     if (!pVS || !pKey || !pVal) return KVSTORE_ERROR;
     if (!pVec) return KVVEC_BAD_VECTOR;
-    if (!pVS->pIdx) return KVVEC_INDEX_DROPPED;
 
     sqlite3_mutex_enter(pVS->pMutex);
+    if (!pVS->pIdx) {                 /* checked under the lock: drop_index frees it */
+        sqlite3_mutex_leave(pVS->pMutex);
+        return KVVEC_INDEX_DROPPED;
+    }
     usearch_error_t err = NULL;
     unsigned char idBuf[8];
 
@@ -759,7 +767,6 @@ int kvstore_vec_put_batch(
     int64_t           expire_ms
 ) {
     if (!pVS || !pItems || nItems <= 0) return KVSTORE_ERROR;
-    if (!pVS->pIdx) return KVVEC_INDEX_DROPPED;
     if (nItems == 0) return KVSTORE_OK;
     /* Validate per-item vectors before taking any locks */
     for (int i = 0; i < nItems; i++) {
@@ -767,6 +774,10 @@ int kvstore_vec_put_batch(
     }
 
     sqlite3_mutex_enter(pVS->pMutex);
+    if (!pVS->pIdx) {                 /* checked under the lock: drop_index frees it */
+        sqlite3_mutex_leave(pVS->pMutex);
+        return KVVEC_INDEX_DROPPED;
+    }
     usearch_error_t err = NULL;
 
     /* Ensure tags CF before DDL/DML boundary */
@@ -935,7 +946,10 @@ int kvstore_vec_get(
     void       **ppVal, int *pnVal
 ) {
     if (!pVS || !pKey || !ppVal || !pnVal) return KVSTORE_ERROR;
-    return kvstore_get(pVS->pKV, pKey, nKey, ppVal, pnVal);
+    sqlite3_mutex_enter(pVS->pMutex);
+    int rc = kvstore_get(pVS->pKV, pKey, nKey, ppVal, pnVal);
+    sqlite3_mutex_leave(pVS->pMutex);
+    return rc;
 }
 
 /* =======================================================================
@@ -947,20 +961,26 @@ int kvstore_vec_get_vector(
     float      **ppVec, int *pnFloats
 ) {
     if (!pVS || !pKey || !ppVec || !pnFloats) return KVSTORE_ERROR;
-    if (!pVS->pVecCF) return KVVEC_INDEX_DROPPED;
-
-    /* An expired key has no vector (same rule as kvstore_vec_get). */
-    int liveRc = KVSTORE_OK;
-    if (!vecKeyIsLive(pVS, pKey, nKey, &liveRc))
-        return liveRc != KVSTORE_OK ? liveRc : KVSTORE_NOTFOUND;
-
-    void *pRaw = NULL; int nRaw = 0;
-    int rc = kvstore_cf_get(pVS->pVecCF, pKey, nKey, &pRaw, &nRaw);
-    if (rc != KVSTORE_OK) return rc;
-
-    *ppVec    = (float*)pRaw;
-    *pnFloats = nRaw / (int)sizeof(float);
-    return KVSTORE_OK;
+    sqlite3_mutex_enter(pVS->pMutex);
+    int rc;
+    if (!pVS->pVecCF) {
+        rc = KVVEC_INDEX_DROPPED;
+    } else {
+        /* An expired key has no vector (same rule as kvstore_vec_get). */
+        int liveRc = KVSTORE_OK;
+        if (!vecKeyIsLive(pVS, pKey, nKey, &liveRc)) {
+            rc = liveRc != KVSTORE_OK ? liveRc : KVSTORE_NOTFOUND;
+        } else {
+            void *pRaw = NULL; int nRaw = 0;
+            rc = kvstore_cf_get(pVS->pVecCF, pKey, nKey, &pRaw, &nRaw);
+            if (rc == KVSTORE_OK) {
+                *ppVec    = (float*)pRaw;
+                *pnFloats = nRaw / (int)sizeof(float);
+            }
+        }
+    }
+    sqlite3_mutex_leave(pVS->pMutex);
+    return rc;
 }
 
 /* =======================================================================
@@ -973,11 +993,13 @@ int kvstore_vec_get_metadata(
 ) {
     if (!pVS || !pKey || !ppMeta || !pnMeta) return KVSTORE_ERROR;
     *ppMeta = NULL; *pnMeta = 0;
+    sqlite3_mutex_enter(pVS->pMutex);
     /* An expired key has no metadata (same rule as kvstore_vec_get). */
     int liveRc = KVSTORE_OK;
-    if (!vecKeyIsLive(pVS, pKey, nKey, &liveRc))
+    if (!vecKeyIsLive(pVS, pKey, nKey, &liveRc)) {
+        sqlite3_mutex_leave(pVS->pMutex);
         return liveRc != KVSTORE_OK ? liveRc : KVSTORE_NOTFOUND;
-    sqlite3_mutex_enter(pVS->pMutex);
+    }
     int rc;
     if (!pVS->pTagsCF) {
         rc = KVSTORE_OK; /* no metadata stored — not an error */
@@ -997,7 +1019,10 @@ int kvstore_vec_kv_put(
     const void  *pVal, int nVal
 ) {
     if (!pVS) return KVSTORE_ERROR;
-    return kvstore_put(pVS->pKV, pKey, nKey, pVal, nVal);
+    sqlite3_mutex_enter(pVS->pMutex);
+    int rc = kvstore_put(pVS->pKV, pKey, nKey, pVal, nVal);
+    sqlite3_mutex_leave(pVS->pMutex);
+    return rc;
 }
 
 /* =======================================================================
@@ -1020,17 +1045,23 @@ int kvstore_vec_contains(
     const void  *pKey, int nKey
 ) {
     if (!pVS || !pKey) return 0;
-    return vecKeyIsLive(pVS, pKey, nKey, NULL);
+    sqlite3_mutex_enter(pVS->pMutex);
+    int live = vecKeyIsLive(pVS, pKey, nKey, NULL);
+    sqlite3_mutex_leave(pVS->pMutex);
+    return live;
 }
 
 /* =======================================================================
 ** kvstore_vec_count
 ** ======================================================================= */
 int64_t kvstore_vec_count(KVVecStore *pVS) {
-    if (!pVS || !pVS->pIdx) return 0;
+    if (!pVS) return 0;
     sqlite3_mutex_enter(pVS->pMutex);
-    usearch_error_t err = NULL;
-    int64_t n = (int64_t)usearch_size(pVS->pIdx, &err);
+    int64_t n = 0;
+    if (pVS->pIdx) {                 /* checked under the lock: drop_index frees it */
+        usearch_error_t err = NULL;
+        n = (int64_t)usearch_size(pVS->pIdx, &err);
+    }
     sqlite3_mutex_leave(pVS->pMutex);
     return n;
 }
@@ -1153,11 +1184,14 @@ int kvstore_vec_search(
 ) {
     if (!pVS || !pQuery || !ppResults || !pnResults) return KVSTORE_ERROR;
     *ppResults = NULL; *pnResults = 0;
-    if (!pVS->pIdx) return KVVEC_INDEX_DROPPED;
     if (top_k <= 0) return KVSTORE_ERROR;
     if (oversample < 1) oversample = 3;
 
     sqlite3_mutex_enter(pVS->pMutex);
+    if (!pVS->pIdx) {                 /* checked under the lock: drop_index frees it */
+        sqlite3_mutex_leave(pVS->pMutex);
+        return KVVEC_INDEX_DROPPED;
+    }
     usearch_error_t err = NULL;
     size_t sz = usearch_size(pVS->pIdx, &err);
     if (sz == 0) { sqlite3_mutex_leave(pVS->pMutex); return KVVEC_INDEX_EMPTY; }
@@ -1289,10 +1323,13 @@ int kvstore_vec_search_keys(
 ) {
     if (!pVS || !pQuery || !ppResults || !pnResults) return KVSTORE_ERROR;
     *ppResults = NULL; *pnResults = 0;
-    if (!pVS->pIdx) return KVVEC_INDEX_DROPPED;
     if (top_k <= 0) return KVSTORE_ERROR;
 
     sqlite3_mutex_enter(pVS->pMutex);
+    if (!pVS->pIdx) {                 /* checked under the lock: drop_index frees it */
+        sqlite3_mutex_leave(pVS->pMutex);
+        return KVVEC_INDEX_DROPPED;
+    }
     usearch_error_t err = NULL;
     size_t sz = usearch_size(pVS->pIdx, &err);
     if (sz == 0) { sqlite3_mutex_leave(pVS->pMutex); return KVVEC_INDEX_EMPTY; }
@@ -1412,9 +1449,13 @@ int kvstore_vec_stats(KVVecStore *pVS, KVVecStats *pStats) {
 
 int kvstore_vec_purge_expired(KVVecStore *pVS, int *pnDeleted) {
     if (pnDeleted) *pnDeleted = 0;
-    if (!pVS || !pVS->pIdx || !pVS->pVecCF) return KVSTORE_OK;
+    if (!pVS) return KVSTORE_OK;
 
     sqlite3_mutex_enter(pVS->pMutex);
+    if (!pVS->pIdx || !pVS->pVecCF) {  /* dropped: nothing to purge */
+        sqlite3_mutex_leave(pVS->pMutex);
+        return KVSTORE_OK;
+    }
     usearch_error_t err = NULL;
 
     /* One fixed-size batch, allocated once.  Scan _snkv_vec_ until it is
