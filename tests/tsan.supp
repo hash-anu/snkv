@@ -1,0 +1,11 @@
+# ThreadSanitizer suppressions for `make test-tsan`.
+#
+# SQLite's WAL index (-shm) is shared by every handle on a database.  Writers
+# update it under shm locks (lock bits / OS file locks); readers read the
+# header without a lock, compare its two checksummed copies and retry on a
+# torn read, with sqlite3OsShmBarrier ordering the accesses.  TSan cannot see
+# that as synchronisation and reports a race when two handles open the same
+# file at once (test_concurrent, test_stress).  Master reports it too.
+race:walIndexRecover
+race:walIndexReadHdr
+race:walTryBeginRead

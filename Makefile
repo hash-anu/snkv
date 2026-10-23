@@ -227,7 +227,8 @@ test-ubsan:
 
 test-tsan:
 	$(MAKE) clean
-	$(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
+	TSAN_OPTIONS="suppressions=$(CURDIR)/tests/tsan.supp $(TSAN_OPTIONS)" \
+	  $(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
 
 test-coverage:
 	$(MAKE) clean
