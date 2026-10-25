@@ -844,7 +844,9 @@ int kvstore_iterator_key(
 ** Small values are read when the iterator moves, together with the key, so
 ** a write made through the handle after the move (e.g. updating the current
 ** key) is not seen until the iterator moves again.  *ppValue stays valid
-** until the iterator moves again or is closed.
+** until the iterator moves again or is closed.  Returns KVSTORE_NOTFOUND if
+** the current row was deleted after the move and its value was not read
+** yet; kvstore_iterator_next / _prev still continue from the right place.
 */
 int kvstore_iterator_value(
   KVIterator *pIter,

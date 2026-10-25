@@ -1220,6 +1220,98 @@ static void t22_fill_store(KVStore *kv){
   }
   kvstore_commit(kv);
 }
+/* ----------------------------------------------------------------------
+** Test 23: key/value after a write moved the iterator's row.  A write
+** through the handle (here: 1000 inserts before the current key, which
+** split its page) saves the iterator's cursor; reading it without
+** restoring returned SQLITE_CORRUPT on a healthy store.  Also: the current
+** row deleted -> value() is NOTFOUND and next() still lands on the
+** following row.  Values read on demand: large ones, and every value on an
+** encrypted store.
+** -------------------------------------------------------------------- */
+static void t23_check(KVStore *kv, const char *label){
+  static unsigned char big[20000], filler[200];
+  char msg[128], kb[16];
+  KVIterator *it = NULL;
+  void *k = NULL, *v = NULL; int nk = 0, nv = 0, rc;
+  memset(big, 'B', sizeof big);
+  memset(filler, 'f', sizeof filler);
+  kvstore_put(kv, "m", 1, big, sizeof big);
+  kvstore_put(kv, "n", 1, "small-n", 7);
+  kvstore_put(kv, "p", 1, big, sizeof big);
+  kvstore_put(kv, "q", 1, "small-q", 7);
+
+  /* Page split under the iterator. */
+  kvstore_iterator_create(kv, &it);
+  kvstore_iterator_seek(it, "m", 1);
+  kvstore_begin(kv, 1);
+  for(int i = 0; i < 1000; i++){
+    snprintf(kb, sizeof kb, "b%04d", i);
+    kvstore_put(kv, kb, (int)strlen(kb), filler, sizeof filler);
+  }
+  kvstore_commit(kv);
+  rc = kvstore_iterator_value(it, &v, &nv);
+  snprintf(msg, sizeof msg, "%s: value() after a page split under the iterator", label);
+  CHECK(rc == KVSTORE_OK && nv == (int)sizeof big && memcmp(v, big, nv) == 0, msg);
+  rc = kvstore_iterator_key(it, &k, &nk);
+  snprintf(msg, sizeof msg, "%s: key() after the split", label);
+  CHECK(rc == KVSTORE_OK && nk == 1 && memcmp(k, "m", 1) == 0, msg);
+  kvstore_iterator_next(it);
+  rc = kvstore_iterator_value(it, &v, &nv);
+  kvstore_iterator_key(it, &k, &nk);
+  snprintf(msg, sizeof msg, "%s: next() after the split -> n with its value", label);
+  CHECK(rc == KVSTORE_OK && nk == 1 && memcmp(k, "n", 1) == 0
+        && nv == 7 && memcmp(v, "small-n", 7) == 0, msg);
+
+  /* Current row deleted before its value was read. */
+  kvstore_iterator_next(it);                         /* on "p" (large) */
+  kvstore_delete(kv, "p", 1);
+  rc = kvstore_iterator_value(it, &v, &nv);
+  snprintf(msg, sizeof msg, "%s: value() of a deleted current row -> NOTFOUND", label);
+  CHECK(rc == KVSTORE_NOTFOUND, msg);
+  kvstore_iterator_next(it);
+  rc = kvstore_iterator_key(it, &k, &nk);
+  int rcv = kvstore_iterator_value(it, &v, &nv);
+  snprintf(msg, sizeof msg, "%s: next() after the delete -> q, nothing skipped", label);
+  CHECK(rc == KVSTORE_OK && nk == 1 && memcmp(k, "q", 1) == 0
+        && rcv == KVSTORE_OK && nv == 7 && memcmp(v, "small-q", 7) == 0, msg);
+  kvstore_iterator_close(it);
+
+  /* Same on a reverse iterator: delete the current row; prev() must land on
+  ** the row before it. */
+  kvstore_put(kv, "p", 1, big, sizeof big);
+  kvstore_reverse_iterator_create(kv, &it);
+  kvstore_iterator_seek(it, "p", 1);                 /* on "p" (large) */
+  kvstore_delete(kv, "p", 1);
+  rc = kvstore_iterator_value(it, &v, &nv);
+  snprintf(msg, sizeof msg, "%s: reverse: value() of a deleted current row -> NOTFOUND", label);
+  CHECK(rc == KVSTORE_NOTFOUND, msg);
+  kvstore_iterator_prev(it);
+  rc = kvstore_iterator_key(it, &k, &nk);
+  rcv = kvstore_iterator_value(it, &v, &nv);
+  snprintf(msg, sizeof msg, "%s: reverse: prev() after the delete -> n, nothing skipped", label);
+  CHECK(rc == KVSTORE_OK && nk == 1 && memcmp(k, "n", 1) == 0
+        && rcv == KVSTORE_OK && nv == 7 && memcmp(v, "small-n", 7) == 0, msg);
+  kvstore_iterator_close(it);
+
+  snprintf(msg, sizeof msg, "%s: integrity check", label);
+  CHECK(kvstore_integrity_check(kv, NULL) == KVSTORE_OK, msg);
+}
+static void test_iter_after_write(void){
+  const char *db = "t_rf_iterw.db", *dbEnc = "t_rf_iterw_enc.db";
+  KVStore *kv = NULL;
+  printf("Test 23: iterator key/value after a write moved its row\n");
+  cleanup(db);
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL) == KVSTORE_OK, "open plain store");
+  if( kv ){ t23_check(kv, "plain"); kvstore_close(kv); }
+  cleanup(db);
+  kv = NULL;
+  cleanup(dbEnc);
+  CHECK(kvstore_open_encrypted(dbEnc, "pw", 2, &kv, NULL) == KVSTORE_OK, "open encrypted store");
+  if( kv ){ t23_check(kv, "encrypted"); kvstore_close(kv); }
+  cleanup(dbEnc);
+}
+
 static void test_iter_row_cache(void){
   const char *db = "t_rf_iter.db";
   const char *dbEnc = "t_rf_iter_enc.db";
@@ -1270,6 +1362,7 @@ int main(void){
   test_internal_cf_in_txn();
   test_version();
   test_iter_row_cache();
+  test_iter_after_write();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

@@ -896,7 +896,8 @@ ro.readOnly = <span class="nm">1</span>;
           <h3 class="fn-name">kvstore_iterator_key / value</h3>
           <div class="fn-sig"><span class="kw">int</span> <span class="fn">kvstore_iterator_key</span>(KVIterator *pIter, <span class="kw">void</span> **ppKey,   <span class="kw">int</span> *pnKey);
 <span class="kw">int</span> <span class="fn">kvstore_iterator_value</span>(KVIterator *pIter, <span class="kw">void</span> **ppValue, <span class="kw">int</span> *pnValue);</div>
-          <p class="fn-desc">Read the current key or value. Pointers are owned by the iterator — <strong>do not free them</strong>. Valid until the next <code>next()</code> or <code>close()</code> call.</p>
+          <p class="fn-desc">Read the current key or value. Pointers are owned by the iterator — <strong>do not free them</strong>. Valid until the iterator moves again or is closed.</p>
+          <p class="fn-desc">The row is read when the iterator moves (<code>first</code> / <code>next</code> / <code>last</code> / <code>prev</code> / <code>seek</code>), so <code>key</code> / <code>value</code> take no lock. Values up to 1&nbsp;KB are copied then; a write to the current key after the move is seen once the iterator moves again. If the current row was deleted before its value was read, <code>value</code> returns <code>KVSTORE_NOTFOUND</code>. Embedded builds can set <code>-DKVSTORE_ITER_PREFETCH_MAX=0</code> to copy only keys (saves up to 1&nbsp;KB per open iterator).</p>
           <pre>KVIterator *it = <span class="kw">NULL</span>;
 <span class="fn">kvstore_iterator_create</span>(kv, &amp;it);
 <span class="fn">kvstore_iterator_first</span>(it);

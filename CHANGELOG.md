@@ -48,6 +48,12 @@ to `busyTimeout`).
 
 ### Fixed
 
+- `kvstore_iterator_key` / `_value` after a write through the handle moved
+  the iterator's row (for example, inserts that split its page) returned
+  `KVSTORE_CORRUPT` on a healthy store: they read the B-tree cursor without
+  restoring the position SQLite saved. They now restore it; if the current
+  row was deleted, `value` returns `KVSTORE_NOTFOUND` and `next` / `prev`
+  still continue from the right place.
 - Thread safety: one lock per handle (the per-column-family locks are gone).
   Iterator calls and closing a column family or iterator now run under the
   handle lock. They used to read and release pages of the shared page cache

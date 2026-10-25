@@ -553,7 +553,9 @@ Get the value at the current iterator position.
 int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue);
 ```
 
-**Note:** The returned pointer is owned by the iterator. **Do not free it.**
+**Note:** The returned pointer is owned by the iterator. **Do not free it.** It is valid until the iterator moves again or is closed.
+
+The row is read when the iterator moves (`first` / `next` / `last` / `prev` / `seek`), so `kvstore_iterator_key` / `_value` take no lock. Values up to 1 KB (`KVSTORE_ITER_PREFETCH_MAX`) are copied then; larger and encrypted values are read on the first `value` call. A write to the current key after the move is seen once the iterator moves again. If the current row was deleted before its value was read, `value` returns `KVSTORE_NOTFOUND`; `next` / `prev` still continue from the right place. Build with `-DKVSTORE_ITER_PREFETCH_MAX=0` to copy only keys (saves up to 1 KB per open iterator on embedded targets).
 
 ### kvstore_iterator_close
 

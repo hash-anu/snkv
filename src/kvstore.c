@@ -4181,6 +4181,23 @@ static int kvstoreIterEofImpl(KVIterator *pIter){
 }
 
 /*
+** A write through the handle since the iterator last moved can save its
+** cursor (SQLite releases the page, e.g. when the page splits).  Reading the
+** payload without restoring it reads a page that no longer holds the row
+** and fails with SQLITE_CORRUPT.  Restore it first.  Returns
+** KVSTORE_NOTFOUND if the row itself is gone (deleted); the cursor is left
+** so that the next kvstore_iterator_next / _prev still lands on the right
+** row.  Caller holds pKV->pMutex.
+*/
+static int kvstoreIterRestore(KVIterator *pIter){
+  int differentRow = 0, rc;
+  if( !sqlite3BtreeCursorHasMoved(pIter->pCur) ) return KVSTORE_OK;
+  rc = sqlite3BtreeCursorRestore(pIter->pCur, &differentRow);
+  if( rc != SQLITE_OK ) return rc;
+  return differentRow ? KVSTORE_NOTFOUND : KVSTORE_OK;
+}
+
+/*
 ** Get current key from iterator.
 ** Reads the encoded payload and extracts the key portion.
 */
@@ -4194,6 +4211,9 @@ static int kvstoreIterKeyImpl(KVIterator *pIter, void **ppKey, int *pnKey){
   if( pIter->eof ){
     return KVSTORE_ERROR;
   }
+
+  rc = kvstoreIterRestore(pIter);
+  if( rc != KVSTORE_OK ) return rc;
 
   u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
   if( payloadSz < 4 ) return KVSTORE_CORRUPT;
@@ -4235,6 +4255,9 @@ static int kvstoreIterValueImpl(KVIterator *pIter, void **ppValue, int *pnValue)
   if( pIter->eof ){
     return KVSTORE_ERROR;
   }
+
+  rc = kvstoreIterRestore(pIter);
+  if( rc != KVSTORE_OK ) return rc;
 
   u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
   if( payloadSz < 4 ) return KVSTORE_CORRUPT;
@@ -4462,6 +4485,7 @@ static void kvstoreIterLoadRow(KVIterator *pIter){
   int keyLen, valLen;
 
   if( pIter->eof || !pIter->pCur ) return;
+  if( sqlite3BtreeCursorHasMoved(pIter->pCur) ) return;   /* not on a row */
   payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
   if( payloadSz < 4 ) return;
   a = (const unsigned char*)sqlite3BtreePayloadFetch(pIter->pCur, &nLocal);
