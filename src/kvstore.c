@@ -530,6 +530,10 @@ struct KVIterator {
   int nKeyBuf;       /* Size of key buffer */
   void *pValBuf;     /* Buffer for current value */
   int nValBuf;       /* Size of value buffer */
+  int keyReady;      /* 1: pKeyBuf holds the current row's key (nCurKey bytes) */
+  int nCurKey;
+  int valReady;      /* 1: pValBuf holds the current row's value (nCurVal bytes) */
+  int nCurVal;
   int isValid;       /* Iterator validity flag */
   void *pPrefix;     /* Prefix filter (NULL = no filter) */
   int nPrefix;       /* Length of prefix */
@@ -4434,50 +4438,110 @@ static int kvstoreIterSeekImpl(KVIterator *pIter, const void *pKey, int nKey){
 }
 
 /*
-** Public iterator calls.  Each one (except eof) takes the handle mutex:
-** an iterator reads the handle's shared B-tree and page cache, so it must
-** not run at the same time as another thread's call on the same handle.
+** Values up to this many bytes are copied into the iterator when it moves,
+** so kvstore_iterator_value() needs no lock.  Larger values are read on
+** demand, so a key-only scan does not pay for copying them.
+*/
+#ifndef KVSTORE_ITER_PREFETCH_MAX
+# define KVSTORE_ITER_PREFETCH_MAX 1024
+#endif
+
+/*
+** Copy the current row into the iterator's buffers right after it moves
+** (caller holds pKV->pMutex), so kvstore_iterator_key / _value can return
+** it without taking the lock: one lock per row instead of three.  The key
+** is copied when it is on the cursor's page; the value when it is also on
+** the page, at most KVSTORE_ITER_PREFETCH_MAX bytes, and not encrypted
+** (decrypting needs the key, which kvstore_reencrypt may change).
+** Best effort: anything not copied (overflow, encrypted, a corrupt header,
+** out of memory) is read under the lock on demand, which reports the error.
+*/
+static void kvstoreIterLoadRow(KVIterator *pIter){
+  const unsigned char *a;
+  u32 nLocal = 0, payloadSz;
+  int keyLen, valLen;
+
+  if( pIter->eof || !pIter->pCur ) return;
+  payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  if( payloadSz < 4 ) return;
+  a = (const unsigned char*)sqlite3BtreePayloadFetch(pIter->pCur, &nLocal);
+  if( !a || nLocal < 4 ) return;
+  keyLen = (a[0]<<24)|(a[1]<<16)|(a[2]<<8)|a[3];
+  if( keyLen <= 0 || (u32)keyLen > payloadSz - 4 ) return;
+  if( (u32)keyLen > nLocal - 4 ) return;          /* key on overflow pages */
+
+  if( pIter->nKeyBuf < keyLen ){
+    void *pNew = sqlite3Realloc(pIter->pKeyBuf, keyLen);
+    if( !pNew ) return;
+    pIter->pKeyBuf = pNew;
+    pIter->nKeyBuf = keyLen;
+  }
+  memcpy(pIter->pKeyBuf, a + 4, keyLen);
+  pIter->nCurKey  = keyLen;
+  pIter->keyReady = 1;
+
+  if( pIter->pCF->pKV->bEncrypted ) return;
+  valLen = (int)(payloadSz - 4 - (u32)keyLen);
+  if( valLen > KVSTORE_ITER_PREFETCH_MAX ) return;
+  if( (u32)valLen > nLocal - 4 - (u32)keyLen ) return;   /* overflow pages */
+  if( valLen > 0 ){
+    if( pIter->nValBuf < valLen ){
+      void *pNew = sqlite3Realloc(pIter->pValBuf, valLen);
+      if( !pNew ) return;
+      pIter->pValBuf = pNew;
+      pIter->nValBuf = valLen;
+    }
+    memcpy(pIter->pValBuf, a + 4 + keyLen, valLen);
+  }
+  pIter->nCurVal  = valLen;
+  pIter->valReady = 1;
+}
+
+/*
+** Public iterator calls.  Moving the iterator (first/next/last/prev/seek)
+** takes the handle mutex: an iterator reads the handle's shared B-tree and
+** page cache, so it must not run at the same time as another thread's call
+** on the same handle.  key/value return the row copied by the move without
+** locking; eof takes no lock either.  That is safe because an iterator is
+** used by one thread at a time.  key/value fall back to a locked read for
+** rows the move did not copy.
 ** pIter->pCF is NULL once kvstore_close() has force-closed the iterator;
 ** the Impl then returns its closed-iterator result without touching pKV.
 */
 static KVStore *kvstoreIterStore(KVIterator *pIter){
   return (pIter && pIter->pCF) ? pIter->pCF->pKV : NULL;
 }
-int kvstore_iterator_first(KVIterator *pIter){
-  KVStore *pKV = kvstoreIterStore(pIter);
-  int rc;
-  if( !pKV ) return kvstoreIterFirstImpl(pIter);
-  KV_ENTER(pKV);
-  rc = kvstoreIterFirstImpl(pIter);
-  KV_LEAVE(pKV);
+
+/* Common tail of the move calls: the old row is gone; copy the new one. */
+static int kvstoreIterMoved(KVIterator *pIter, int rc){
+  if( rc == SQLITE_OK ) kvstoreIterLoadRow(pIter);
   return rc;
+}
+#define KV_ITER_MOVE(pIter, CALL) do {                     \
+  KVStore *pKV_ = kvstoreIterStore(pIter);                 \
+  int rc_;                                                 \
+  if( !pKV_ ) return CALL;                                 \
+  KV_ENTER(pKV_);                                          \
+  (pIter)->keyReady = (pIter)->valReady = 0;               \
+  rc_ = kvstoreIterMoved((pIter), CALL);                   \
+  KV_LEAVE(pKV_);                                          \
+  return rc_;                                              \
+} while(0)
+
+int kvstore_iterator_first(KVIterator *pIter){
+  KV_ITER_MOVE(pIter, kvstoreIterFirstImpl(pIter));
 }
 int kvstore_iterator_next(KVIterator *pIter){
-  KVStore *pKV = kvstoreIterStore(pIter);
-  int rc;
-  if( !pKV ) return kvstoreIterNextImpl(pIter);
-  KV_ENTER(pKV);
-  rc = kvstoreIterNextImpl(pIter);
-  KV_LEAVE(pKV);
-  return rc;
+  KV_ITER_MOVE(pIter, kvstoreIterNextImpl(pIter));
 }
 int kvstore_iterator_last(KVIterator *pIter){
-  KVStore *pKV = kvstoreIterStore(pIter);
-  int rc;
-  if( !pKV ) return kvstoreIterLastImpl(pIter);
-  KV_ENTER(pKV);
-  rc = kvstoreIterLastImpl(pIter);
-  KV_LEAVE(pKV);
-  return rc;
+  KV_ITER_MOVE(pIter, kvstoreIterLastImpl(pIter));
 }
 int kvstore_iterator_prev(KVIterator *pIter){
-  KVStore *pKV = kvstoreIterStore(pIter);
-  int rc;
-  if( !pKV ) return kvstoreIterPrevImpl(pIter);
-  KV_ENTER(pKV);
-  rc = kvstoreIterPrevImpl(pIter);
-  KV_LEAVE(pKV);
-  return rc;
+  KV_ITER_MOVE(pIter, kvstoreIterPrevImpl(pIter));
+}
+int kvstore_iterator_seek(KVIterator *pIter, const void *pKey, int nKey){
+  KV_ITER_MOVE(pIter, kvstoreIterSeekImpl(pIter, pKey, nKey));
 }
 int kvstore_iterator_eof(KVIterator *pIter){
   /* No lock: reads only the iterator's own fields (an iterator is used by
@@ -4485,29 +4549,37 @@ int kvstore_iterator_eof(KVIterator *pIter){
   return kvstoreIterEofImpl(pIter);
 }
 int kvstore_iterator_key(KVIterator *pIter, void **ppKey, int *pnKey){
-  KVStore *pKV = kvstoreIterStore(pIter);
+  KVStore *pKV;
   int rc;
+  if( pIter && pIter->isValid && !pIter->eof && pIter->keyReady
+   && ppKey && pnKey ){
+    *ppKey = pIter->pKeyBuf;
+    *pnKey = pIter->nCurKey;
+    return KVSTORE_OK;
+  }
+  pKV = kvstoreIterStore(pIter);
   if( !pKV ) return kvstoreIterKeyImpl(pIter, ppKey, pnKey);
   KV_ENTER(pKV);
   rc = kvstoreIterKeyImpl(pIter, ppKey, pnKey);
+  if( rc == KVSTORE_OK ){ pIter->nCurKey = *pnKey; pIter->keyReady = 1; }
   KV_LEAVE(pKV);
   return rc;
 }
 int kvstore_iterator_value(KVIterator *pIter, void **ppValue, int *pnValue){
-  KVStore *pKV = kvstoreIterStore(pIter);
+  KVStore *pKV;
   int rc;
+  if( pIter && pIter->isValid && !pIter->eof && pIter->valReady
+   && ppValue && pnValue ){
+    *ppValue = pIter->nCurVal ? pIter->pValBuf : NULL;
+    *pnValue = pIter->nCurVal;
+    return KVSTORE_OK;
+  }
+  pKV = kvstoreIterStore(pIter);
   if( !pKV ) return kvstoreIterValueImpl(pIter, ppValue, pnValue);
   KV_ENTER(pKV);
   rc = kvstoreIterValueImpl(pIter, ppValue, pnValue);
-  KV_LEAVE(pKV);
-  return rc;
-}
-int kvstore_iterator_seek(KVIterator *pIter, const void *pKey, int nKey){
-  KVStore *pKV = kvstoreIterStore(pIter);
-  int rc;
-  if( !pKV ) return kvstoreIterSeekImpl(pIter, pKey, nKey);
-  KV_ENTER(pKV);
-  rc = kvstoreIterSeekImpl(pIter, pKey, nKey);
+  /* pValBuf now holds the (decrypted) value: later calls need no lock. */
+  if( rc == KVSTORE_OK ){ pIter->nCurVal = *pnValue; pIter->valReady = 1; }
   KV_LEAVE(pKV);
   return rc;
 }

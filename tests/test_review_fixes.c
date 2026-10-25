@@ -1111,6 +1111,141 @@ static void test_version(void){
                                   + KVSTORE_VERSION_PATCH, "number encodes MAJOR*1e6 + MINOR*1e3 + PATCH");
 }
 
+/* ----------------------------------------------------------------------
+** Test 22: an iterator copies the row when it moves, so key/value need no
+** lock.  Every path must return the same data as a locked read: value
+** before key, repeated calls, empty / over-the-prefetch-limit / overflow
+** values, reverse, seek, prefix, key-only scans, encrypted values, and no
+** stale row after eof.  Row i's value size cycles 10, 0, 1500, 20000.
+** -------------------------------------------------------------------- */
+#define T22_ROWS 100
+static int t22_fill(int i, unsigned char *buf){
+  static const int sizes[4] = { 10, 0, 1500, 20000 };
+  int n = sizes[i % 4];
+  for(int j = 0; j < n; j++) buf[j] = (unsigned char)(i + j);
+  return n;
+}
+static int t22_row_ok(KVIterator *it, int i, int valueFirst){
+  static unsigned char want[20000];
+  char wantKey[16];
+  void *k = NULL, *v = NULL, *k2 = NULL, *v2 = NULL;
+  int nk = 0, nv = -1, nk2 = 0, nv2 = -1;
+  int nWant = t22_fill(i, want);
+  snprintf(wantKey, sizeof wantKey, "k%03d", i);
+  if( valueFirst ){
+    if( kvstore_iterator_value(it, &v, &nv) != KVSTORE_OK ) return 0;
+    if( kvstore_iterator_key(it, &k, &nk) != KVSTORE_OK ) return 0;
+  }else{
+    if( kvstore_iterator_key(it, &k, &nk) != KVSTORE_OK ) return 0;
+    if( kvstore_iterator_value(it, &v, &nv) != KVSTORE_OK ) return 0;
+  }
+  if( kvstore_iterator_value(it, &v2, &nv2) != KVSTORE_OK ) return 0;  /* again */
+  if( kvstore_iterator_key(it, &k2, &nk2) != KVSTORE_OK ) return 0;
+  if( nk != 4 || memcmp(k, wantKey, 4) != 0 ) return 0;
+  if( nk2 != nk || memcmp(k2, k, nk) != 0 ) return 0;
+  if( nv != nWant || nv2 != nWant ) return 0;
+  if( nWant > 0 && (memcmp(v, want, nWant) != 0 || memcmp(v2, want, nWant) != 0) ) return 0;
+  return 1;
+}
+static void t22_check_store(KVStore *kv, const char *label){
+  char msg[128];
+  KVIterator *it = NULL;
+  int n, ok;
+
+  /* Forward scan, value read before key on odd rows. */
+  n = 0; ok = 1;
+  kvstore_iterator_create(kv, &it);
+  for(kvstore_iterator_first(it); !kvstore_iterator_eof(it); kvstore_iterator_next(it)){
+    if( !t22_row_ok(it, n, n & 1) ) ok = 0;
+    n++;
+  }
+  void *k = NULL; int nk = 0;
+  int rcEof = kvstore_iterator_key(it, &k, &nk);
+  kvstore_iterator_close(it);
+  snprintf(msg, sizeof msg, "%s: forward scan, every key/value correct", label);
+  CHECK(ok && n == T22_ROWS, msg);
+  snprintf(msg, sizeof msg, "%s: key() after eof is an error, not the last row", label);
+  CHECK(rcEof != KVSTORE_OK, msg);
+
+  /* Key-only scan (values never requested). */
+  n = 0; ok = 1;
+  kvstore_iterator_create(kv, &it);
+  for(kvstore_iterator_first(it); !kvstore_iterator_eof(it); kvstore_iterator_next(it)){
+    char want[16]; snprintf(want, sizeof want, "k%03d", n);
+    if( kvstore_iterator_key(it, &k, &nk) != KVSTORE_OK || nk != 4 || memcmp(k, want, 4) ) ok = 0;
+    n++;
+  }
+  kvstore_iterator_close(it);
+  snprintf(msg, sizeof msg, "%s: key-only scan", label);
+  CHECK(ok && n == T22_ROWS, msg);
+
+  /* Reverse scan. */
+  n = T22_ROWS - 1; ok = 1;
+  kvstore_reverse_iterator_create(kv, &it);
+  for(kvstore_iterator_last(it); !kvstore_iterator_eof(it); kvstore_iterator_prev(it)){
+    if( n < 0 || !t22_row_ok(it, n, 0) ) ok = 0;
+    n--;
+  }
+  kvstore_iterator_close(it);
+  snprintf(msg, sizeof msg, "%s: reverse scan", label);
+  CHECK(ok && n == -1, msg);
+
+  /* Seek: exact key, then a key between two rows. */
+  kvstore_iterator_create(kv, &it);
+  ok = kvstore_iterator_seek(it, "k050", 4) == KVSTORE_OK && t22_row_ok(it, 50, 1);
+  ok = ok && kvstore_iterator_seek(it, "k0505", 5) == KVSTORE_OK && t22_row_ok(it, 51, 0);
+  ok = ok && kvstore_iterator_seek(it, "k003", 4) == KVSTORE_OK && t22_row_ok(it, 3, 1);
+  kvstore_iterator_close(it);
+  snprintf(msg, sizeof msg, "%s: seek (exact, between rows, backwards)", label);
+  CHECK(ok, msg);
+
+  /* Prefix scan: k090..k099. */
+  n = 90; ok = 1;
+  if( kvstore_prefix_iterator_create(kv, "k09", 3, &it) == KVSTORE_OK ){
+    for(; !kvstore_iterator_eof(it); kvstore_iterator_next(it)){
+      if( !t22_row_ok(it, n, n & 1) ) ok = 0;
+      n++;
+    }
+    kvstore_iterator_close(it);
+  }else ok = 0;
+  snprintf(msg, sizeof msg, "%s: prefix scan", label);
+  CHECK(ok && n == 100, msg);
+}
+static void t22_fill_store(KVStore *kv){
+  static unsigned char buf[20000];
+  kvstore_begin(kv, 1);
+  for(int i = 0; i < T22_ROWS; i++){
+    char key[16]; snprintf(key, sizeof key, "k%03d", i);
+    kvstore_put(kv, key, 4, buf, t22_fill(i, buf));
+  }
+  kvstore_commit(kv);
+}
+static void test_iter_row_cache(void){
+  const char *db = "t_rf_iter.db";
+  const char *dbEnc = "t_rf_iter_enc.db";
+  KVStore *kv = NULL;
+  printf("Test 22: iterator copies the row on move (key/value without lock)\n");
+
+  cleanup(db);
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL) == KVSTORE_OK, "open plain store");
+  if( kv ){
+    t22_fill_store(kv);
+    t22_check_store(kv, "plain");
+    kvstore_close(kv);
+  }
+  cleanup(db);
+
+  kv = NULL;
+  cleanup(dbEnc);
+  CHECK(kvstore_open_encrypted(dbEnc, "pw", 2, &kv, NULL) == KVSTORE_OK, "open encrypted store");
+  if( kv ){
+    t22_fill_store(kv);
+    t22_check_store(kv, "encrypted");
+    kvstore_close(kv);
+  }
+  cleanup(dbEnc);
+}
+
 int main(void){
   printf("=== test_review_fixes ===\n");
   test_encrypt_user_cf_only();
@@ -1134,6 +1269,7 @@ int main(void){
   test_orphan_ttl_cleared();
   test_internal_cf_in_txn();
   test_version();
+  test_iter_row_cache();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

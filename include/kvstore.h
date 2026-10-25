@@ -819,6 +819,10 @@ int kvstore_iterator_eof(KVIterator *pIter);
 **
 ** Returns:
 **   KVSTORE_OK on success, error code otherwise
+**
+** The key is the one read when the iterator last moved (first / next /
+** last / prev / seek).  *ppKey stays valid until the iterator moves again
+** or is closed; copy it to keep it longer.
 */
 int kvstore_iterator_key(
   KVIterator *pIter,
@@ -836,6 +840,11 @@ int kvstore_iterator_key(
 **
 ** Returns:
 **   KVSTORE_OK on success, error code otherwise
+**
+** Small values are read when the iterator moves, together with the key, so
+** a write made through the handle after the move (e.g. updating the current
+** key) is not seen until the iterator moves again.  *ppValue stays valid
+** until the iterator moves again or is closed.
 */
 int kvstore_iterator_value(
   KVIterator *pIter,
