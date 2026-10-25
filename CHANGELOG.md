@@ -48,6 +48,12 @@ to `busyTimeout`).
 
 ### Fixed
 
+- `kvstore_iterator_key` / `_value` after a write through the handle moved
+  the iterator's row (for example, inserts that split its page) returned
+  `KVSTORE_CORRUPT` on a healthy store: they read the B-tree cursor without
+  restoring the position SQLite saved. They now restore it; if the current
+  row was deleted, `value` returns `KVSTORE_NOTFOUND` and `next` / `prev`
+  still continue from the right place.
 - Thread safety: one lock per handle (the per-column-family locks are gone).
   Iterator calls and closing a column family or iterator now run under the
   handle lock. They used to read and release pages of the shared page cache
@@ -73,12 +79,20 @@ to `busyTimeout`).
 
 ### Performance
 
-- Iteration is about 15% slower than 0.8.2 (median of 7 runs, 500 000 cached
-  rows: key+value scan 5.9 → 5.0 M rows/s, key-only 7.9 → 6.8 M rows/s),
-  because each `next` / `key` / `value` call now takes the handle lock. In
-  0.8.2 iterators took no lock, which was the unsafe part. Point reads and
-  writes are unchanged. Builds that never use threads can compile with
-  `-DSQLITE_THREADSAFE=0` to remove all locking.
+- Iterators now lock the handle (in 0.8.2 they took no lock, which was the
+  unsafe part), but only when they move: `first` / `next` / `last` / `prev` /
+  `seek` copy the current row, and `key` / `value` return the copy without
+  locking. One lock per row instead of three. A full key+value scan is 1.78x
+  faster than with a lock on every call, and 1.73x faster than SQLite
+  (mean of 5 alternating runs, 1M rows on tmpfs: 5.9 → 10.6 M rows/s; SQLite
+  6.1 M rows/s). Point reads and writes are unchanged. Builds that never use
+  threads can compile with `-DSQLITE_THREADSAFE=0` to remove all locking.
+- Values up to 1 KB (`KVSTORE_ITER_PREFETCH_MAX`) are copied when the
+  iterator moves; larger and encrypted values are still read when
+  `kvstore_iterator_value` is called. So a write to the current key made
+  after the move is not seen by `kvstore_iterator_value` for small values
+  until the iterator moves again. The pointers from `key` / `value` stay
+  valid until the iterator moves or is closed.
 
 ### Removed
 
