@@ -946,29 +946,29 @@ Step 3  Allocate KVStore { db, inTrans=0, closing=0 }
         pMutex = RECURSIVE (one per handle, always)
         (KV_ENTER / KV_LEAVE are no-ops when pMutex is NULL)
 
-Step 4  sqlite3BtreeOpen(vfs, path, db, &pBt, 0, flags)
-        flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-        (SQLITE_OPEN_READONLY if cfg.readOnly)
-
-Step 5  sqlite3BtreeSetPageSize(pBt, pageSize, -1, 0)
-        New DB  → sets page size before first write
-        Old DB  → silently ignored; existing page size wins
-
-Step 6  sqlite3BtreeSetCacheSize(pBt, cacheSize)
-
-Step 7  Set pager sync flags
-        syncFlag = (syncLevel + 1) | PAGER_CACHESPILL
-        SYNC_OFF    (0) → 0x01  SYNCHRONOUS_OFF
-        SYNC_NORMAL (1) → 0x02  SYNCHRONOUS_NORMAL     ← default
-        SYNC_FULL   (2) → 0x03  SYNCHRONOUS_FULL
-
-Step 8  Install busy handler (if busyTimeout > 0)
+Step 4  Install busy handler (if busyTimeout > 0) — before the B-tree opens
         KVBusyCtx { timeoutMs, pVfs } → heap-alloc via sqlite3_malloc
         db->busyHandler.xBusyHandler = kvstoreBusyHandler
         kvstoreBusyHandler(ctx, nBusy):
           if nBusy * 1ms >= timeoutMs → return 0 (give up)
           sqlite3OsSleep(pVfs, 1000 µs)      (sleep 1 ms)
           return 1                            (retry)
+
+Step 5  sqlite3BtreeOpen(vfs, path, db, &pBt, 0, flags)
+        flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB
+        (SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB if cfg.readOnly)
+
+Step 6  sqlite3BtreeSetPageSize(pBt, pageSize, -1, 0)
+        New DB  → sets page size before first write
+        Old DB  → silently ignored; existing page size wins
+
+Step 7  sqlite3BtreeSetCacheSize(pBt, cacheSize)
+
+Step 8  Set pager sync flags
+        syncFlag = (syncLevel + 1) | PAGER_CACHESPILL
+        SYNC_OFF    (0) → 0x01  SYNCHRONOUS_OFF
+        SYNC_NORMAL (1) → 0x02  SYNCHRONOUS_NORMAL     ← default (NULL config)
+        SYNC_FULL   (2) → 0x03  SYNCHRONOUS_FULL
 
 Step 9  sqlite3BtreeSetAutoVacuum(pBt, BTREE_AUTOVACUUM_INCR)
 
@@ -985,12 +985,12 @@ Step 11 Detect new vs. existing database
 Step 12 Allocate shared KeyInfo { enc=UTF8, nKeyField=1, db=pKV->db }
         Used by ALL BLOBKEY cursor comparisons across all CFs
 
-Step 13 WAL auto-checkpoint threshold:
-        pKV->walAutoCkptPages = cfg.walAutoCheckpoint (0 → 1000, &lt; 0 → 0 = off)
-
-Step 14 Open persistent read transaction
+Step 13 Open persistent read transaction
         sqlite3BtreeBeginTrans(pBt, 0, 0)
         pKV->inTrans = 1         ← held for lifetime of store
+
+Step 14 WAL auto-checkpoint threshold:
+        pKV->walAutoCkptPages = cfg.walAutoCheckpoint (0 → 1000, &lt; 0 → 0 = off)
         *ppKV = pKV
         return KVSTORE_OK</pre>
       </div>
