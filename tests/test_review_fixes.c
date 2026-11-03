@@ -1312,6 +1312,160 @@ static void test_iter_after_write(void){
   cleanup(dbEnc);
 }
 
+/* ----------------------------------------------------------------------
+** Test 24 (found by fuzz/fuzz_api): the first TTL write to a CF creates its
+** TTL index CFs inside the transaction.  After a rollback the tables were
+** gone from the file but the handle kept them, so every TTL call on that
+** handle (put_ttl, get_ttl, purge_expired, cf_clear) returned
+** KVSTORE_CORRUPT on a healthy store until it was reopened.
+** Also: index CFs that existed before the transaction must survive a
+** rollback, or the handle would stop hiding expired keys.
+** -------------------------------------------------------------------- */
+static void t24_case(KVStore *kv, KVColumnFamily *cf, const char *label){
+  char msg[160];
+  void *v = NULL; int nv = 0; int64_t rem = 0; int nDel = -1;
+  CHECK(kvstore_begin(kv, 1) == KVSTORE_OK, "begin");
+  CHECK(kvstore_cf_put_ttl(cf, "t1", 2, "v", 1, kvstore_now_ms() + 600000) == KVSTORE_OK,
+        "first put_ttl in the transaction");
+  CHECK(kvstore_rollback(kv) == KVSTORE_OK, "rollback");
+  snprintf(msg, sizeof msg, "%s: put_ttl after the rollback", label);
+  CHECK(kvstore_cf_put_ttl(cf, "t2", 2, "v", 1, kvstore_now_ms() + 600000) == KVSTORE_OK, msg);
+  snprintf(msg, sizeof msg, "%s: get_ttl sees the new TTL", label);
+  CHECK(kvstore_cf_get_ttl(cf, "t2", 2, &v, &nv, &rem) == KVSTORE_OK && rem > 0, msg);
+  snkv_free(v); v = NULL;
+  snprintf(msg, sizeof msg, "%s: the rolled-back key is absent", label);
+  CHECK(kvstore_cf_get(cf, "t1", 2, &v, &nv) == KVSTORE_NOTFOUND, msg);
+  snprintf(msg, sizeof msg, "%s: purge_expired", label);
+  CHECK(kvstore_cf_purge_expired(cf, &nDel) == KVSTORE_OK, msg);
+  snprintf(msg, sizeof msg, "%s: cf_clear", label);
+  CHECK(kvstore_cf_clear(cf) == KVSTORE_OK, msg);
+}
+static void test_ttl_create_rollback(void){
+  const char *db = "t_rf_ttlrb.db";
+  KVStore *kv = NULL;
+  KVColumnFamily *cf = NULL, *def = NULL;
+  printf("Test 24: rollback of the first TTL write keeps the CF usable\n");
+  cleanup(db);
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_WAL) == KVSTORE_OK, "open");
+  CHECK(kvstore_cf_create(kv, "c1", &cf) == KVSTORE_OK, "create CF");
+  t24_case(kv, cf, "named CF");
+  CHECK(kvstore_cf_get_default(kv, &def) == KVSTORE_OK, "default CF");
+  t24_case(kv, def, "default CF");
+
+  /* Pre-existing index CFs: an expired key must stay hidden after a
+  ** rollback of a later TTL write. */
+  CHECK(kvstore_cf_put_ttl(cf, "old", 3, "v", 1, kvstore_now_ms() - 1000) == KVSTORE_OK,
+        "commit a key that is already expired");
+  kvstore_begin(kv, 1);
+  kvstore_cf_put_ttl(cf, "new", 3, "v", 1, kvstore_now_ms() + 600000);
+  kvstore_rollback(kv);
+  void *v = NULL; int nv = 0;
+  CHECK(kvstore_cf_get(cf, "old", 3, &v, &nv) == KVSTORE_NOTFOUND,
+        "existing TTL index survives the rollback: the expired key stays hidden");
+  char *z = NULL;
+  CHECK(kvstore_integrity_check(kv, &z) == KVSTORE_OK, "integrity check");
+  snkv_free(z);
+  kvstore_cf_close(def);
+  kvstore_cf_close(cf);
+  kvstore_close(kv);
+  cleanup(db);
+}
+
+/* ----------------------------------------------------------------------
+** Test 25 (found by fuzz/fuzz_open): 4-byte lengths in stored records were
+** decoded as (b[0]<<24)|...; a top byte >= 0x80 is undefined behaviour and,
+** in practice, a negative length.  get() and iterator value() then computed
+** a value length larger than the record (allocating ~2.7 GB) and read at a
+** negative offset; the integrity check and the CF walk read a root page
+** from the wrong place.  Patch one key length and one CF name length in a
+** real file to 0xA1...: every call must return OK / NOTFOUND / CORRUPT,
+** report the damage, and never allocate more than a few MB.
+** -------------------------------------------------------------------- */
+static int t25_patch(const char *db, const unsigned char *pat, int nPat){
+  FILE *f = fopen(db, "rb");
+  if( !f ) return 0;
+  fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+  unsigned char *buf = (unsigned char*)malloc((size_t)n);
+  int found = 0;
+  if( buf && fread(buf, 1, (size_t)n, f) == (size_t)n ){
+    for(long i = 0; i + nPat <= n; i++){
+      if( memcmp(buf + i, pat, (size_t)nPat) == 0 ){ buf[i] = 0xA1; found++; }
+    }
+  }
+  fclose(f);
+  if( found ){
+    f = fopen(db, "wb");
+    if( f ){ fwrite(buf, 1, (size_t)n, f); fclose(f); }
+  }
+  free(buf);
+  return found;
+}
+static int t25_ok(int rc){ return rc == KVSTORE_OK || rc == KVSTORE_NOTFOUND || rc == KVSTORE_CORRUPT; }
+static void test_damaged_lengths(void){
+  const char *db = "t_rf_len.db";
+  KVStore *kv = NULL;
+  KVColumnFamily *cf = NULL;
+  char key[16];
+  printf("Test 25: damaged 4-byte lengths are rejected, not used\n");
+  cleanup(db);
+  CHECK(kvstore_open(db, &kv, KVSTORE_JOURNAL_DELETE) == KVSTORE_OK, "open");
+  for(int i = 0; i < 10; i++){
+    snprintf(key, sizeof key, "key%03d", i);
+    kvstore_put(kv, key, 6, "twenty-byte-value-xx", 20);
+  }
+  CHECK(kvstore_cf_create(kv, "users", &cf) == KVSTORE_OK, "create CF users");
+  kvstore_cf_put(cf, "u1", 2, "v", 1);
+  kvstore_cf_close(cf); cf = NULL;
+  kvstore_close(kv); kv = NULL;
+
+  /* key001's stored length (4-byte BE 6, then the key) and the CF name's. */
+  static const unsigned char patKey[] = { 0, 0, 0, 6, 'k', 'e', 'y', '0', '0', '1' };
+  static const unsigned char patCf[]  = { 0, 0, 0, 5, 'u', 's', 'e', 'r', 's' };
+  CHECK(t25_patch(db, patKey, (int)sizeof patKey) > 0, "patched key001's length to 0xA1000006");
+  CHECK(t25_patch(db, patCf, (int)sizeof patCf) > 0, "patched CF name length to 0xA1000005");
+
+  sqlite3_int64 base = sqlite3_memory_used();
+  sqlite3_memory_highwater(1);
+  int allOk = 1, sawCorrupt = 0, rc = kvstore_open(db, &kv, KVSTORE_JOURNAL_DELETE);
+  CHECK(t25_ok(rc), "open a store with damaged lengths: OK or CORRUPT");
+  if( rc == KVSTORE_OK ){
+    KVIterator *it = NULL;
+    if( kvstore_iterator_create(kv, &it) == KVSTORE_OK ){
+      for(kvstore_iterator_first(it); !kvstore_iterator_eof(it); kvstore_iterator_next(it)){
+        void *k = NULL, *v = NULL; int nk = 0, nv = 0;
+        int r1 = kvstore_iterator_key(it, &k, &nk);
+        int r2 = kvstore_iterator_value(it, &v, &nv);
+        if( !t25_ok(r1) || !t25_ok(r2) ) allOk = 0;
+        if( r1 == KVSTORE_CORRUPT || r2 == KVSTORE_CORRUPT ) sawCorrupt = 1;
+      }
+      kvstore_iterator_close(it);
+    }
+    void *v = NULL; int nv = 0;
+    rc = kvstore_get(kv, "key001", 6, &v, &nv);
+    if( !t25_ok(rc) ) allOk = 0;
+    if( rc == KVSTORE_CORRUPT ) sawCorrupt = 1;
+    if( rc == KVSTORE_OK ) snkv_free(v);
+    char *z = NULL;
+    rc = kvstore_integrity_check(kv, &z);
+    if( rc != KVSTORE_OK ) sawCorrupt = 1;
+    snkv_free(z);
+    char **az = NULL; int nAz = 0;
+    if( kvstore_cf_list(kv, &az, &nAz) == KVSTORE_OK ){
+      for(int i = 0; i < nAz; i++) snkv_free(az[i]);
+      snkv_free(az);
+    }
+    rc = kvstore_cf_open(kv, "users", &cf);
+    if( rc == KVSTORE_OK ){ kvstore_cf_close(cf); }
+    kvstore_close(kv);
+  }
+  sqlite3_int64 peak = sqlite3_memory_highwater(0) - base;
+  CHECK(allOk, "every call returned OK / NOTFOUND / CORRUPT");
+  CHECK(sawCorrupt, "the damage is reported (CORRUPT from a read or the integrity check)");
+  CHECK(peak < 16 * 1024 * 1024, "no huge allocation from a damaged length (< 16 MB)");
+  if( peak >= 16 * 1024 * 1024 ) printf("    peak was %lld bytes\n", (long long)peak);
+  cleanup(db);
+}
+
 static void test_iter_row_cache(void){
   const char *db = "t_rf_iter.db";
   const char *dbEnc = "t_rf_iter_enc.db";
@@ -1363,6 +1517,8 @@ int main(void){
   test_version();
   test_iter_row_cache();
   test_iter_after_write();
+  test_ttl_create_rollback();
+  test_damaged_lengths();
   printf("=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

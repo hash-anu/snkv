@@ -1222,6 +1222,128 @@ static void test_purge_batches(void) {
 }
 
 /* -----------------------------------------------------------------------
+** T33: a damaged index sidecar must be rebuilt, never loaded.
+** The sidecar is written without fsync, so a power cut after a clean close
+** can leave {db}.usearch torn while the small {db}.usearch.nid stamp
+** survives.  Before the fix the stamp held only next_id, the torn file
+** loaded (open returned OK) and the first search aborted the process with
+** an uncaught C++ exception.  Now the stamp also holds a checksum of the
+** sidecar.  Each damage below: open OK, every vector still found exactly.
+** ----------------------------------------------------------------------- */
+#define T33_N 300
+static uint64_t t33_fnv(const char *path, long *pSize) {
+    uint64_t h = 1469598103934665603ULL;
+    long n = 0; int c;
+    FILE *f = fopen(path, "rb");
+    if (!f) { *pSize = -1; return 0; }
+    while ((c = fgetc(f)) != EOF) { h ^= (unsigned char)c; h *= 1099511628211ULL; n++; }
+    fclose(f);
+    *pSize = n;
+    return h;
+}
+static void t33_build(void) {
+    KVVecStore *vs = NULL;
+    float v[DIM]; char key[16];
+    rm_db();
+    kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0, KVVEC_DTYPE_F32, NULL, 0, &vs);
+    for (int i = 0; i < T33_N; i++) {
+        snprintf(key, sizeof key, "s%04d", i);
+        fill_vec(v, (float)i);
+        kvstore_vec_put(vs, key, (int)strlen(key), "v", 1, v, 0, NULL, 0);
+    }
+    kvstore_vec_close(vs);                     /* writes the sidecar + stamp */
+}
+/* Reopen and look every vector up; returns how many were not found exactly. */
+static int t33_reopen_misses(int *pOpenRc) {
+    KVVecStore *vs = NULL;
+    float v[DIM];
+    int miss = 0;
+    *pOpenRc = kvstore_vec_open(DB, DIM, KVVEC_SPACE_L2, 0, 0, 0, KVVEC_DTYPE_F32, NULL, 0, &vs);
+    if (*pOpenRc != KVSTORE_OK) return T33_N;
+    for (int i = 0; i < T33_N; i++) {
+        KVVecSearchResult *res = NULL; int nRes = 0;
+        fill_vec(v, (float)i);
+        if (kvstore_vec_search(vs, v, 1, 0, 0, 0.0f, &res, &nRes) != KVSTORE_OK
+            || nRes != 1 || res[0].distance > 1e-4f) miss++;
+        kvstore_vec_free_results(res, nRes);
+    }
+    kvstore_vec_close(vs);
+    return miss;
+}
+/* Rewrite the sidecar: keep its first nKeep bytes, then nZero zero bytes. */
+static void t33_damage(long nKeep, long nZero) {
+    long size = 0;
+    t33_fnv(DB ".usearch", &size);
+    unsigned char *buf = (unsigned char*)calloc(1, (size_t)size + 1);
+    FILE *f = fopen(DB ".usearch", "rb");
+    if (f) { if (fread(buf, 1, (size_t)size, f) != (size_t)size) size = 0; fclose(f); }
+    if (nKeep > size) nKeep = size;
+    f = fopen(DB ".usearch", "wb");
+    if (f) {
+        fwrite(buf, 1, (size_t)nKeep, f);
+        for (long i = 0; i < nZero; i++) fputc(0, f);
+        fclose(f);
+    }
+    free(buf);
+}
+static void test_torn_sidecar(void) {
+    section("T33: a damaged index sidecar is rebuilt, never loaded");
+    long size = 0;
+    int rc;
+
+    /* The stamp holds next_id + the sidecar's checksum (16 bytes). */
+    t33_build();
+    uint64_t sum = t33_fnv(DB ".usearch", &size);
+    unsigned char stamp[16]; long nStamp = 0;
+    FILE *f = fopen(DB ".usearch.nid", "rb");
+    if (f) { nStamp = (long)fread(stamp, 1, sizeof stamp, f); fclose(f); }
+    uint64_t stored = 0;
+    for (int i = 8; i < 16; i++) stored = (stored << 8) | stamp[i];
+    ASSERT(size > 0 && nStamp == 16, "clean close writes the sidecar and a 16-byte stamp");
+    ASSERT(stored == sum, "stamp holds the sidecar's checksum (open takes the fast path)");
+    ASSERT_EQ(t33_reopen_misses(&rc), 0, "clean sidecar: every vector found");
+    ASSERT_OK(rc, "clean sidecar: open");
+
+    /* Tail lost to zeros, size unchanged (an unsynced write that never landed). */
+    t33_build();
+    t33_fnv(DB ".usearch", &size);
+    t33_damage(size / 2, size - size / 2);
+    ASSERT_EQ(t33_reopen_misses(&rc), 0, "zeroed second half: rebuilt, every vector found");
+    ASSERT_OK(rc, "zeroed second half: open");
+
+    /* File cut short. */
+    t33_build();
+    t33_fnv(DB ".usearch", &size);
+    t33_damage(size / 3, 0);
+    ASSERT_EQ(t33_reopen_misses(&rc), 0, "truncated sidecar: rebuilt, every vector found");
+    ASSERT_OK(rc, "truncated sidecar: open");
+
+    /* One flipped byte in the middle (corruption, not a power cut). */
+    t33_build();
+    f = fopen(DB ".usearch", "r+b");
+    if (f) {
+        fseek(f, 0, SEEK_END); long n = ftell(f);
+        fseek(f, n / 2, SEEK_SET); int c = fgetc(f);
+        fseek(f, n / 2, SEEK_SET); fputc(c ^ 0x5A, f);
+        fclose(f);
+    }
+    ASSERT_EQ(t33_reopen_misses(&rc), 0, "one corrupted byte: rebuilt, every vector found");
+    ASSERT_OK(rc, "one corrupted byte: open");
+
+    /* A stamp in the old 8-byte format (no checksum): rebuild. */
+    t33_build();
+    t33_fnv(DB ".usearch", &size);
+    t33_damage(size / 2, size - size / 2);
+    f = fopen(DB ".usearch.nid", "rb");
+    if (f) { nStamp = (long)fread(stamp, 1, sizeof stamp, f); fclose(f); }
+    f = fopen(DB ".usearch.nid", "wb");
+    if (f) { fwrite(stamp, 1, 8, f); fclose(f); }
+    ASSERT_EQ(t33_reopen_misses(&rc), 0, "old 8-byte stamp with a torn sidecar: rebuilt");
+    ASSERT_OK(rc, "old 8-byte stamp: open");
+    rm_db();
+}
+
+/* -----------------------------------------------------------------------
 ** T32: one KVVecStore shared by several threads.  get / get_vector /
 ** contains / kv_put used to skip the store mutex and could touch the
 ** B-tree at the same time as a put on another thread.
@@ -1317,6 +1439,7 @@ int main(void) {
     test_get_vector_ttl();
     test_purge_batches();
     test_shared_threads();
+    test_torn_sidecar();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

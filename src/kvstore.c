@@ -375,11 +375,13 @@ static void kvstoreEncodeBE64(unsigned char buf[8], int64_t v){
   buf[7] = (unsigned char)( v        & 0xFF);
 }
 
+/* Decode as unsigned: shifting a byte >= 0x80 into the sign bit of an
+** int64_t is undefined behaviour (a damaged TTL timestamp can hold one). */
 static int64_t kvstoreDecodeBE64(const unsigned char buf[8]){
-  return ((int64_t)buf[0] << 56) | ((int64_t)buf[1] << 48) |
-         ((int64_t)buf[2] << 40) | ((int64_t)buf[3] << 32) |
-         ((int64_t)buf[4] << 24) | ((int64_t)buf[5] << 16) |
-         ((int64_t)buf[6] <<  8) |  (int64_t)buf[7];
+  return (int64_t)(((uint64_t)buf[0] << 56) | ((uint64_t)buf[1] << 48) |
+                   ((uint64_t)buf[2] << 40) | ((uint64_t)buf[3] << 32) |
+                   ((uint64_t)buf[4] << 24) | ((uint64_t)buf[5] << 16) |
+                   ((uint64_t)buf[6] <<  8) |  (uint64_t)buf[7]);
 }
 
 /*
@@ -398,6 +400,9 @@ struct KVColumnFamily {
                                 ** before trusting 0 — see kvstoreTtlActive() */
   KVColumnFamily *pTtlKeyCF;    /* __snkv_ttl_k__<name>; NULL until first TTL use */
   KVColumnFamily *pTtlExpiryCF; /* __snkv_ttl_e__<name>; NULL until first TTL use */
+  int ttlNewInTxn;              /* 1 = the current write transaction created the TTL
+                                ** index CFs: dropped from the handle if it rolls
+                                ** back — see kvstoreUndoTtlCreate() */
 };
 
 /*
@@ -460,6 +465,18 @@ struct KVStore {
 };
 
 /*
+** Decode a 4-byte big-endian length or root page number from a stored
+** record.  Read as unsigned: shifting a byte >= 0x80 left by 24 in an int
+** is undefined behaviour.  A value that does not fit in an int (only a
+** damaged file holds one) comes back as -1, so a caller's "< 0" check
+** rejects it instead of using a negative length as an offset or size.
+*/
+static int kvstoreGetLen(const unsigned char *p){
+  u32 v = ((u32)p[0]<<24) | ((u32)p[1]<<16) | ((u32)p[2]<<8) | (u32)p[3];
+  return v > 0x7FFFFFFFu ? -1 : (int)v;
+}
+
+/*
 ** nTtlActive is an in-memory count that does not follow transactions: when a
 ** write transaction is rolled back (or its commit fails), deletes it already
 ** subtracted are undone on disk but not in the count.  A count that is too
@@ -492,10 +509,48 @@ static void kvstoreUndoRootMoves(KVStore *pKV){
   }
 }
 
-/* sqlite3BtreeRollback() + mark TTL counts stale + undo root moves. */
+/*
+** The first TTL write to a CF creates its TTL index CFs inside the write
+** transaction (kvstoreGetOrCreateTtlCFs).  If that transaction rolls back,
+** the tables vanish from the file, so drop them from the handle too; the
+** next TTL write creates them again.  Without this the handle kept the
+** vanished root pages and every TTL call on it (put_ttl, get_ttl,
+** purge_expired, cf_clear) failed with KVSTORE_CORRUPT until reopened.
+** Only CFs created in this transaction are dropped: pre-existing ones may
+** hold TTL entries, and a handle without them skips lazy expiry.
+*/
+static void kvstoreFreeCFStruct(KVColumnFamily*);
+static void kvstoreUndoTtlCreate(KVColumnFamily *pCF){
+  if( !pCF || !pCF->ttlNewInTxn ) return;
+  pCF->ttlNewInTxn = 0;
+  if( pCF->pTtlKeyCF ) kvstoreFreeCFStruct(pCF->pTtlKeyCF);
+  if( pCF->pTtlExpiryCF ) kvstoreFreeCFStruct(pCF->pTtlExpiryCF);
+  pCF->pTtlKeyCF = NULL;
+  pCF->pTtlExpiryCF = NULL;
+  pCF->hasTtl = 0;
+  pCF->nTtlActive = 0;
+}
+
+/* Rollback / commit: TTL index CFs created in the transaction go away / stay. */
+static void kvstoreTtlCreateEnd(KVStore *pKV, int rolledBack){
+  int i;
+  if( rolledBack ){
+    kvstoreUndoTtlCreate(pKV->pDefaultCF);
+    for( i = 0; i < pKV->nCF; i++ ) kvstoreUndoTtlCreate(pKV->apCF[i]);
+  }else{
+    if( pKV->pDefaultCF ) pKV->pDefaultCF->ttlNewInTxn = 0;
+    for( i = 0; i < pKV->nCF; i++ ){
+      if( pKV->apCF[i] ) pKV->apCF[i]->ttlNewInTxn = 0;
+    }
+  }
+}
+
+/* sqlite3BtreeRollback() + mark TTL counts stale + undo root moves and TTL
+** index CFs created in the transaction. */
 static int kvstoreBtreeRollback(KVStore *pKV){
   kvstoreMarkTtlStale(pKV);
   kvstoreUndoRootMoves(pKV);
+  kvstoreTtlCreateEnd(pKV, 1);
   return sqlite3BtreeRollback(pKV->pBt, SQLITE_OK, 0);
 }
 
@@ -514,6 +569,7 @@ static int kvstoreBtreeCommit(KVStore *pKV){
     kvstoreBtreeRollback(pKV);
   }else{
     pKV->nRootUndo = 0;                 /* the moves are now permanent */
+    kvstoreTtlCreateEnd(pKV, 0);        /* and so are new TTL index CFs */
   }
   return rc;
 }
@@ -885,7 +941,7 @@ static int kvstoreMetaSeekKey(
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
       if( rc != SQLITE_OK ) return rc;
-      int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      int storedKeyLen = kvstoreGetLen(hdr);
       if( storedKeyLen == nKey ){
         void *storedKey = sqlite3Malloc(nKey);
         if( storedKey == 0 ) return SQLITE_NOMEM;
@@ -941,7 +997,7 @@ static int kvstoreMetaFindSlot(
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
       if( rc != SQLITE_OK ) return rc;
-      int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      int storedKeyLen = kvstoreGetLen(hdr);
       if( storedKeyLen == 0 ){
         *pRowid = tryRowid;
         return SQLITE_OK;
@@ -1778,7 +1834,10 @@ int kvstore_commit(KVStore *pKV){
   ** and may retry the commit or roll back. */
   rc = sqlite3BtreeCommit(pKV->pBt);
   if( rc != SQLITE_OK ) kvstoreMarkTtlStale(pKV);
-  else pKV->nRootUndo = 0;              /* root moves are now permanent */
+  else{
+    pKV->nRootUndo = 0;                 /* root moves are now permanent */
+    kvstoreTtlCreateEnd(pKV, 0);        /* and so are new TTL index CFs */
+  }
   if( rc == SQLITE_OK ){
     pKV->inTrans = 0;
     kvstoreAutoCheckpoint(pKV);
@@ -1995,9 +2054,9 @@ static int kvstoreRawBtreeGet(
   rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
   if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
 
-  int storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  int storedKeyLen = kvstoreGetLen(hdr);
   int valueLen = (int)payloadSz - 4 - storedKeyLen;
-  if( valueLen < 0 ){ kvstoreFreeCursor(pCur); return KVSTORE_CORRUPT; }
+  if( storedKeyLen < 0 || valueLen < 0 ){ kvstoreFreeCursor(pCur); return KVSTORE_CORRUPT; }
 
   void *pValue = NULL;
   if( valueLen > 0 ){
@@ -2153,8 +2212,7 @@ static int kvstoreCfOpenInternal(
   if( autoTrans ){ kvstoreBtreeCommit(pKV); pKV->inTrans = 0; }
   if( rc != SQLITE_OK ) return rc;
 
-  iTable = (tableRootBytes[0]<<24)|(tableRootBytes[1]<<16)|
-           (tableRootBytes[2]<<8)|tableRootBytes[3];
+  iTable = kvstoreGetLen(tableRootBytes);
 
   KVColumnFamily *pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
   if( !pCF ) return KVSTORE_NOMEM;
@@ -2436,6 +2494,17 @@ static int kvstoreGetOrCreateTtlCFs(KVColumnFamily *pCF){
   snprintf(zKeyName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_KEY_PREFIX, pCF->zName);
   snprintf(zExpName, SNKV_TTL_NAME_BUFLEN, "%s%s", SNKV_TTL_EXP_PREFIX, pCF->zName);
 
+  /* Do the index CFs exist yet?  If this transaction creates them, a
+  ** rollback must drop them from this handle (kvstoreUndoTtlCreate). */
+  int existed = 0;
+  {
+    KVColumnFamily *pProbe = NULL;
+    if( kvstoreCfOpenInternal(pKV, zKeyName, &pProbe) == KVSTORE_OK ){
+      existed = 1;
+      kvstoreFreeCFStruct(pProbe);
+    }
+  }
+
   KVColumnFamily *pKeyCF = NULL, *pExpCF = NULL;
   int rc = kvstoreCreateOrOpenHiddenCF(pKV, zKeyName, &pKeyCF);
   if( rc != KVSTORE_OK ) return rc;
@@ -2449,6 +2518,7 @@ static int kvstoreGetOrCreateTtlCFs(KVColumnFamily *pCF){
   pCF->pTtlKeyCF    = pKeyCF;
   pCF->pTtlExpiryCF = pExpCF;
   pCF->hasTtl       = 1;
+  pCF->ttlNewInTxn  = !existed;
   return KVSTORE_OK;
 }
 static int kvstore_cf_get_internal(
@@ -2545,7 +2615,7 @@ static int kvstoreCountUserCFs(KVStore *pKV, int *pnCF){
       int nRead = payloadSz < sizeof(buf) ? (int)payloadSz : (int)sizeof(buf);
       rc = sqlite3BtreePayload(pCur, 0, (u32)nRead, buf);
       if( rc != SQLITE_OK ) break;
-      int nameLen = (buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|buf[3];
+      int nameLen = kvstoreGetLen(buf);
       const unsigned char *z = buf + 4;
       int nZ = nRead - 4;
       int reserved = (nameLen >= 2 && nZ >= 2 && z[0]=='_' && z[1]=='_')
@@ -2915,8 +2985,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
     return rc;
   }
 
-  iTable = (tableRootBytes[0] << 24) | (tableRootBytes[1] << 16) |
-           (tableRootBytes[2] << 8) | tableRootBytes[3];
+  iTable = kvstoreGetLen(tableRootBytes);
 
   /* Create CF structure */
   pCF = (KVColumnFamily*)sqlite3MallocZero(sizeof(KVColumnFamily));
@@ -3291,7 +3360,9 @@ static int kvstore_cf_get_internal(
     unsigned char hdr[4];
     rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
     if( rc == SQLITE_OK ){
-      storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      storedKeyLen = kvstoreGetLen(hdr);
+      /* A damaged length would make valueLen larger than the record. */
+      if( storedKeyLen < 0 || 4 + (i64)storedKeyLen > (i64)payloadSz ) rc = KVSTORE_CORRUPT;
     }
   }
 
@@ -3861,7 +3932,7 @@ static int kvstoreIterCheckPrefix(KVIterator *pIter){
 
   rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
   if( rc != SQLITE_OK ) return 0;
-  keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  keyLen = kvstoreGetLen(hdr);
   if( keyLen < pIter->nPrefix ) return 0;
 
   /* Read just the prefix-length portion of the stored key and compare */
@@ -3906,7 +3977,7 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
     unsigned char hdr[4];
     int rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
     if( rc != SQLITE_OK ) return rc;
-    int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+    int keyLen = kvstoreGetLen(hdr);
     if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return SQLITE_OK;
 
     if( pIter->nKeyBuf < keyLen ){
@@ -3967,7 +4038,7 @@ static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
     unsigned char hdr[4];
     int rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
     if( rc != SQLITE_OK ) return rc;
-    int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+    int keyLen = kvstoreGetLen(hdr);
     if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return SQLITE_OK;
 
     if( pIter->nKeyBuf < keyLen ){
@@ -4222,7 +4293,7 @@ static int kvstoreIterKeyImpl(KVIterator *pIter, void **ppKey, int *pnKey){
   rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
   if( rc != SQLITE_OK ) return rc;
 
-  int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  int keyLen = kvstoreGetLen(hdr);
   if( keyLen <= 0 || 4 + keyLen > (int)payloadSz ) return KVSTORE_CORRUPT;
 
   if( pIter->nKeyBuf < keyLen ){
@@ -4266,9 +4337,9 @@ static int kvstoreIterValueImpl(KVIterator *pIter, void **ppValue, int *pnValue)
   rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
   if( rc != SQLITE_OK ) return rc;
 
-  int keyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+  int keyLen = kvstoreGetLen(hdr);
   int valLen = (int)payloadSz - 4 - keyLen;
-  if( valLen < 0 ) return KVSTORE_CORRUPT;
+  if( keyLen < 0 || valLen < 0 ) return KVSTORE_CORRUPT;
 
   if( valLen == 0 ){
     *ppValue = NULL;
@@ -4490,7 +4561,7 @@ static void kvstoreIterLoadRow(KVIterator *pIter){
   if( payloadSz < 4 ) return;
   a = (const unsigned char*)sqlite3BtreePayloadFetch(pIter->pCur, &nLocal);
   if( !a || nLocal < 4 ) return;
-  keyLen = (a[0]<<24)|(a[1]<<16)|(a[2]<<8)|a[3];
+  keyLen = kvstoreGetLen(a);
   if( keyLen <= 0 || (u32)keyLen > payloadSz - 4 ) return;
   if( (u32)keyLen > nLocal - 4 ) return;          /* key on overflow pages */
 
@@ -4806,14 +4877,14 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
               unsigned char hdr[4];
               rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
               if( rc == SQLITE_OK ){
-                int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+                int nameLen = kvstoreGetLen(hdr);
                 int rootOff = 4 + nameLen;
-                if( rootOff + 4 <= (int)payloadSz ){
+                if( nameLen >= 0 && (i64)rootOff + 4 <= (i64)payloadSz ){
                   unsigned char rootBytes[4];
                   rc = sqlite3BtreePayload(pCur, rootOff, 4, rootBytes);
                   if( rc == SQLITE_OK ){
-                    Pgno cfRoot = (rootBytes[0]<<24)|(rootBytes[1]<<16)
-                                 |(rootBytes[2]<<8)|rootBytes[3];
+                    int iRoot = kvstoreGetLen(rootBytes);
+                    Pgno cfRoot = iRoot > 0 ? (Pgno)iRoot : 0;
                     if( cfRoot > 0 ){
                       if( nRoot >= nAlloc ){
                         nAlloc *= 2;
@@ -5079,7 +5150,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
       if( rc != SQLITE_OK ) break;
 
-      int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+      int nameLen = kvstoreGetLen(hdr);
       if( nameLen > 0 && 4 + nameLen <= (int)payloadSz ){
         char *name = (char*)sqlite3Malloc(nameLen + 1);
         if( !name ){ rc = KVSTORE_NOMEM; break; }
@@ -5192,8 +5263,7 @@ static int kvstoreFixMovedTableRoot(KVStore *pKV, int iDropped, int iMoved){
       unsigned char rootBytes[4];
       rc = sqlite3BtreePayload(pCur, sz - 4, 4, rootBytes);
       if( rc != SQLITE_OK ) break;
-      int storedRoot = (rootBytes[0]<<24)|(rootBytes[1]<<16)|
-                       (rootBytes[2]<<8)|rootBytes[3];
+      int storedRoot = kvstoreGetLen(rootBytes);
       if( storedRoot == iMoved ){
         unsigned char *pBuf = sqlite3Malloc(sz);
         if( !pBuf ){ rc = SQLITE_NOMEM; break; }
@@ -5272,8 +5342,7 @@ static int kvstoreDropHiddenCFNoLock(KVStore *pKV, const char *zName){
   rc = sqlite3BtreePayload(pCur, 4 + nNameLen, 4, tableRootBytes);
   if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
 
-  int iTable = (tableRootBytes[0]<<24)|(tableRootBytes[1]<<16)|
-               (tableRootBytes[2]<<8)|tableRootBytes[3];
+  int iTable = kvstoreGetLen(tableRootBytes);
 
   rc = kvstoreMetaWriteTombstone(pCur, foundRowid);
   kvstoreFreeCursor(pCur);
@@ -5466,8 +5535,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     return rc;
   }
 
-  iTable = (tableRootBytes[0] << 24) | (tableRootBytes[1] << 16) |
-           (tableRootBytes[2] << 8) | tableRootBytes[3];
+  iTable = kvstoreGetLen(tableRootBytes);
 
   /* Write tombstone in metadata table — preserves probe chain for sibling CFs. */
   rc = kvstoreMetaWriteTombstone(pCur, foundRowid);
@@ -5977,7 +6045,7 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
           if( payloadSz < 4 + 8 ) rc = KVSTORE_CORRUPT;
           if( rc == SQLITE_OK ) rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
           if( rc == SQLITE_OK ){
-            storedKeyLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
+            storedKeyLen = kvstoreGetLen(hdr);
             if( storedKeyLen < 8 || 4 + (i64)storedKeyLen > (i64)payloadSz ){
               rc = KVSTORE_CORRUPT;
             }
@@ -6863,11 +6931,21 @@ static int kvstoreRewriteCFTable(
     sqlite3BtreeCursorZero(pCur);
     if( rc != SQLITE_OK ) break;
 
-    int kLen = (pBuf[0]<<24)|(pBuf[1]<<16)|(pBuf[2]<<8)|pBuf[3];
+    int kLen = kvstoreGetLen(pBuf);
     int vLen = (int)payloadSz - 4 - kLen;
     if( kLen < 0 || vLen < 0 ){ rc = KVSTORE_CORRUPT; break; }
     unsigned char *pKey = pBuf + 4;
     unsigned char *pVal = pBuf + 4 + kLen;
+
+    /* Each step must move strictly past the last processed key.  In a
+    ** damaged B-tree whose keys are out of order the seek can land on an
+    ** earlier row; rewriting it again (encryption grows the value every
+    ** time) would loop forever and keep growing the file. */
+    if( nLastKey >= 0 ){
+      int n = kLen < nLastKey ? kLen : nLastKey;
+      int c = memcmp(pKey, pLast, (size_t)n);
+      if( c < 0 || (c == 0 && kLen <= nLastKey) ){ rc = KVSTORE_CORRUPT; break; }
+    }
 
     rc = kvstoreGrowBuf(&pLast, &nLastAlloc, kLen > 0 ? kLen : 1);
     if( rc != KVSTORE_OK ) break;
@@ -6958,8 +7036,8 @@ static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg,
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
       if( rc == SQLITE_OK ){
-        int nameLen = (hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3];
-        if( (int)payloadSz >= 4 + nameLen + 4 ){
+        int nameLen = kvstoreGetLen(hdr);
+        if( nameLen >= 0 && (i64)payloadSz >= 4 + (i64)nameLen + 4 ){
           /* Optionally skip the always-plaintext CFs (auth, TTL indexes). */
           int skip = 0;
           if( bSkipPlain && nameLen >= 11 ){
@@ -6975,7 +7053,7 @@ static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg,
             unsigned char tbl[4];
             rc = sqlite3BtreePayload(pCur, 4 + nameLen, 4, tbl);
             if( rc == SQLITE_OK ){
-              int iTable = (tbl[0]<<24)|(tbl[1]<<16)|(tbl[2]<<8)|tbl[3];
+              int iTable = kvstoreGetLen(tbl);
               int frc = fn(pKV, iTable, pArg);
               if( frc != KVSTORE_OK ){ rc = frc; break; }
             }

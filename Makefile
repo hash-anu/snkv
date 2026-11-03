@@ -238,6 +238,72 @@ test-tsan:
 	TSAN_OPTIONS="suppressions=$(CURDIR)/tests/tsan.supp $(TSAN_OPTIONS)" \
 	  $(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
 
+# Simulated power loss at every write/sync (tests/test_powerloss.c).
+# PL_STRIDE=n tests every n-th crash point; PL_SEEDS=n random tear seeds.
+# Built with its own kvstore.c at the minimum Argon2 cost: the encrypted runs
+# open the store thousands of times, and crash safety does not depend on it.
+PL_LIB_OBJ = $(filter-out src/kvstore.o,$(LIB_OBJ))
+tests/test_powerloss$(TARGET_EXT): tests/test_powerloss.c src/kvstore.c $(PL_LIB_OBJ)
+	$(CC) $(CFLAGS) -DSNKV_ENC_M_COST=8 -DSNKV_ENC_T_COST=1 -o $@ \
+	  tests/test_powerloss.c src/kvstore.c $(PL_LIB_OBJ) $(LDFLAGS)
+
+test-powerloss: tests/test_powerloss$(TARGET_EXT)
+	./tests/test_powerloss$(TARGET_EXT)
+	rm -f pl.db pl.db-wal pl.db-shm pl.db-journal
+
+# ---- Fuzzing (Linux / macOS, needs clang with libFuzzer) ----
+# make fuzz                 run each fuzzer for FUZZ_TIME seconds (default 60)
+# make fuzz FUZZ_TIME=3600  longer run
+# Crashes are saved in fuzz/artifacts/; the corpus grows in fuzz/corpus/.
+# Reproduce one: ./fuzz/fuzz_api fuzz/artifacts/crash-<hash>
+FUZZ_CC     ?= clang
+FUZZ_TIME   ?= 60
+FUZZ_DB_DIR ?= fuzz/build
+FUZZ_CFLAGS  = -g -O1 -Iinclude -DSNKV_ENC_M_COST=8 -DSNKV_ENC_T_COST=1 \
+               -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+               -fno-omit-frame-pointer
+FUZZ_OBJ     = $(patsubst %.c,fuzz/build/%.o,$(LIB_SRC))
+FUZZ_RUN     = -max_total_time=$(FUZZ_TIME) -timeout=20 -rss_limit_mb=2048 \
+               -artifact_prefix=fuzz/artifacts/
+
+fuzz/build/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -fsanitize=fuzzer-no-link -c -o $@ $<
+
+fuzz/fuzz_api fuzz/fuzz_open: fuzz/%: fuzz/%.c $(FUZZ_OBJ)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -fsanitize=fuzzer -o $@ $< $(FUZZ_OBJ) -lpthread
+
+fuzz/gen_corpus: fuzz/gen_corpus.c $(FUZZ_OBJ)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -fsanitize=fuzzer-no-link -o $@ $< $(FUZZ_OBJ) -lpthread
+
+fuzz-corpus: fuzz/gen_corpus
+	@mkdir -p fuzz/corpus/api fuzz/corpus/open fuzz/artifacts $(FUZZ_DB_DIR)
+	./fuzz/gen_corpus fuzz/corpus/open
+
+fuzz-api: fuzz/fuzz_api fuzz-corpus
+	FUZZ_DB_DIR=$(FUZZ_DB_DIR) ./fuzz/fuzz_api $(FUZZ_RUN) fuzz/corpus/api
+
+fuzz-open: fuzz/fuzz_open fuzz-corpus
+	FUZZ_DB_DIR=$(FUZZ_DB_DIR) ./fuzz/fuzz_open $(FUZZ_RUN) fuzz/corpus/open
+
+# Both fuzzers; "make -k fuzz" runs the second even if the first finds a crash.
+fuzz: fuzz-api fuzz-open
+
+# Replay every input that once found a bug (fuzz/regress/), once each.  Add
+# a new crash input here when fixing the bug it found.
+# "make -k fuzz-regress" replays both sets even if the first fails.
+FUZZ_REGRESS = -runs=0 -timeout=20 -artifact_prefix=fuzz/artifacts/
+
+fuzz-regress-api: fuzz/fuzz_api
+	@mkdir -p $(FUZZ_DB_DIR) fuzz/artifacts
+	FUZZ_DB_DIR=$(FUZZ_DB_DIR) ./fuzz/fuzz_api $(FUZZ_REGRESS) fuzz/regress/api
+
+fuzz-regress-open: fuzz/fuzz_open
+	@mkdir -p $(FUZZ_DB_DIR) fuzz/artifacts
+	FUZZ_DB_DIR=$(FUZZ_DB_DIR) ./fuzz/fuzz_open $(FUZZ_REGRESS) fuzz/regress/open
+
+fuzz-regress: fuzz-regress-api fuzz-regress-open
+
 test-coverage:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(COV_CFLAGS)" test
@@ -257,6 +323,9 @@ clean:
 	rm -f examples/*.db examples/*.db-wal examples/*.db-shm examples/snkv.h
 	rm -f tests/test_crash_10gb$(TARGET_EXT)
 	rm -f tests/crash_10gb.db tests/crash_10gb.db-wal tests/crash_10gb.db-shm
+	rm -f tests/test_powerloss$(TARGET_EXT)
+	rm -rf fuzz/build
+	rm -f fuzz/fuzz_api fuzz/fuzz_open fuzz/gen_corpus
 
 # ---- 10 GB kill-9 crash safety test (run manually, not part of 'make test') ----
 # Requires ~11 GB free disk and takes 15-60 minutes depending on storage speed.
@@ -269,4 +338,6 @@ test-crash-10gb: tests/test_crash_10gb$(TARGET_EXT)
 
 .PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb \
         vector test-vector vector-examples run-vector-examples \
-        test-asan test-ubsan test-tsan test-coverage
+        test-asan test-ubsan test-tsan test-coverage test-powerloss \
+        fuzz fuzz-api fuzz-open fuzz-corpus \
+        fuzz-regress fuzz-regress-api fuzz-regress-open

@@ -35,6 +35,19 @@ to `busyTimeout`).
 
 ### Added
 
+- `make fuzz` (clang + libFuzzer, Linux / macOS): `fuzz_api` runs random API
+  sequences (puts, deletes, TTL, transactions, scans, writes during scans,
+  reopen) against an in-memory model; `fuzz_open` opens and uses damaged
+  database files (seeded from real stores, including encrypted ones).
+  `make fuzz-regress` replays every input that once found a bug. CI runs a
+  short fuzz on every PR and 30 minutes per fuzzer nightly, keeping the
+  corpus between runs.
+- `make test-powerloss`: simulated power loss at every write and sync
+  (unsynced writes lost, kept, or torn per 512-byte sector), for WAL and
+  DELETE journals, sync FULL and NORMAL, and encrypted stores through
+  re-key and decryption. After every crash the store must open, pass the
+  integrity check and hold exactly a committed state. A self-check proves
+  the harness catches a disk that ignores fsync.
 - `kvstore_errmsg_copy()`: copies the last error message under the handle
   lock. Use it instead of `kvstore_errmsg()` when threads share a handle.
 - `KVSTORE_VERSION`, `KVSTORE_VERSION_MAJOR` / `_MINOR` / `_PATCH`,
@@ -48,6 +61,36 @@ to `busyTimeout`).
 
 ### Fixed
 
+- Found by the new fuzzers (`make fuzz`):
+  - Rolling back a transaction that held a column family's first TTL write
+    left the handle pointing at the TTL index tables the rollback removed:
+    every later `put_ttl`, `get_ttl`, `purge_expired` and `cf_clear` on it
+    returned `KVSTORE_CORRUPT` until the store was reopened. TTL index
+    tables created in a rolled-back transaction are now dropped from the
+    handle; tables that existed before are kept.
+  - 4-byte lengths in stored records were decoded with a signed shift (`b[0]
+    << 24`): undefined behaviour for a top byte >= 0x80, and in practice a
+    negative length. On a damaged file `get` and iterator `value` used it to
+    size the value (one damaged byte caused a 1.6 GB allocation), and the
+    integrity check and column-family walk read root pages from the wrong
+    place. All 23 decodes now use one unsigned helper that rejects lengths
+    that do not fit, and the sites that use them check for that.
+  - Opening a damaged plain store with a password (encrypt-on-open) could
+    loop forever: rewriting each value seeks past the last processed key,
+    and in a B-tree with out-of-order keys the seek moved backwards,
+    re-encrypting (and growing) the same rows endlessly. The rewrite now
+    requires each key to be greater than the last and returns
+    `KVSTORE_CORRUPT` otherwise.
+  - 8-byte TTL timestamps were decoded the same signed way (undefined
+    behaviour for a damaged timestamp with the top bit set). Now decoded
+    as unsigned.
+- Vector store: after a power cut that followed a clean `kvstore_vec_close`,
+  the index sidecar (`{db}.usearch`, written without fsync) could be torn
+  while its stamp (`{db}.usearch.nid`) survived. Open accepted the torn
+  file and the first search aborted the process. The stamp now also holds a
+  checksum of the sidecar; a sidecar that does not match (torn, truncated,
+  corrupt, or an old 8-byte stamp) is ignored and the index is rebuilt from
+  the database.
 - `kvstore_iterator_key` / `_value` after a write through the handle moved
   the iterator's row (for example, inserts that split its page) returned
   `KVSTORE_CORRUPT` on a healthy store: they read the B-tree cursor without
