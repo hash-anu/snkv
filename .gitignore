@@ -20,3 +20,11 @@ examples/snkv.h
 *.db-wal
 *.db-shm
 *.db-journal
+
+# Fuzzing: build output, generated corpus, crash artifacts
+fuzz/build/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/fuzz_api
+fuzz/fuzz_open
+fuzz/gen_corpus

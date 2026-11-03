@@ -394,6 +394,48 @@ jobs:
         git push origin badges
 
   # ==================================================================
+  # Quick robustness checks on every PR / push (about 5 minutes):
+  # power loss at every 5th write/sync, then 60 s of each fuzzer.  The
+  # full-depth runs are in nightly.yml; this job reuses their corpus.
+  # ==================================================================
+  robustness:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang
+
+    - name: Power-loss simulation (every 5th crash point)
+      run: PL_STRIDE=5 PL_SEEDS=1 make test-powerloss
+
+    - name: Replay inputs that once found bugs
+      run: make -k fuzz-regress
+
+    - name: Restore fuzz corpus (from nightly runs)
+      uses: actions/cache/restore@v4
+      with:
+        path: fuzz/corpus
+        key: fuzz-corpus-${{ github.run_id }}
+        restore-keys: fuzz-corpus-
+
+    - name: Fuzz (60 s per fuzzer)
+      run: make -k fuzz FUZZ_TIME=60
+
+    - name: Upload fuzz crash inputs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-crashes-pr
+        path: fuzz/artifacts/
+        if-no-files-found: ignore
+
+  # ==================================================================
   # AddressSanitizer + UndefinedBehaviorSanitizer
   # ==================================================================
   sanitizers:

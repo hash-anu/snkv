@@ -1,0 +1,2 @@
+# Fuzz regression inputs are raw bytes: never convert line endings.
+fuzz/regress/** binary

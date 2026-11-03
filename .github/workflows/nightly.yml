@@ -1,0 +1,97 @@
+name: Nightly robustness
+
+# Deep runs that are too slow for every PR (c-cpp.yml runs short versions):
+#   - power loss at every write/sync point, on Linux (ASan + UBSan), macOS
+#     and Windows;
+#   - each fuzzer for 30 minutes (or the duration given when started by hand).
+# The fuzz corpus is cached between runs, so each night continues where the
+# last one stopped; PR runs start from it too.  Crash inputs are uploaded.
+on:
+  schedule:
+    - cron: '0 2 * * *'          # 02:00 UTC every day
+  workflow_dispatch:
+    inputs:
+      fuzz_minutes:
+        description: 'Minutes per fuzzer'
+        default: '30'
+
+jobs:
+  powerloss:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Setup MinGW on Windows
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-gcc-libs make
+
+    - name: Power loss at every crash point (ASan + UBSan)
+      if: runner.os == 'Linux'
+      run: |
+        make test-powerloss \
+          CFLAGS="-Wall -Iinclude -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer" \
+          LDFLAGS="-lpthread -fsanitize=address,undefined"
+
+    - name: Power loss at every crash point
+      if: runner.os == 'macOS'
+      run: make test-powerloss
+
+    - name: Power loss at every crash point (Windows)
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: make test-powerloss
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang
+
+    - name: Restore fuzz corpus
+      uses: actions/cache/restore@v4
+      with:
+        path: fuzz/corpus
+        key: fuzz-corpus-${{ github.run_id }}
+        restore-keys: fuzz-corpus-
+
+    - name: Fuzz
+      run: |
+        MIN="${{ github.event.inputs.fuzz_minutes || '30' }}"
+        make -k fuzz FUZZ_TIME=$(( MIN * 60 ))
+
+    - name: Save fuzz corpus
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: fuzz/corpus
+        key: fuzz-corpus-${{ github.run_id }}
+
+    - name: Upload fuzz crash inputs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-crashes-nightly
+        path: fuzz/artifacts/
+        if-no-files-found: ignore
