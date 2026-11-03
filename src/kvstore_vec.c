@@ -13,7 +13,9 @@
 **
 ** The usearch HNSW index (in-memory) is rebuilt from the CFs on every open,
 ** or loaded from a sidecar file ({path}.usearch + {path}.usearch.nid) when
-** available (unencrypted, file-backed stores only).
+** available (unencrypted, file-backed stores only).  The .nid stamp holds
+** next_id and a checksum of the .usearch file; a sidecar that does not match
+** both (stale, torn by a power cut, corrupt) is ignored and rebuilt.
 **
 ** All writes go through a single KVStore transaction for atomicity.
 ** The usearch index is updated AFTER a successful commit.
@@ -124,6 +126,30 @@ static int64_t unpackI64(const unsigned char *buf) {
         ((uint64_t)buf[4] << 24) | ((uint64_t)buf[5] << 16) |
         ((uint64_t)buf[6] <<  8) |  (uint64_t)buf[7]
     );
+}
+
+/*
+** FNV-1a 64 checksum of a whole file (the index sidecar).  The .nid stamp
+** stores it next to next_id, and open loads the sidecar only if it matches:
+** the sidecar is written without fsync, so a power cut after a clean close
+** can leave it torn while the small .nid survives, and usearch_load accepts
+** a torn file (the first search then aborts the process).  Returns 0 on
+** success.  4 KB stack buffer: fixed memory cost.
+*/
+static int sidecarChecksum(const char *zPath, uint64_t *pSum) {
+    unsigned char buf[4096];
+    uint64_t h = 1469598103934665603ULL;
+    size_t n;
+    FILE *f = fopen(zPath, "rb");
+    if (!f) return -1;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
+        for (size_t i = 0; i < n; i++) { h ^= buf[i]; h *= 1099511628211ULL; }
+    }
+    int bad = ferror(f);
+    fclose(f);
+    if (bad) return -1;
+    *pSum = h;
+    return 0;
 }
 
 /* -----------------------------------------------------------------------
@@ -312,9 +338,16 @@ static int rebuildIndex(KVVecStore *pVS) {
 
         FILE *f = fopen(nidPath, "rb");
         if (f) {
-            unsigned char nidBuf[8];
-            int ok = (fread(nidBuf, 1, 8, f) == 8);
+            /* Stamp: next_id + checksum of the sidecar (16 bytes).  An older
+            ** 8-byte stamp has no checksum: rebuild, which is always safe. */
+            unsigned char nidBuf[16];
+            int ok = (fread(nidBuf, 1, 16, f) == 16);
             fclose(f);
+            uint64_t sum = 0;
+            if (ok) {
+                ok = sidecarChecksum(pVS->zSidecarPath, &sum) == 0
+                  && sum == (uint64_t)unpackI64(nidBuf + 8);
+            }
             if (ok) {
                 int64_t sidecarNid = unpackI64(nidBuf);
                 if (sidecarNid == pVS->nextId) {
@@ -578,18 +611,19 @@ void kvstore_vec_close(KVVecStore *pVS) {
         const char *nidPath = pVS->zNidPath;
 
         usearch_save(pVS->pIdx, pVS->zSidecarPath, &err);
-        if (!err) {
+        uint64_t sum = 0;
+        if (!err && sidecarChecksum(pVS->zSidecarPath, &sum) == 0) {
             FILE *f = fopen(nidPath, "wb");
             if (f) {
-                unsigned char buf[8];
+                unsigned char buf[16];
                 packI64(buf, pVS->nextId);
-                if (fwrite(buf, 1, 8, f) != 8) {
+                packI64(buf + 8, (int64_t)sum);
+                int bad = fwrite(buf, 1, 16, f) != 16;
+                if (fclose(f) != 0) bad = 1;
+                if (bad) {
                     /* partial write — remove both */
-                    fclose(f);
                     remove(pVS->zSidecarPath);
                     remove(nidPath);
-                } else {
-                    fclose(f);
                 }
             } else {
                 remove(pVS->zSidecarPath);

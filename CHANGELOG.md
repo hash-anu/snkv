@@ -35,6 +35,12 @@ to `busyTimeout`).
 
 ### Added
 
+- `make test-powerloss`: simulated power loss at every write and sync
+  (unsynced writes lost, kept, or torn per 512-byte sector), for WAL and
+  DELETE journals, sync FULL and NORMAL, and encrypted stores through
+  re-key and decryption. After every crash the store must open, pass the
+  integrity check and hold exactly a committed state. A self-check proves
+  the harness catches a disk that ignores fsync.
 - `kvstore_errmsg_copy()`: copies the last error message under the handle
   lock. Use it instead of `kvstore_errmsg()` when threads share a handle.
 - `KVSTORE_VERSION`, `KVSTORE_VERSION_MAJOR` / `_MINOR` / `_PATCH`,
@@ -48,6 +54,13 @@ to `busyTimeout`).
 
 ### Fixed
 
+- Vector store: after a power cut that followed a clean `kvstore_vec_close`,
+  the index sidecar (`{db}.usearch`, written without fsync) could be torn
+  while its stamp (`{db}.usearch.nid`) survived. Open accepted the torn
+  file and the first search aborted the process. The stamp now also holds a
+  checksum of the sidecar; a sidecar that does not match (torn, truncated,
+  corrupt, or an old 8-byte stamp) is ignored and the index is rebuilt from
+  the database.
 - `kvstore_iterator_key` / `_value` after a write through the handle moved
   the iterator's row (for example, inserts that split its page) returned
   `KVSTORE_CORRUPT` on a healthy store: they read the B-tree cursor without

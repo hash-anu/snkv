@@ -238,6 +238,19 @@ test-tsan:
 	TSAN_OPTIONS="suppressions=$(CURDIR)/tests/tsan.supp $(TSAN_OPTIONS)" \
 	  $(MAKE) CFLAGS="$(TSAN_CFLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=thread" test
 
+# Simulated power loss at every write/sync (tests/test_powerloss.c).
+# PL_STRIDE=n tests every n-th crash point; PL_SEEDS=n random tear seeds.
+# Built with its own kvstore.c at the minimum Argon2 cost: the encrypted runs
+# open the store thousands of times, and crash safety does not depend on it.
+PL_LIB_OBJ = $(filter-out src/kvstore.o,$(LIB_OBJ))
+tests/test_powerloss$(TARGET_EXT): tests/test_powerloss.c src/kvstore.c $(PL_LIB_OBJ)
+	$(CC) $(CFLAGS) -DSNKV_ENC_M_COST=8 -DSNKV_ENC_T_COST=1 -o $@ \
+	  tests/test_powerloss.c src/kvstore.c $(PL_LIB_OBJ) $(LDFLAGS)
+
+test-powerloss: tests/test_powerloss$(TARGET_EXT)
+	./tests/test_powerloss$(TARGET_EXT)
+	rm -f pl.db pl.db-wal pl.db-shm pl.db-journal
+
 test-coverage:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(COV_CFLAGS)" test
@@ -269,4 +282,4 @@ test-crash-10gb: tests/test_crash_10gb$(TARGET_EXT)
 
 .PHONY: all clean tests test examples run-examples snkv.h test-crash-10gb \
         vector test-vector vector-examples run-vector-examples \
-        test-asan test-ubsan test-tsan test-coverage
+        test-asan test-ubsan test-tsan test-coverage test-powerloss
