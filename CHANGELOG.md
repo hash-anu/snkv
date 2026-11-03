@@ -81,6 +81,9 @@ to `busyTimeout`).
     re-encrypting (and growing) the same rows endlessly. The rewrite now
     requires each key to be greater than the last and returns
     `KVSTORE_CORRUPT` otherwise.
+  - 8-byte TTL timestamps were decoded the same signed way (undefined
+    behaviour for a damaged timestamp with the top bit set). Now decoded
+    as unsigned.
 - Vector store: after a power cut that followed a clean `kvstore_vec_close`,
   the index sidecar (`{db}.usearch`, written without fsync) could be torn
   while its stamp (`{db}.usearch.nid`) survived. Open accepted the torn

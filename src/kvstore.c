@@ -375,11 +375,13 @@ static void kvstoreEncodeBE64(unsigned char buf[8], int64_t v){
   buf[7] = (unsigned char)( v        & 0xFF);
 }
 
+/* Decode as unsigned: shifting a byte >= 0x80 into the sign bit of an
+** int64_t is undefined behaviour (a damaged TTL timestamp can hold one). */
 static int64_t kvstoreDecodeBE64(const unsigned char buf[8]){
-  return ((int64_t)buf[0] << 56) | ((int64_t)buf[1] << 48) |
-         ((int64_t)buf[2] << 40) | ((int64_t)buf[3] << 32) |
-         ((int64_t)buf[4] << 24) | ((int64_t)buf[5] << 16) |
-         ((int64_t)buf[6] <<  8) |  (int64_t)buf[7];
+  return (int64_t)(((uint64_t)buf[0] << 56) | ((uint64_t)buf[1] << 48) |
+                   ((uint64_t)buf[2] << 40) | ((uint64_t)buf[3] << 32) |
+                   ((uint64_t)buf[4] << 24) | ((uint64_t)buf[5] << 16) |
+                   ((uint64_t)buf[6] <<  8) |  (uint64_t)buf[7]);
 }
 
 /*
