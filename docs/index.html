@@ -666,7 +666,7 @@
   <div class="category">Deep Dive · Storage Engine Internals</div>
   <h1>Inside SNKV: How a B-tree-Backed Key-Value Store Works at Every Layer</h1>
   <p class="subtitle">
-    A technical walkthrough of SNKV's kvstore layer — from BLOBKEY encoding and persistent read transactions to two-level mutex locking, cached read cursors, and WAL auto-checkpointing.
+    A technical walkthrough of SNKV's kvstore layer — from BLOBKEY encoding and persistent read transactions to one lock per handle, cached read cursors, and WAL auto-checkpointing.
   </p>
   <div class="meta-row">
     <span>SNKV Engineering</span>
@@ -717,6 +717,7 @@
       <li><a href="#column-families">Column Families</a></li>
       <li><a href="#iterators">Iterators</a>
         <ul class="toc-sub">
+          <li><a href="#iter-row-copy">One Lock per Row</a></li>
           <li><a href="#prefix-iter">Prefix Iteration</a></li>
         </ul>
       </li>
@@ -753,7 +754,7 @@
         <div class="arch-layer active">
           <span class="arch-layer-num">L3</span>
           <span class="arch-layer-name">kvstore.c  ← this document</span>
-          <span class="arch-layer-desc">persistent read txn · cached cursors · blob encoding · 2-level mutex</span>
+          <span class="arch-layer-desc">persistent read txn · cached cursors · blob encoding · one lock per handle</span>
         </div>
         <div class="arch-arrow">↕  BtreeInsert / IndexMoveto / ···</div>
         <div class="arch-layer">
@@ -802,9 +803,12 @@
   ├─ closing      → int                set to 1 in kvstore_close()
   ├─ zErrMsg[256] → char[]             last error string (fixed buffer, never freed)
   ├─ pMutex       → sqlite3_mutex*     RECURSIVE store lock (one per handle, always)
+  ├─ txnHeld      → int                1 while kvstore_begin(write) keeps pMutex held
   ├─ pDefaultCF   → KVColumnFamily*    always-open default column family
   ├─ apCF[]       → KVColumnFamily**   open named column families
-  ├─ stats        → KVStoreStats       {nPuts nGets nDeletes nIterations nErrors}
+  ├─ pIterList    → KVIterator*        open iterators (force-closed by kvstore_close)
+  ├─ stats        → KVStoreStats       {nPuts nGets nDeletes nIterations nErrors
+  │                                     nBytesRead nBytesWritten nCheckpoints …}
   └─ walAutoCkptPages → int            checkpoint when WAL ≥ N pages (default 1000, 0=off)
 
 KVColumnFamily
@@ -812,8 +816,10 @@ KVColumnFamily
   ├─ zName        → char*              CF name (heap-allocated)
   ├─ iTable       → int                B-tree root page for this CF's data
   ├─ refCount     → int                reference count
-  ├─ pMutex       → sqlite3_mutex*     SQLITE_MUTEX_RECURSIVE (CF-level)
-  └─ pReadCur     → BtCursor*          cached read cursor (NULL = not yet open)
+  ├─ pReadCur     → BtCursor*          cached read cursor (NULL = not yet open)
+  ├─ hasTtl       → int                1 once the TTL index CFs are open
+  └─ pTtlKeyCF / pTtlExpiryCF          TTL index CFs (NULL until the first TTL write)
+                                       (no lock of its own: the handle's lock covers it)
 
 KVIterator
   ├─ pCF          → KVColumnFamily*    column family being iterated
@@ -823,6 +829,8 @@ KVIterator
   ├─ ownsTrans    → int                1 = iterator opened its own read txn
   ├─ pKeyBuf/nKeyBuf                   reusable key buffer (grows via realloc)
   ├─ pValBuf/nValBuf                   reusable value buffer
+  ├─ keyReady/valReady                 1 = buffer holds the current row (copied on move)
+  ├─ reverse      → int                1 = reverse iterator (last / prev)
   └─ pPrefix/nPrefix                   prefix filter (heap copy, or NULL)</pre>
       </div>
     </div>
@@ -885,7 +893,7 @@ data  = [00 00 00 07][m][e][t][r][i][c][s][00 00 00 07]
 
 Page-1 file header meta slots used by SNKV:
   meta[1] = Default CF root page number
-  meta[2] = CF count (total named CFs)
+  meta[2] = CF count (counts the default CF: 1 in a fresh store)
   meta[3] = CF metadata table root page number</pre>
       </div>
 
@@ -897,9 +905,9 @@ Page-1 file header meta slots used by SNKV:
         <pre>Page layout after first open (new database, auto-vacuum enabled):
 
   Page 1: SQLite file header + schema root
-  Page 2: Default CF table root (BLOBKEY, initially empty)
-  Page 3: CF metadata table root (INTKEY, initially empty)
-  Page 4: Pointer-map page (required by incremental auto-vacuum)</pre>
+  Page 2: Pointer-map page (required by incremental auto-vacuum)
+  Page 3: Default CF table root (BLOBKEY, initially empty)   ← meta[1] = 3
+  Page 4: CF metadata table root (INTKEY, initially empty)   ← meta[3] = 4</pre>
       </div>
     </div>
 
@@ -921,9 +929,12 @@ Page-1 file header meta slots used by SNKV:
         </div>
         <pre>Step 1  sqlite3_initialize()
 
-Step 2  Resolve config defaults (zero → default)
-        journalMode == 0   →  KVSTORE_JOURNAL_WAL
-        syncLevel   == 0   →  KVSTORE_SYNC_NORMAL
+Step 2  Resolve config
+        pConfig == NULL    →  WAL journal, SYNC_NORMAL, all defaults below
+        journalMode / syncLevel are used as given; their 0 values are
+          KVSTORE_JOURNAL_DELETE (0) and KVSTORE_SYNC_OFF (0), so a
+          zero-initialised config means DELETE journal, no fsync —
+          set both explicitly
         cacheSize   == 0   →  2000 pages   (~8 MB at 4 KiB/page)
         cacheSize   &lt;  0   →  memory budget in KiB (e.g. -256 ≈ 256 KB)
         pageSize    == 0   →  4096 bytes   (only applies to new DBs)
@@ -999,17 +1010,22 @@ Step 14 Open persistent read transaction
 pKV->closing = 1                   ← racing threads bail here
 
 if inTrans > 0:
-  sqlite3BtreeRollback(pBt, SQLITE_OK, 0)
+  rollback (kvstoreBtreeRollback)
   pKV->inTrans = 0
+release this thread's kvstore_begin(write) hold on pMutex (txnHeld)
+wipe the encryption key from memory (encrypted stores)
 
-for each open CF (default + named):
+for each iterator still open:      ← force-close: free its cursor,
+  pIter->pCF = NULL                   later iterator_close is a no-op
+
+for each open CF (default + named, with its TTL index CFs):
   if pCF->pReadCur: kvstoreFreeCursor(pCF->pReadCur)
   free(pCF->zName), free(pCF)
 
 sqlite3BtreeClose(pBt)             ← PagerClose → OsClose → close(fd)
 if db->busyHandler.pBusyArg:
   sqlite3_free(db->busyHandler.pBusyArg)  ← free KVBusyCtx
-free(pKeyInfo), free(zErrMsg)
+free(pKeyInfo)                     ← zErrMsg is a fixed array: nothing to free
 sqlite3_mutex_free(db->mutex)
 free(db)
 
@@ -1127,7 +1143,7 @@ WHY commit before upgrading to write (WAL mode)?
   never leaves half-applied changes for a later commit to pick up.
   (Explicit kvstore_commit instead keeps the transaction open so the
    caller can retry or roll back.)
-  // put/delete: persistent read NOT restored on error path
+  // put/delete: the persistent read is restored on the error path too
   // rollback(): persistent read IS always restored if !closing
   //   → kvstore_rollback always calls BtreeBeginTrans(0) after rollback
 
@@ -1298,8 +1314,9 @@ Leaf after:  [user:0][user:2]
         </div>
         <pre>kvstore_cf_create(kv, "logs", &cf)
 
-  Validate name: non-null · 1–255 chars · not "default"
+  Validate name: non-null · 1–255 chars
                  · must not start with "__" or "_snkv_" (reserved)
+                 · "default" → returns the default CF (see below)
 
   Check CF does not already exist:
     kvstoreMetaSeekKey("logs") → found? → error (already exists)
@@ -1309,7 +1326,7 @@ Leaf after:  [user:0][user:2]
 
   Create new BLOBKEY table:
     sqlite3BtreeCreateTable(pBt, &pgno, BTREE_BLOBKEY)
-    // Before: pages [1][2-default][3-meta][4-ptrmap]
+    // Before: pages [1][2-ptrmap][3-default][4-meta]
     // After:  pages [1][2][3][4][5 ← "logs" root]
     // pgno = 5
 
@@ -1328,8 +1345,8 @@ Leaf after:  [user:0][user:2]
   Allocate KVColumnFamily {
     iTable   = 5      (new root page)
     refCount = 1
-    pMutex   = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE)
     pReadCur = NULL   ← opened lazily on first get
+    (no per-CF lock: the handle's one lock covers every CF)
   }</pre>
       </div>
 
@@ -1380,8 +1397,18 @@ Iterator close — transaction cleanup:
 
 Buffer reuse (key and value reads):
   pKeyBuf / pValBuf grown via sqlite3_realloc when needed
-  pointers returned to caller are owned by the iterator (do NOT free)</pre>
+  pointers returned to caller are owned by the iterator (do NOT free);
+  valid until the iterator moves again or is closed</pre>
       </div>
+
+      <h3 id="iter-row-copy">One Lock per Row: the Row Is Copied on Move</h3>
+
+      <p>
+        Moving the iterator (<code>first</code> / <code>next</code> / <code>last</code> / <code>prev</code> / <code>seek</code>) takes the handle lock and, while holding it, copies the current key — and the value, when it is on the cursor's page, at most <code>KVSTORE_ITER_PREFETCH_MAX</code> (1&nbsp;KB) and not encrypted — into the iterator's buffers. <code>kvstore_iterator_key</code> / <code>_value</code> then return the copy without locking: an iterator is used by one thread at a time, so its own buffers need no lock. A scan takes one lock per row instead of three. Larger and encrypted values are read under the lock when <code>value()</code> is called, and the result is reused. Embedded builds can set <code>-DKVSTORE_ITER_PREFETCH_MAX=0</code> to copy only keys.
+      </p>
+      <p>
+        A write through the handle can move the iterator's row (for example, inserts that split its page); SQLite then saves the cursor's position and releases the page. Before an on-demand read, the iterator restores the cursor; if its row was deleted, <code>value()</code> returns <code>KVSTORE_NOTFOUND</code> and the next <code>next()</code> / <code>prev()</code> still lands on the right row.
+      </p>
 
       <h3 id="prefix-iter">Prefix Iteration — O(log n) Seek, Not O(n) Scan</h3>
 
@@ -1430,7 +1457,7 @@ Note: contrast with kvstoreSeekKey() (get/exists/delete) which uses
         Every <code>KVStore</code> handle has one <code>SQLITE_MUTEX_RECURSIVE</code> mutex, always allocated. It protects everything the handle owns: the B-tree and page cache, <code>inTrans</code>, <code>stats</code>, <code>closing</code>, and every CF's <code>pReadCur</code> / <code>refCount</code>. It is the only lock on a handle — column families have no lock of their own — so there is no lock order to get wrong. An explicit write transaction (<code>kvstore_begin(kv, 1)</code>) keeps it held until commit or rollback, so other threads sharing the handle wait instead of joining that transaction.
       </p>
       <p>
-        So one <code>KVStore*</code> can be shared across threads: calls on it run one at a time. For parallel reads, give each thread its own handle — handles never wait for each other's lock; WAL coordinates them through the file. An uncontended lock costs a few tens of nanoseconds per call (the old per-CF lock, which every call took, cost the same).
+        So one <code>KVStore*</code> can be shared across threads: calls on it run one at a time. For parallel reads, give each thread its own handle — handles never wait for each other's lock; WAL coordinates them through the file. An uncontended lock costs a few nanoseconds per call; it only shows in tight scan loops, which is why iterators lock once per row (see Iterators).
       </p>
 
       <div class="diagram-block">
@@ -1444,7 +1471,7 @@ unlock(pKV->pMutex)   ◄────────── ┘      unlock(pKV->pMu
 
       <div class="callout">
         <div class="callout-title">Why SQLITE_MUTEX_RECURSIVE?</div>
-        <p><code>kvstore_iterator_close</code> calls <code>kvstore_cf_close</code>, which may re-enter <code>pKV->pMutex</code> while the caller already holds it. A non-recursive mutex would deadlock here. <code>SQLITE_MUTEX_RECURSIVE</code> maps to <code>PTHREAD_MUTEX_RECURSIVE</code> on POSIX and a spin-count <code>CRITICAL_SECTION</code> on Windows — both safe for same-thread re-entry.</p>
+        <p><code>kvstore_begin(kv, 1)</code> keeps <code>pKV->pMutex</code> held until commit or rollback, so every call the same thread makes inside the transaction (<code>kvstore_put</code>, <code>kvstore_get</code>, …) enters it again while it is already held. A non-recursive mutex would deadlock on the first one. <code>SQLITE_MUTEX_RECURSIVE</code> maps to <code>PTHREAD_MUTEX_RECURSIVE</code> on POSIX and a <code>CRITICAL_SECTION</code> on Windows — both safe for same-thread re-entry.</p>
       </div>
 
       <h3 id="mutex-migration">Mutex Design: sqlite3_mutex with RECURSIVE type</h3>
@@ -1633,7 +1660,7 @@ File size timeline:
       <h2>Full Stack Trace: kvstore_put Through All Four Layers</h2>
 
       <p>
-        A single <code>kvstore_put("hello", 5, "world", 5)</code> call traverses all four layers. Here is the complete call chain with layer annotations:
+        A single <code>kvstore_put("hello", 5, "world", 5)</code> call traverses all four layers below the application (L3 to L0 in the stack above). Here is the complete call chain with layer annotations:
       </p>
 
       <div class="code-block">
@@ -1641,32 +1668,38 @@ File size timeline:
           <span class="code-block-label">kvstore_put("hello", 5, "world", 5) — complete trace</span>
           <div class="code-block-dots"><span></span><span></span><span></span></div>
         </div>
-        <pre>[L4 kvstore.c]
+        <pre>[L3 kvstore.c]
   lock KV mutex
   if inTrans==1: BtreeCommit(read)     → inTrans=0
   BtreeBeginTrans(1, 0)                → inTrans=2   (autoTrans)
   kvstoreEncodeBlob()   [stack buf]    → [00 00 00 05][hello][world]
   BtreeCursor(write, pCur)
 
-[L3 btree.c]
+[L2 btree.c]
   sqlite3BtreeInsert(pCur, {pKey=blob, nKey=15})
     ├── BtreeIndexMoveto()             → traverse root → internal → leaf
     │     sqlite3VdbeRecordCompare()   at each B-tree level
-    ├── insertCell()                   → write 15-byte cell to leaf page
+    │     (SNKV's version: compares the key part of the blob only)
+    ├── insertCell()                   → write the 15-byte payload as a leaf cell
     ├── balance_nonroot()              → split/merge if page overflows
     └── PagerWrite(pPage)             → mark page dirty in page cache
 
-[L2 pager.c]
-  pager_write()
-    ├── [Rollback] writeJournalHdr()   → OsWrite(journal fd)
-    └── [WAL]      walWriteLock()      → append WAL frame
+[L1 pager.c]
+  pager_write()          (on PagerWrite: nothing reaches the database yet)
+    ├── [Rollback] the page's ORIGINAL content → OsWrite(journal fd)
+    └── [WAL]      page only marked dirty in the cache
+  on commit:
+    ├── [Rollback] sync journal → write dirty pages to the db → delete journal
+    └── [WAL]      append the dirty pages as WAL frames (pagerWalFrames);
+                   the db file itself is written only at checkpoint
+  (a full cache can also spill dirty pages early)
 
-[L1 os.c / os_unix.c / os_win.c / os_kv.c]
+[L0 os.c / os_unix.c / os_win.c / os_kv.c]
   sqlite3OsWrite()   → pwrite(fd, buf, amt, offset)
   sqlite3OsSync()    → fsync(fd)      (on commit: rollback journal with NORMAL/FULL; WAL only with FULL — WAL+NORMAL syncs at checkpoint, or call kvstore_sync)
   sqlite3OsLock()    → fcntl(fd, F_SETLK, ...)
 
-[L4 kvstore.c — return path]
+[L3 kvstore.c — return path]
   BtreeCloseCursor(write cursor)
   BtreeCommit()                        → autoTrans commit
   kvstoreAutoCheckpoint(pKV)           → PASSIVE ckpt if WAL ≥ walAutoCheckpoint pages
