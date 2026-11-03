@@ -1292,7 +1292,7 @@ Leaf after:  [user:0][user:2]
       <h3 id="exists">Exists — Cheapest Point Lookup</h3>
 
       <p>
-        <code>kvstore_exists</code> is the cheapest operation: it uses the cached read cursor, performs the B-tree traversal, but reads <em>zero bytes of payload</em>. Only the key comparison at the leaf node is performed. The caller gets a boolean — no allocation occurs at all on the hot path.
+        <code>kvstore_exists</code> is the cheapest operation: it uses the cached read cursor, performs the B-tree traversal, but reads <em>zero bytes of payload</em>. Only the key comparison at the leaf node is performed. The caller gets a boolean — no allocation occurs at all on the hot path. That holds for a column family with no TTL keys; when it has some, <code>exists</code> also looks the key up in the TTL index (one small allocation), and if the key has expired it deletes it (lazy expiry, a write) and reports it absent.
       </p>
     </div>
 
