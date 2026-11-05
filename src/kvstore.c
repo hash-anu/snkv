@@ -327,6 +327,16 @@ static int kvstoreGrowBuf(unsigned char **pp, int *pnAlloc, i64 nNeed){
   return KVSTORE_OK;
 }
 
+/* Size of the entry under a valid cursor, or 0 if the stored size is larger
+** than the whole file (only possible in a damaged file).  Callers size
+** buffers from this, so a bad header must not ask for gigabytes; every
+** caller already treats a size below 4 as corrupt or skips the entry.
+** SQLite's SQL layer makes the same check (sqlite3BtreeMaxRecordSize). */
+static u32 kvstorePayloadSize(BtCursor *pCur){
+  u32 n = sqlite3BtreePayloadSize(pCur);
+  return (i64)n > sqlite3BtreeMaxRecordSize(pCur) ? 0 : n;
+}
+
 
 /* ======================================================================
 ** Internal cursor helpers – wraps the new callerallocs cursor model
@@ -936,7 +946,7 @@ static int kvstoreMetaSeekKey(
     int rc = sqlite3BtreeTableMoveto(pCur, tryRowid, 0, &res);
     if( rc != SQLITE_OK ) return rc;
     if( res != 0 ) return SQLITE_OK;
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    u32 payloadSz = kvstorePayloadSize(pCur);
     if( (int)payloadSz >= 4 + nKey ){
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
@@ -992,7 +1002,7 @@ static int kvstoreMetaFindSlot(
       return SQLITE_OK;
     }
     /* Check for a tombstone (key_len == 0) — reusable. */
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    u32 payloadSz = kvstorePayloadSize(pCur);
     if( payloadSz == 4 ){
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
@@ -2049,7 +2059,7 @@ static int kvstoreRawBtreeGet(
     return (rc == SQLITE_OK) ? KVSTORE_NOTFOUND : rc;
   }
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  u32 payloadSz = kvstorePayloadSize(pCur);
   unsigned char hdr[4];
   rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
   if( rc != SQLITE_OK ){ kvstoreFreeCursor(pCur); return rc; }
@@ -2199,7 +2209,7 @@ static int kvstoreCfOpenInternal(
     return KVSTORE_CORRUPT;
   }
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  u32 payloadSz = kvstorePayloadSize(pCur);
   if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ kvstoreBtreeCommit(pKV); pKV->inTrans = 0; }
@@ -2609,7 +2619,7 @@ static int kvstoreCountUserCFs(KVStore *pKV, int *pnCF){
   int res = 0;
   rc = sqlite3BtreeFirst(pCur, &res);
   while( rc == SQLITE_OK && !res ){
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    u32 payloadSz = kvstorePayloadSize(pCur);
     if( payloadSz >= 8 ){
       unsigned char buf[10];
       int nRead = payloadSz < sizeof(buf) ? (int)payloadSz : (int)sizeof(buf);
@@ -2961,7 +2971,7 @@ int kvstore_cf_open(KVStore *pKV, const char *zName, KVColumnFamily **ppCF){
   }
 
   /* Read the payload: [name_len(4) | name | table_root(4)] */
-  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  u32 payloadSz = kvstorePayloadSize(pCur);
   if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ kvstoreBtreeCommit(pKV); pKV->inTrans = 0; }
@@ -3354,7 +3364,7 @@ static int kvstore_cf_get_internal(
   }
 
   /* Cursor is positioned on the matching entry — read the value portion. */
-  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  u32 payloadSz = kvstorePayloadSize(pCur);
   int storedKeyLen = 0;
   {
     unsigned char hdr[4];
@@ -3927,7 +3937,7 @@ static int kvstoreIterCheckPrefix(KVIterator *pIter){
   if( !pIter->pPrefix ) return 1;
   if( pIter->eof ) return 0;
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  u32 payloadSz = kvstorePayloadSize(pIter->pCur);
   if( payloadSz < (u32)(4 + pIter->nPrefix) ) return 0;
 
   rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
@@ -3972,7 +3982,7 @@ static int kvstoreIterSkipExpired(KVIterator *pIter){
     if( pIter->eof ) return SQLITE_OK;
 
     /* Read the current key from the iterator cursor. */
-    u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+    u32 payloadSz = kvstorePayloadSize(pIter->pCur);
     if( payloadSz < 4 ) return SQLITE_OK;
     unsigned char hdr[4];
     int rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
@@ -4033,7 +4043,7 @@ static int kvstoreIterSkipExpiredReverse(KVIterator *pIter){
   for(;;){
     if( pIter->eof ) return SQLITE_OK;
 
-    u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+    u32 payloadSz = kvstorePayloadSize(pIter->pCur);
     if( payloadSz < 4 ) return SQLITE_OK;
     unsigned char hdr[4];
     int rc = sqlite3BtreePayload(pIter->pCur, 0, 4, hdr);
@@ -4286,7 +4296,7 @@ static int kvstoreIterKeyImpl(KVIterator *pIter, void **ppKey, int *pnKey){
   rc = kvstoreIterRestore(pIter);
   if( rc != KVSTORE_OK ) return rc;
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  u32 payloadSz = kvstorePayloadSize(pIter->pCur);
   if( payloadSz < 4 ) return KVSTORE_CORRUPT;
 
   unsigned char hdr[4];
@@ -4330,7 +4340,7 @@ static int kvstoreIterValueImpl(KVIterator *pIter, void **ppValue, int *pnValue)
   rc = kvstoreIterRestore(pIter);
   if( rc != KVSTORE_OK ) return rc;
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  u32 payloadSz = kvstorePayloadSize(pIter->pCur);
   if( payloadSz < 4 ) return KVSTORE_CORRUPT;
 
   unsigned char hdr[4];
@@ -4557,7 +4567,7 @@ static void kvstoreIterLoadRow(KVIterator *pIter){
 
   if( pIter->eof || !pIter->pCur ) return;
   if( sqlite3BtreeCursorHasMoved(pIter->pCur) ) return;   /* not on a row */
-  payloadSz = sqlite3BtreePayloadSize(pIter->pCur);
+  payloadSz = kvstorePayloadSize(pIter->pCur);
   if( payloadSz < 4 ) return;
   a = (const unsigned char*)sqlite3BtreePayloadFetch(pIter->pCur, &nLocal);
   if( !a || nLocal < 4 ) return;
@@ -4872,7 +4882,7 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
           int res;
           rc = sqlite3BtreeFirst(pCur, &res);
           while( rc == SQLITE_OK && !res ){
-            u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+            u32 payloadSz = kvstorePayloadSize(pCur);
             if( payloadSz >= 8 ){
               unsigned char hdr[4];
               rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
@@ -5144,7 +5154,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
 
   while( rc == SQLITE_OK && !res ){
     /* Read payload to extract name */
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    u32 payloadSz = kvstorePayloadSize(pCur);
     if( payloadSz >= 4 ){
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
@@ -5258,7 +5268,7 @@ static int kvstoreFixMovedTableRoot(KVStore *pKV, int iDropped, int iMoved){
   int res = 0, found = 0;
   rc = sqlite3BtreeFirst(pCur, &res);
   while( rc == SQLITE_OK && res == 0 ){
-    u32 sz = sqlite3BtreePayloadSize(pCur);
+    u32 sz = kvstorePayloadSize(pCur);
     if( (int)sz >= 4 + 1 + 4 ){   /* at least 4-byte len + 1-char name + 4-byte root */
       unsigned char rootBytes[4];
       rc = sqlite3BtreePayload(pCur, sz - 4, 4, rootBytes);
@@ -5332,7 +5342,7 @@ static int kvstoreDropHiddenCFNoLock(KVStore *pKV, const char *zName){
     return rc != SQLITE_OK ? rc : KVSTORE_CORRUPT;
   }
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  u32 payloadSz = kvstorePayloadSize(pCur);
   if( (int)payloadSz < 4 + nNameLen + 4 ){
     kvstoreFreeCursor(pCur);
     return KVSTORE_CORRUPT;
@@ -5518,7 +5528,7 @@ int kvstore_cf_drop(KVStore *pKV, const char *zName){
     }
   }
 
-  u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+  u32 payloadSz = kvstorePayloadSize(pCur);
   if( (int)payloadSz < 4 + (int)nNameLen + 4 ){
     kvstoreFreeCursor(pCur);
     if( autoTrans ){ kvstoreBtreeRollback(pKV); pKV->inTrans = 0; }
@@ -6040,7 +6050,7 @@ int kvstore_cf_purge_expired(KVColumnFamily *pCF, int *pnDeleted){
         if( rc == SQLITE_OK ) rc = sqlite3BtreeFirst(pCur, &res);
         if( rc == SQLITE_OK && res ) stop = 1;          /* nothing left */
         if( rc == SQLITE_OK && !stop ){
-          u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+          u32 payloadSz = kvstorePayloadSize(pCur);
           unsigned char hdr[4];
           if( payloadSz < 4 + 8 ) rc = KVSTORE_CORRUPT;
           if( rc == SQLITE_OK ) rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
@@ -6922,7 +6932,7 @@ static int kvstoreRewriteCFTable(
     }
     if( rc != SQLITE_OK || res ) break;            /* error, or no more rows */
 
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    u32 payloadSz = kvstorePayloadSize(pCur);
     if( payloadSz < 4 || payloadSz > INT_MAX ){ rc = KVSTORE_CORRUPT; break; }
     rc = kvstoreGrowBuf(&pBuf, &nBufAlloc, (i64)payloadSz);
     if( rc != KVSTORE_OK ) break;
@@ -7031,7 +7041,7 @@ static int kvstoreForEachUserCF(KVStore *pKV, kvstoreCFIterFn fn, void *pArg,
   int res = 0;
   rc = sqlite3BtreeFirst(pCur, &res);
   while( rc == SQLITE_OK && !res ){
-    u32 payloadSz = sqlite3BtreePayloadSize(pCur);
+    u32 payloadSz = kvstorePayloadSize(pCur);
     if( (int)payloadSz >= 8 ){
       unsigned char hdr[4];
       rc = sqlite3BtreePayload(pCur, 0, 4, hdr);

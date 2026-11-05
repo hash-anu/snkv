@@ -84,6 +84,13 @@ to `busyTimeout`).
   - 8-byte TTL timestamps were decoded the same signed way (undefined
     behaviour for a damaged timestamp with the top bit set). Now decoded
     as unsigned.
+  - A damaged record header could claim an entry far larger than the file
+    (2 GB in a 35 KB file), and buffers were sized from that claim before
+    reading: encrypt-on-open, `get`, iterators and the column-family walk
+    could ask for gigabytes of memory. Every entry size is now checked
+    against the file size first (the check SQLite's SQL layer makes, which
+    SNKV bypasses); reads of such an entry return `KVSTORE_CORRUPT` and
+    scans skip it.
 - Vector store: after a power cut that followed a clean `kvstore_vec_close`,
   the index sidecar (`{db}.usearch`, written without fsync) could be torn
   while its stamp (`{db}.usearch.nid`) survived. Open accepted the torn
