@@ -19,7 +19,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define DB_PATH  "examples/enc_demo.db"
+#define DB_PATH  "enc_demo.db"
 #define PASSWORD "hunter2"
 #define NEW_PASS "correct-horse-battery-staple"
 
@@ -55,7 +55,7 @@ static void section_create(void) {
                                     &pKV, NULL);
     if (rc != KVSTORE_OK) {
         fprintf(stderr, "  kvstore_open_encrypted failed: %d\n", rc);
-        return;
+        exit(1);   /* every later section needs this store */
     }
     printf("  opened encrypted store (is_encrypted=%d)\n",
            kvstore_is_encrypted(pKV));

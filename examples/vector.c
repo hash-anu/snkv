@@ -29,7 +29,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define DB   "examples/vec_demo.db"
+#define DB   "vec_demo.db"
 #define DIM  8
 
 /* -----------------------------------------------------------------------
