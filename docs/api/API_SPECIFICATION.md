@@ -71,19 +71,24 @@ All error codes are aliases for the corresponding `SQLITE_*` codes.
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `KVSTORE_JOURNAL_DELETE` | 0 | Rollback journal mode (delete journal on commit) |
-| `KVSTORE_JOURNAL_WAL` | 1 | Write-Ahead Logging mode (recommended) |
+| `KVSTORE_JOURNAL_WAL` | 1 | Write-Ahead Logging mode (recommended; default, 0 also means this) |
+| `KVSTORE_JOURNAL_DELETE` | 2 | Rollback journal mode (delete journal on commit) |
 
 ### Sync levels
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `KVSTORE_SYNC_OFF` | 0 | No fsync — fastest, data at risk on power failure |
-| `KVSTORE_SYNC_NORMAL` | 1 | WAL-safe (default) — survives process crash, not power loss |
-| `KVSTORE_SYNC_FULL` | 2 | Power-safe — fsync on every commit, slower writes |
+| `KVSTORE_SYNC_NORMAL` | 1 | Default (0 also means this) — never corrupts; a power cut can lose the latest commits |
+| `KVSTORE_SYNC_FULL` | 2 | Power-safe — fsync on every commit; many small commits are much slower |
+| `KVSTORE_SYNC_OFF` | 3 | No fsync — fastest, data at risk on power failure |
 
-> In WAL mode (`KVSTORE_JOURNAL_WAL`) there is virtually no write-throughput
-> difference between `SYNC_NORMAL` and `SYNC_FULL`.
+> `SYNC_FULL` waits for the disk on every commit, so many small commits are
+> much slower than with `SYNC_NORMAL`; large batched transactions cost about
+> the same. With `NORMAL`, call `kvstore_sync()` after writes that must
+> survive a power cut.
+>
+> Before 0.9.0, `KVSTORE_JOURNAL_DELETE` and `KVSTORE_SYNC_OFF` were 0, so a
+> zero-filled config silently meant "no fsync". 0 now means the default.
 
 ### Checkpoint modes
 

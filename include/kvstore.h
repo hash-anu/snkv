@@ -84,23 +84,36 @@ typedef struct KVColumnFamily KVColumnFamily;
 #define KVSTORE_MAX_COLUMN_FAMILIES 64
 
 /*
-** Journal modes for kvstore_open / KVStoreConfig.journalMode
+** Journal modes for kvstore_open / KVStoreConfig.journalMode.
+** 0 means the default (WAL).  Any other value is rejected (KVSTORE_ERROR).
 */
-#define KVSTORE_JOURNAL_DELETE  0   /* Delete rollback journal on commit */
-#define KVSTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode */
+#define KVSTORE_JOURNAL_WAL     1   /* Write-Ahead Logging mode (default) */
+#define KVSTORE_JOURNAL_DELETE  2   /* Delete rollback journal on commit */
 
 /*
-** Sync levels for KVStoreConfig.syncLevel
+** Sync levels for KVStoreConfig.syncLevel.
+** 0 means the default (NORMAL).  Any other value is rejected (KVSTORE_ERROR).
 **
-** KVSTORE_SYNC_OFF    — no fsync; fastest, but data may be lost on power
-**                       failure (process crash is still safe in WAL mode).
-** KVSTORE_SYNC_NORMAL — (default) WAL checkpoint syncs once; survives process
-**                       crash, not necessarily power loss.
-** KVSTORE_SYNC_FULL   — fsync on every commit; power-safe, slower writes.
+** KVSTORE_SYNC_NORMAL — (default) WAL mode: no fsync per commit, the WAL is
+**                       synced at checkpoints.  The database is never
+**                       corrupted, but a power cut or OS crash can lose the
+**                       most recent commits.  A process crash loses nothing.
+** KVSTORE_SYNC_FULL   — fsync on every commit: a commit that returned
+**                       survives a power cut.  Each commit waits for the
+**                       disk, so many small commits are much slower than
+**                       with NORMAL; large batched transactions cost about
+**                       the same.
+** KVSTORE_SYNC_OFF    — no fsync at all; fastest, but a power cut can lose
+**                       data (and, in DELETE journal mode, corrupt the
+**                       file).  A process crash is still safe in WAL mode.
+**                       Call kvstore_sync() where data must be durable.
+**
+** (Before 0.9.0, KVSTORE_JOURNAL_DELETE and KVSTORE_SYNC_OFF were 0, so a
+** zero-filled config silently meant "no fsync".)
 */
-#define KVSTORE_SYNC_OFF     0
 #define KVSTORE_SYNC_NORMAL  1
 #define KVSTORE_SYNC_FULL    2
+#define KVSTORE_SYNC_OFF     3
 
 /*
 ** Checkpoint modes for kvstore_checkpoint().
@@ -138,9 +151,9 @@ struct KVStoreConfig {
   int journalMode;
 
   /*
-  ** syncLevel — KVSTORE_SYNC_NORMAL (default), KVSTORE_SYNC_OFF, or
-  ** KVSTORE_SYNC_FULL.  Controls how aggressively the pager fsyncs.
-  ** In WAL mode NORMAL and FULL have nearly identical performance.
+  ** syncLevel — KVSTORE_SYNC_NORMAL (default), KVSTORE_SYNC_FULL, or
+  ** KVSTORE_SYNC_OFF.  Controls when data is fsynced; see the KVSTORE_SYNC_*
+  ** comment above for what each level survives and what it costs.
   */
   int syncLevel;
 

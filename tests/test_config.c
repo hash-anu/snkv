@@ -14,6 +14,8 @@
 **   9. DELETE journal mode
 **  10. busyTimeout field stored (open succeeds)
 **  11. kvstore_open backward-compatibility (delegates to open_v2)
+**  12. Zero-filled config gets the defaults (WAL), not DELETE / no fsync
+**  13. Unknown journalMode / syncLevel values are rejected
 */
 
 #include "kvstore.h"
@@ -311,6 +313,92 @@ static void test_backward_compat(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Journal mode recorded in the file header: byte 18 is 2 for WAL, 1 for a
+** rollback journal. */
+static int header_journal_byte(const char *path)
+{
+    unsigned char hdr[20];
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    size_t n = fread(hdr, 1, sizeof hdr, f);
+    fclose(f);
+    return n == sizeof hdr ? hdr[18] : -1;
+}
+
+static void cleanup_db(const char *path)
+{
+    char buf[256];
+    remove(path);
+    snprintf(buf, sizeof buf, "%s-wal", path);     remove(buf);
+    snprintf(buf, sizeof buf, "%s-shm", path);     remove(buf);
+    snprintf(buf, sizeof buf, "%s-journal", path); remove(buf);
+}
+
+/* ------------------------------------------------------------------ */
+static void test_zero_config_defaults(void)
+{
+    printf("\n--- Test 12: zero-filled config gets the defaults ---\n");
+    KVStoreConfig cfg;
+    KVStore *db = NULL;
+    memset(&cfg, 0, sizeof cfg);
+    cleanup_db("tc_zero.db");
+
+    int rc = kvstore_open_v2("tc_zero.db", &db, &cfg);
+    CHECK(rc == KVSTORE_OK && db != NULL, "open with all-zero config");
+    if (db) {
+        CHECK(kvstore_put(db, "k", 1, "v", 1) == KVSTORE_OK, "put succeeds");
+        kvstore_close(db);
+    }
+    CHECK(header_journal_byte("tc_zero.db") == 2, "0 journalMode means WAL");
+
+    /* Explicit DELETE still works and is not WAL. */
+    cleanup_db("tc_zero.db");
+    cfg.journalMode = KVSTORE_JOURNAL_DELETE;
+    db = NULL;
+    rc = kvstore_open_v2("tc_zero.db", &db, &cfg);
+    CHECK(rc == KVSTORE_OK && db != NULL, "open with KVSTORE_JOURNAL_DELETE");
+    if (db) { kvstore_put(db, "k", 1, "v", 1); kvstore_close(db); }
+    CHECK(header_journal_byte("tc_zero.db") == 1, "KVSTORE_JOURNAL_DELETE is a rollback journal");
+    cleanup_db("tc_zero.db");
+
+    /* kvstore_open_encrypted(NULL config) used to pass a zero-filled config
+    ** on, which meant DELETE journal and no fsync. */
+    db = NULL;
+    rc = kvstore_open_encrypted("tc_zero.db", "pw", 2, &db, NULL);
+    CHECK(rc == KVSTORE_OK && db != NULL, "open_encrypted with NULL config");
+    if (db) { kvstore_put(db, "k", 1, "v", 1); kvstore_close(db); }
+    CHECK(header_journal_byte("tc_zero.db") == 2, "open_encrypted(NULL) uses WAL");
+    cleanup_db("tc_zero.db");
+}
+
+/* ------------------------------------------------------------------ */
+static void test_invalid_modes_rejected(void)
+{
+    printf("\n--- Test 13: unknown journalMode / syncLevel rejected ---\n");
+    static const int badJournal[] = { 3, -1, 99 };
+    static const int badSync[]    = { 4, -1, 99 };
+    KVStoreConfig cfg;
+    char msg[64];
+    for (int i = 0; i < 3; i++) {
+        KVStore *db = (KVStore *)1;   /* must be reset to NULL on failure */
+        memset(&cfg, 0, sizeof cfg);
+        cfg.journalMode = badJournal[i];
+        int rc = kvstore_open_v2("tc_bad.db", &db, &cfg);
+        snprintf(msg, sizeof msg, "journalMode=%d rejected", badJournal[i]);
+        CHECK(rc == KVSTORE_ERROR && db == NULL, msg);
+        if (rc == KVSTORE_OK && db) kvstore_close(db);
+
+        db = (KVStore *)1;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.syncLevel = badSync[i];
+        rc = kvstore_open_v2("tc_bad.db", &db, &cfg);
+        snprintf(msg, sizeof msg, "syncLevel=%d rejected", badSync[i]);
+        CHECK(rc == KVSTORE_ERROR && db == NULL, msg);
+        if (rc == KVSTORE_OK && db) kvstore_close(db);
+    }
+    cleanup_db("tc_bad.db");
+}
+
 int main(void)
 {
     printf("=== SNKV Config Test Suite ===\n");
@@ -326,6 +414,8 @@ int main(void)
     test_delete_journal();
     test_busy_timeout_field();
     test_backward_compat();
+    test_zero_config_defaults();
+    test_invalid_modes_rejected();
 
     printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
     return failed ? 1 : 0;

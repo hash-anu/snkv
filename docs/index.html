@@ -931,10 +931,9 @@ Page-1 file header meta slots used by SNKV:
 
 Step 2  Resolve config
         pConfig == NULL    →  WAL journal, SYNC_NORMAL, all defaults below
-        journalMode / syncLevel are used as given; their 0 values are
-          KVSTORE_JOURNAL_DELETE (0) and KVSTORE_SYNC_OFF (0), so a
-          zero-initialised config means DELETE journal, no fsync —
-          set both explicitly
+        journalMode == 0   →  WAL       (a zero-filled config gets the
+        syncLevel   == 0   →  NORMAL     same defaults as NULL)
+        unknown journalMode / syncLevel → KVSTORE_ERROR
         cacheSize   == 0   →  2000 pages   (~8 MB at 4 KiB/page)
         cacheSize   &lt;  0   →  memory budget in KiB (e.g. -256 ≈ 256 KB)
         pageSize    == 0   →  4096 bytes   (only applies to new DBs)
@@ -965,10 +964,10 @@ Step 6  sqlite3BtreeSetPageSize(pBt, pageSize, -1, 0)
 Step 7  sqlite3BtreeSetCacheSize(pBt, cacheSize)
 
 Step 8  Set pager sync flags
-        syncFlag = (syncLevel + 1) | PAGER_CACHESPILL
-        SYNC_OFF    (0) → 0x01  SYNCHRONOUS_OFF
-        SYNC_NORMAL (1) → 0x02  SYNCHRONOUS_NORMAL     ← default (NULL config)
+        syncFlag = SYNCHRONOUS_* | PAGER_CACHESPILL
+        SYNC_NORMAL (1) → 0x02  SYNCHRONOUS_NORMAL     ← default (0 or NULL)
         SYNC_FULL   (2) → 0x03  SYNCHRONOUS_FULL
+        SYNC_OFF    (3) → 0x01  SYNCHRONOUS_OFF
 
 Step 9  sqlite3BtreeSetAutoVacuum(pBt, BTREE_AUTOVACUUM_INCR)
 
