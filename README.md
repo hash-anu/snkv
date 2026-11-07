@@ -80,6 +80,30 @@ kvstore_open_v2("mydb.db", &db, &cfg);
 
 ---
 
+## Power-Loss Testing
+
+[tests/test_powerloss.c](tests/test_powerloss.c) cuts the power at **every write and sync** of a mixed workload (puts, overflow-sized values, deletes, TTL, column families, checkpoints). At each crash point, the writes not yet synced are:
+
+- **lost**: all rolled back,
+- **kept**: all reach the disk, or
+- **torn**: kept or lost one 512-byte sector at a time, in random order.
+
+After each crash the store must reopen, pass `kvstore_integrity_check`, and hold exactly the data of a committed transaction:
+
+| Mode | Guarantee after power loss |
+| ---- | -------------------------- |
+| WAL + `SYNC_FULL`, DELETE + `SYNC_FULL` | the last commit that succeeded, or the one in flight |
+| WAL + `SYNC_NORMAL` | an earlier commit or the one in flight; never a half-applied one |
+| Encrypted (WAL and DELETE, `SYNC_FULL`) | same as above, including while the password is changed or removed |
+
+Runs on every pull request (every 5th crash point) and nightly at every crash point on Linux (with ASan + UBSan), macOS and Windows.
+
+```bash
+make test-powerloss
+```
+
+---
+
 ## Build
 
 **Linux / macOS**
