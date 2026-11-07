@@ -259,7 +259,11 @@ test-powerloss: tests/test_powerloss$(TARGET_EXT)
 FUZZ_CC     ?= clang
 FUZZ_TIME   ?= 60
 FUZZ_DB_DIR ?= fuzz/build
+# The *_MAX limits cap the Argon2 cost a damaged file may ask for (default
+# 1 GiB, 64 passes): without them one input can spend the whole memory or
+# time limit on key derivation, which is expected behaviour, not a bug.
 FUZZ_CFLAGS  = -g -O1 -Iinclude -DSNKV_ENC_M_COST=8 -DSNKV_ENC_T_COST=1 \
+               -DSNKV_ENC_M_COST_MAX=1024 -DSNKV_ENC_T_COST_MAX=4 \
                -fsanitize=address,undefined -fno-sanitize-recover=undefined \
                -fno-omit-frame-pointer
 FUZZ_OBJ     = $(patsubst %.c,fuzz/build/%.o,$(LIB_SRC))
