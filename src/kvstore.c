@@ -1281,6 +1281,18 @@ int kvstore_open_v2(
   }
   *ppKV = NULL;
 
+  /* 0 = default, so a zero-filled config gets WAL + NORMAL (not the least
+  ** safe choices).  Unknown values are rejected rather than guessed. */
+  if( journalMode == 0 ) journalMode = KVSTORE_JOURNAL_WAL;
+  if( syncLevel == 0 )   syncLevel   = KVSTORE_SYNC_NORMAL;
+  if( journalMode != KVSTORE_JOURNAL_WAL && journalMode != KVSTORE_JOURNAL_DELETE ){
+    return KVSTORE_ERROR;
+  }
+  if( syncLevel != KVSTORE_SYNC_OFF && syncLevel != KVSTORE_SYNC_NORMAL
+   && syncLevel != KVSTORE_SYNC_FULL ){
+    return KVSTORE_ERROR;
+  }
+
   /* One-time SQLite library initialisation */
   rc = sqlite3_initialize();
   if( rc != SQLITE_OK ) return rc;
@@ -1390,13 +1402,13 @@ int kvstore_open_v2(
   sqlite3BtreeSetCacheSize(pKV->pBt, cacheSize);
 
   /* Set synchronous level via pager flags.
-  ** KVSTORE_SYNC_* maps to PAGER_SYNCHRONOUS_* with a +1 offset:
-  **   KVSTORE_SYNC_OFF    (0) → PAGER_SYNCHRONOUS_OFF    (0x01)
-  **   KVSTORE_SYNC_NORMAL (1) → PAGER_SYNCHRONOUS_NORMAL (0x02)
-  **   KVSTORE_SYNC_FULL   (2) → PAGER_SYNCHRONOUS_FULL   (0x03)
   ** PAGER_CACHESPILL allows dirty pages to spill under memory pressure. */
   {
-    unsigned syncFlag = (unsigned)(syncLevel + 1) | PAGER_CACHESPILL;
+    unsigned syncFlag =
+        syncLevel == KVSTORE_SYNC_OFF  ? PAGER_SYNCHRONOUS_OFF
+      : syncLevel == KVSTORE_SYNC_FULL ? PAGER_SYNCHRONOUS_FULL
+      :                                  PAGER_SYNCHRONOUS_NORMAL;
+    syncFlag |= PAGER_CACHESPILL;
     sqlite3_mutex_enter(pKV->db->mutex);
     sqlite3BtreeSetPagerFlags(pKV->pBt, syncFlag);
     sqlite3_mutex_leave(pKV->db->mutex);

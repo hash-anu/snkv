@@ -660,15 +660,15 @@
         <h4 class="subsec">Journal Modes</h4>
         <div class="table-wrap"><table>
           <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
-          <tr><td><code>KVSTORE_JOURNAL_DELETE</code></td><td>0</td><td>Rollback journal mode.</td></tr>
-          <tr><td><code>KVSTORE_JOURNAL_WAL</code></td><td>1</td><td>Write-Ahead Logging — recommended.</td></tr>
+          <tr><td><code>KVSTORE_JOURNAL_WAL</code></td><td>1</td><td>Write-Ahead Logging — recommended (default; 0 also means this).</td></tr>
+          <tr><td><code>KVSTORE_JOURNAL_DELETE</code></td><td>2</td><td>Rollback journal mode.</td></tr>
         </table></div>
         <h4 class="subsec">Sync Levels</h4>
         <div class="table-wrap"><table>
           <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
-          <tr><td><code>KVSTORE_SYNC_OFF</code></td><td>0</td><td>No fsync — fastest, not crash-safe.</td></tr>
-          <tr><td><code>KVSTORE_SYNC_NORMAL</code></td><td>1</td><td>WAL-safe — survives process crash (default).</td></tr>
-          <tr><td><code>KVSTORE_SYNC_FULL</code></td><td>2</td><td>Power-safe — fsync on every commit.</td></tr>
+          <tr><td><code>KVSTORE_SYNC_NORMAL</code></td><td>1</td><td>Default (0 also means this). Never corrupts; a power cut can lose the latest commits.</td></tr>
+          <tr><td><code>KVSTORE_SYNC_FULL</code></td><td>2</td><td>Power-safe — fsync on every commit; many small commits are much slower.</td></tr>
+          <tr><td><code>KVSTORE_SYNC_OFF</code></td><td>3</td><td>No fsync — fastest; a power cut can lose data.</td></tr>
         </table></div>
         <h4 class="subsec">Checkpoint Modes</h4>
         <div class="table-wrap"><table>

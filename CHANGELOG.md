@@ -10,6 +10,14 @@
 - **`KVStoreConfig.walSizeLimit` removed.** It checkpointed every N commits.
   Use `walAutoCheckpoint` instead, which counts WAL pages and is on by
   default (1000 pages, like SQLite).
+- **`KVSTORE_JOURNAL_DELETE` is now 2 and `KVSTORE_SYNC_OFF` is now 3** (both
+  were 0). 0 now means the default for both fields (WAL, NORMAL), as the
+  docs always said: before, a zero-filled `KVStoreConfig` silently meant
+  DELETE journal and **no fsync**. `kvstore_open_encrypted` with a NULL
+  config, and so every encrypted vector store, was hit by this and ran
+  without fsync. Unknown values now return `KVSTORE_ERROR`. Code that uses
+  the names only needs a rebuild; code that passes a literal `0` to mean
+  DELETE or OFF now gets WAL / NORMAL.
 - The size of `KVStoreConfig` changed. Rebuild everything that uses it.
 - The `python_bindings` branch still uses `full_mutex` / `wal_size_limit` and
   has to be updated before it can move to this version.
