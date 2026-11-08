@@ -713,7 +713,7 @@ snkvctl --db PATH [options] COMMAND [args]
 | `del --prefix P` | Delete all keys with prefix (commits every 10K keys; not a single atomic op for very large sets) |
 | `exists KEY` | Check existence (exit 0=found, 2=missing) |
 | `list [--prefix P] [--seek KEY] [--reverse] [--limit N]` | Print keys |
-| `scan [--prefix P] [--seek KEY] [--reverse] [--limit N]` | Print key+value pairs |
+| `scan [--prefix P] [--seek KEY] [--reverse] [--limit N]` | Print key+value pairs (key line, then value line; with `--format json`, one JSON object per line) |
 | `count [--prefix P]` | Count entries |
 | `clear` | Delete all keys in store or CF |
 | `set-if-absent KEY VALUE [--ttl S]` | Insert only if key is absent |
@@ -722,7 +722,7 @@ snkvctl --db PATH [options] COMMAND [args]
 | `txn [--dry-run] [--cf NAME]` | Atomic batch (put/del ops from stdin) |
 | `sync` | Flush to disk (fsync) |
 | `cf list\|create\|drop [NAME]` | Column family management |
-| `stats [--reset]` | Operation statistics |
+| `stats [--reset]` | Operation statistics. Counters are per open handle and each command opens a new one, so from the CLI they read 0; `db_pages` shows the database size |
 | `checkpoint [--mode passive\|full\|restart\|truncate]` | WAL checkpoint |
 | `vacuum [--pages N]` | Reclaim unused pages |
 | `check` | Integrity check |
