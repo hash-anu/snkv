@@ -87,11 +87,6 @@ class BuildExtWithHeader(_build_ext):
             return
         cc._snkv_cpp17 = True
         if cc.compiler_type == "msvc":
-            # MSVC has no _Float16: use the conversions in vec/fp16/fp16.h.
-            for ext in self.extensions:
-                ext.define_macros = [m for m in ext.define_macros
-                                     if m[0] != "USEARCH_USE_FP16LIB"]
-                ext.define_macros.append(("USEARCH_USE_FP16LIB", "1"))
             # MSVC applies /std:c++17 to C++ files only; /EHsc for exceptions.
             orig_compile = cc.compile
 
@@ -283,7 +278,10 @@ ext = Extension(
     "snkv._snkv",
     sources=["snkv_module.c", "vec/kvstore_vec.c", "vec/usearch_impl.cpp"],
     include_dirs=[HERE, VEC_DIR, os.path.join(VEC_DIR, "include")],
-    define_macros=[("USEARCH_USE_FP16LIB", "0")],
+    # Half floats via vec/fp16/fp16.h instead of the compiler's _Float16,
+    # which MSVC lacks and GCC only accepts in C++ from GCC 13 (the
+    # manylinux wheel images use older GCC).
+    define_macros=[("USEARCH_USE_FP16LIB", "1")],
     extra_link_args=extra_link_args,
     language="c++",   # link with the C++ runtime (usearch)
 )
