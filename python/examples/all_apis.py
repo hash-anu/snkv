@@ -828,7 +828,9 @@ def run_all() -> None:
                 cf.put(b"live", b"z", ttl=60)
                 time.sleep(0.05)
                 n = cf.purge_expired()
-                assert n == 2
+                # die1, die2, and evt:002 (iteration skips expired keys
+                # but does not delete them)
+                assert n == 3
                 assert cf.get(b"live") == b"z"
                 ok(f"CF purge_expired() → deleted {n} expired keys")
 

@@ -140,11 +140,12 @@ def section_reencrypt_plain(db_path: str) -> None:
         val = db.get(b"plaintext_key")
         print(f"  get(b'plaintext_key') = {val}  (data preserved)")
 
-    # Old plain-open still sees ciphertext blobs but cannot decrypt.
-    with KVStore(db_path) as db:
-        raw = db.get(b"plaintext_key")
-        readable = raw == b"plaintext_value"
-        print(f"  plain open readable without password: {readable}  (expected: False)")
+    # A plain open of an encrypted store is refused.
+    try:
+        KVStore(db_path).close()
+        print("  plain open without password: allowed  (unexpected)")
+    except AuthError:
+        print("  plain open without password → AuthError  (correct)")
 
     # Correct password reopens cleanly.
     with KVStore.open_encrypted(db_path, b"renewed") as db:
