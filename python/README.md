@@ -777,26 +777,26 @@ snkvctl --db mydb.db checkpoint --mode full
 
 ## Benchmarks
 
-Benchmarks run on **Windows 11** comparing SNKV against [diskcache](https://pypi.org/project/diskcache/) 5.6.3.
+Benchmarks run on **Windows 11** (Python 3.13, snkv 0.9.0) comparing SNKV against [diskcache](https://pypi.org/project/diskcache/) 5.6.3. Each test reports the best of 3 trials; a second full run gave the same results within a few percent.
 
 Run it yourself:
 ```bash
 pip install diskcache
 cd python
-PYTHONIOENCODING=utf-8 python examples/benchmark_diskcache.py
+PYTHONPATH=. PYTHONIOENCODING=utf-8 python examples/benchmark_diskcache.py
 ```
 
 ### Core Operations — N = 10,000 ops, 64-byte values
 
 | Operation | SNKV | diskcache | Speedup |
 |---|---|---|---|
-| Bulk write (batched tx) | 24.4 ms | 649.6 ms | **26.6x** |
-| Individual write | 189.2 ms | 2.02 s | **10.7x** |
-| Read — hit (100%) | 19.5 ms | 178.7 ms | **9.2x** |
-| Read — miss (100%) | 18.1 ms | 170.3 ms | **9.4x** |
-| Delete (batched tx) | 25.1 ms | 250.8 ms | **10.0x** |
-| Full scan (key + value) | 7.3 ms | 31.8 ms | **4.4x** |
-| Write with TTL | 68.7 ms | 636.5 ms | **9.3x** |
+| Bulk write (batched tx) | 12.1 ms | 283.8 ms | **23.5x** |
+| Individual write | 101.7 ms | 1.19 s | **11.7x** |
+| Read — hit (100%) | 10.3 ms | 90.1 ms | **8.7x** |
+| Read — miss (100%) | 8.9 ms | 73.8 ms | **8.3x** |
+| Delete (batched tx) | 19.4 ms | 94.0 ms | **4.9x** |
+| Full scan (key + value) | 3.4 ms | 16.5 ms | **4.8x** |
+| Write with TTL | 46.8 ms | 285.5 ms | **6.1x** |
 
 ### Prefix Scan — 10,000 keys, 1,000 matching `ns3:`
 
@@ -804,50 +804,50 @@ SNKV uses a native `prefix_iterator` that visits only matching keys. diskcache h
 
 | Operation | SNKV | diskcache | Speedup |
 |---|---|---|---|
-| Forward prefix scan | 3.0 ms | 94.7 ms | **31.7x** |
-| Reverse prefix scan | 2.8 ms | 93.7 ms | **33.4x** |
+| Forward prefix scan | 1.5 ms | 49.2 ms | **31.8x** |
+| Reverse prefix scan | 1.5 ms | 48.1 ms | **31.4x** |
 
 ### Mixed Workload — 80% read / 20% write, 10,000 ops
 
 | Operation | SNKV | diskcache | Speedup |
 |---|---|---|---|
-| 80% read / 20% write | 57.5 ms | 575.0 ms | **10.0x** |
+| 80% read / 20% write | 30.9 ms | 284.4 ms | **9.2x** |
 
 ### Value Size Scaling — N = 5,000 ops
 
 | Size | Op | SNKV | diskcache | Speedup |
 |---|---|---|---|---|
-| 64 B | write | 11.5 ms | 369.7 ms | **32.2x** |
-| 64 B | read | 10.7 ms | 95.3 ms | **8.9x** |
-| 1 KB | write | 294.3 ms | 400.6 ms | **1.4x** |
-| 1 KB | read | 288.1 ms | 103.2 ms | 0.4x |
-| 10 KB | write | 769.3 ms | 914.3 ms | **1.2x** |
-| 10 KB | read | 746.8 ms | 156.4 ms | 0.2x |
-| 100 KB | write | 5.98 s | 7.03 s | **1.2x** |
-| 100 KB | read | 5.77 s | 1.33 s | 0.2x |
+| 64 B | write | 6.9 ms | 147.2 ms | **21.3x** |
+| 64 B | read | 5.4 ms | 48.3 ms | **8.9x** |
+| 1 KB | write | 32.8 ms | 186.2 ms | **5.7x** |
+| 1 KB | read | 28.6 ms | 53.1 ms | **1.9x** |
+| 10 KB | write | 63.9 ms | 488.4 ms | **7.6x** |
+| 10 KB | read | 54.2 ms | 80.6 ms | **1.5x** |
+| 100 KB | write | 412.2 ms | 5.70 s | **13.8x** |
+| 100 KB | read | 344.4 ms | 694.2 ms | **2.0x** |
 
-> For large values (≥ 1 KB) diskcache's read path becomes competitive because pickle overhead shrinks relative to I/O cost. SNKV retains its write advantage at every size.
+> The read advantage narrows for large values (≥ 1 KB), where copying the value costs more than the lookup. SNKV stays faster at every size.
 
 ### Large Dataset — N = 100,000 keys, 64-byte values
 
 | Operation | SNKV | diskcache | Speedup |
 |---|---|---|---|
-| Bulk write (batched tx) | 217.7 ms | 5.05 s | **23.2x** |
-| Read (10,000 sampled) | 35.3 ms | 186.1 ms | **5.3x** |
-| Full scan (key + value) | 50.1 ms | 199.1 ms | **4.0x** |
+| Bulk write (batched tx) | 115.6 ms | 2.76 s | **23.8x** |
+| Read (10,000 sampled) | 20.4 ms | 100.5 ms | **4.9x** |
+| Full scan (key + value) | 25.3 ms | 75.5 ms | **3.0x** |
 
 ### Durability — Write → Close → Reopen → Verify, N = 10,000 keys
 
 | Library | Test | Write | Reopen + Read | Verified |
 |---|---|---|---|---|
-| SNKV | Plain write | 31.7 ms | 22.0 ms | 10,000 / 10,000 ✓ |
-| diskcache | Plain write | 741.6 ms | 175.2 ms | 10,000 / 10,000 ✓ |
-| SNKV | Write with TTL | 129.6 ms | 30.1 ms | 10,000 / 10,000 ✓ |
-| diskcache | Write with TTL | 717.3 ms | 177.5 ms | 10,000 / 10,000 ✓ |
+| SNKV | Plain write | 28.0 ms | 11.8 ms | 10,000 / 10,000 ✓ |
+| diskcache | Plain write | 515.3 ms | 91.4 ms | 10,000 / 10,000 ✓ |
+| SNKV | Write with TTL | 47.6 ms | 15.8 ms | 10,000 / 10,000 ✓ |
+| diskcache | Write with TTL | 316.2 ms | 93.7 ms | 10,000 / 10,000 ✓ |
 
-Write speedup: **23.4x** (plain) · **5.5x** (TTL). Both stores verified all keys correctly after a cold reopen.
+Write speedup: **18.4x** (plain) · **6.6x** (TTL). Both stores verified all keys correctly after a cold reopen.
 
-**Overall: SNKV faster in 20 / 23 tests — average speedup 11.1x**
+**Overall: SNKV faster in 23 / 23 tests — average speedup 11.0x**
 
 ---
 
