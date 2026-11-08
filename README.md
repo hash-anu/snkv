@@ -18,9 +18,6 @@ SQLite:  Application → SQL Parser → Query Planner → VDBE → B-Tree → Di
 SNKV:    Application → KV API → B-Tree → Disk
 ```
 
-> **Looking for Python?** The Python bindings are no longer maintained on `master`.
-> Use the [`python_bindings`](https://github.com/hash-anu/snkv/tree/python_bindings) branch.
-
 > **Using SNKV in a product?** Paid support, device-specific builds and custom features are available. See [Commercial Support](#commercial-support).
 
 ---
