@@ -55,8 +55,10 @@ snkv_raise_from(KVStore *db, int rc)
     if (db) {
         msg = kvstore_errmsg(db);
     }
-    if (!msg || !msg[0]) {
-        msg = "snkv error";
+    /* "not found" is not an error to the C layer, so its message stays
+    ** "no error"; give the exception a useful one instead. */
+    if (!msg || !msg[0] || strcmp(msg, "no error") == 0) {
+        msg = (rc == KVSTORE_NOTFOUND) ? "key not found" : "snkv error";
     }
 
     switch (rc) {

@@ -174,9 +174,10 @@ val = db.get("key", b"def")   # with default
 exists = "key" in db
 exists = db.exists(b"key")
 
-# Delete
+# Delete — both raise NotFoundError if the key is absent
 del db["key"]
-db.delete(b"key")             # same as del; raises NotFoundError if absent
+db["key"] = b"value"
+db.delete(b"key")             # same as del
 
 # Upsert
 db.put(b"key", b"value")      # identical to db["key"] = value
@@ -354,7 +355,8 @@ Count entries without scanning individual keys.
 ```python
 n = db.count()                           # total entries in the default CF
 
-with db.open_column_family("users") as cf:
+with db.create_column_family("orders") as cf:
+    cf[b"o1"] = b"x"
     n = cf.count()                       # only this CF; TTL index not counted
 
 # count() includes expired-but-not-yet-purged keys.
