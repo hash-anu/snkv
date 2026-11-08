@@ -397,9 +397,10 @@ val = db.get(b"session")                # returns bytes or None if expired
 # Check remaining lifetime
 from snkv import NotFoundError
 try:
-    remaining = db.ttl(b"session")      # seconds remaining (float); None if the key has no TTL
+    remaining = db.ttl(b"session")      # seconds left (float); None if the key has no TTL;
+                                        # 0.0 if expired but not yet read or purged
 except NotFoundError:
-    remaining = None                    # key missing or expired
+    remaining = None                    # key missing (or expired and already removed)
 
 # Purge all expired keys from disk (returns count removed)
 n = db.purge_expired()
