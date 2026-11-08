@@ -2383,13 +2383,28 @@ static PyTypeObject VecStoreType = {
 ** Module definition
 ** ===================================================================== */
 
+/* now_ms() -> int: the clock the C library uses for TTL (ms since epoch).
+** TTL expiry must be computed from this clock, not time.time(): on Windows
+** the two differ by up to ~16 ms. */
+static PyObject *
+snkv_now_ms(PyObject *Py_UNUSED(module), PyObject *Py_UNUSED(ignored))
+{
+    return PyLong_FromLongLong((long long)kvstore_now_ms());
+}
+
+static PyMethodDef snkv_module_methods[] = {
+    {"now_ms", snkv_now_ms, METH_NOARGS,
+     "now_ms() -> int; current time in ms, as used for TTL expiry"},
+    {NULL, NULL, 0, NULL}
+};
+
 static struct PyModuleDef snkv_module = {
     PyModuleDef_HEAD_INIT,
     "_snkv",
     "Low-level CPython bindings for SNKV embedded key-value store.\n"
     "Use the 'snkv' package instead of importing this directly.",
     -1,
-    NULL
+    snkv_module_methods
 };
 
 PyMODINIT_FUNC

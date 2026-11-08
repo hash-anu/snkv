@@ -22,7 +22,6 @@ The store always returns raw bytes from get/iteration.
 
 from __future__ import annotations
 
-import time
 
 from typing import (
     Iterator as TypingIterator,
@@ -205,7 +204,7 @@ class ColumnFamily:
         if ttl is None:
             self._cf.put(_enc(key), _enc(value))
         else:
-            expire_ms = int((time.time() + float(ttl)) * 1000)
+            expire_ms = _snkv.now_ms() + int(float(ttl) * 1000)
             self._cf.put_ttl(_enc(key), _enc(value), expire_ms)
 
     def get(
@@ -260,7 +259,7 @@ class ColumnFamily:
         if ttl is None:
             expire_ms = 0
         else:
-            expire_ms = int((time.time() + float(ttl)) * 1000)
+            expire_ms = _snkv.now_ms() + int(float(ttl) * 1000)
         return self._cf.put_if_absent(_enc(key), _enc(value), expire_ms)
 
     def clear(self) -> None:
@@ -321,7 +320,7 @@ class ColumnFamily:
     def __setitem__(self, key, value: _Encodable) -> None:
         if isinstance(key, tuple):
             k, ttl = key
-            expire_ms = int((time.time() + ttl) * 1000)
+            expire_ms = _snkv.now_ms() + int(float(ttl) * 1000)
             self._cf.put_ttl(_enc(k), _enc(value), expire_ms)
         else:
             self._cf.put(_enc(key), _enc(value))
@@ -420,7 +419,7 @@ class KVStore:
         if ttl is None:
             self._db.put(_enc(key), _enc(value))
         else:
-            expire_ms = int((time.time() + float(ttl)) * 1000)
+            expire_ms = _snkv.now_ms() + int(float(ttl) * 1000)
             self._db.put_ttl(_enc(key), _enc(value), expire_ms)
 
     def get(
@@ -475,7 +474,7 @@ class KVStore:
         if ttl is None:
             expire_ms = 0
         else:
-            expire_ms = int((time.time() + float(ttl)) * 1000)
+            expire_ms = _snkv.now_ms() + int(float(ttl) * 1000)
         return self._db.put_if_absent(_enc(key), _enc(value), expire_ms)
 
     def clear(self) -> None:
@@ -501,7 +500,7 @@ class KVStore:
     def __setitem__(self, key, value: _Encodable) -> None:
         if isinstance(key, tuple):
             k, ttl = key
-            expire_ms = int((time.time() + ttl) * 1000)
+            expire_ms = _snkv.now_ms() + int(float(ttl) * 1000)
             self._db.put_ttl(_enc(k), _enc(value), expire_ms)
         else:
             self._db.put(_enc(key), _enc(value))
