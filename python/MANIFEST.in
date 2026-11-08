@@ -1,0 +1,6 @@
+# Amalgamated header (generated before building the sdist)
+include snkv.h
+# Native vector store sources copied in by setup.py (see _VEC_FILES)
+include vec/kvstore.h vec/kvstore_vec.h vec/kvstore_vec.c vec/fp16/fp16.h
+include vec/usearch.h vec/usearch_impl.cpp
+recursive-include vec/include *.hpp
