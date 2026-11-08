@@ -4,8 +4,9 @@
 **
 ** usearch converts half floats with the compiler's _Float16 type unless
 ** USEARCH_USE_FP16LIB is set, in which case it includes <fp16/fp16.h> and
-** calls the two functions below.  MSVC has no _Float16, so setup.py sets
-** USEARCH_USE_FP16LIB=1 there and this header provides the functions.
+** calls the two functions below.  MSVC has no _Float16 and GCC only
+** accepts it in C++ from GCC 13, so setup.py always sets
+** USEARCH_USE_FP16LIB=1 and this header provides the functions.
 ** Results match _Float16 conversions: round to nearest, ties to even.
 */
 #ifndef SNKV_PY_FP16_H
