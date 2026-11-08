@@ -1,0 +1,27 @@
+# Build outputs
+build/
+dist/
+*.egg-info/
+*.egg
+snkv.h
+# Vector store sources copied from ../src and ../include by setup.py
+vec/*
+!vec/kvstore.h
+!vec/fp16/
+# Compiled extension (built in-place)
+snkv/_snkv*.so
+snkv/_snkv*.pyd
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.DS_Store
+*.swp
