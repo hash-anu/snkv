@@ -15,7 +15,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 
 ## Features
 
-- **snkvctl CLI** — installed automatically; full command-line access to every SNKV API (`put`, `get`, `scan`, `txn`, `stats`, `cf`, `encrypt`, and more)
+- **snkvctl CLI** — installed automatically; command-line access to the key-value APIs (`put`, `get`, `scan`, `txn`, `stats`, `cf`, `encrypt`, and more)
 - **Dict-style API** — `db["key"] = value`, `val = db["key"]`, `del db["key"]`, `"key" in db`
 - **Context managers** — `with KVStore(...) as db` and `with db.create_column_family(...) as cf` for guaranteed cleanup
 - **Prefix iterators** — efficient namespace scans with `db.prefix_iterator(b"user:")`
@@ -23,7 +23,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **WAL checkpoint control** — PASSIVE / FULL / RESTART / TRUNCATE modes via `db.checkpoint()`
 - **Auto-checkpoint** — set `wal_auto_checkpoint=N` to checkpoint automatically once the WAL holds N pages (default 1000)
 - **Typed exceptions** — `NotFoundError`, `BusyError`, `LockedError`, `ReadOnlyError`, `CorruptError` all subclass `snkv.Error`
-- **No Python dependencies** — pure CPython C extension; only requires a C compiler and `python3-dev`
+- **No Python dependencies** — a CPython extension in C (the vector index in C++17); building from source needs a C/C++ compiler and `python3-dev`. Vector search adds numpy.
 - **Native TTL** — per-key expiry with `put(ttl=seconds)`, dict-style `db[key, ttl] = value`, lazy expiry on get, and `purge_expired()`
 - **Encryption** — per-value XChaCha20-Poly1305 encryption with Argon2id key derivation; transparent to all existing APIs
 - **Seek iterators** — jump to any key in O(log N) with `it.seek(key)`, chainable and works on prefix/reverse iterators
@@ -32,7 +32,7 @@ If you find it useful, a ⭐ on [GitHub](https://github.com/hash-anu/snkv) goes 
 - **Key count** — `db.count()` / `cf.count()` returns entry count in O(pages); CF counts are fully isolated
 - **Extended stats** — `db.stats()` exposes 12 counters including `bytes_read`, `bytes_written`, `wal_commits`, `ttl_expired`, `db_pages`; reset with `db.stats_reset()`
 - **Vector search** — integrated HNSW approximate nearest-neighbour index via `snkv[vector]`; sidecar persistence, quantization (f32/f16/i8), metadata filtering, exact rerank, TTL on vectors, and encryption support
-- **599 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, encryption, and vector search
+- **606 tests** — full pytest suite covering ACID, WAL, crash recovery, concurrency, column families, TTL, encryption, and vector search
 
 ---
 
@@ -89,7 +89,7 @@ python3 setup.py build_ext --inplace
 
 1. Install [Python 3.8+](https://python.org/downloads) — check **"Add Python to PATH"**
 2. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — select **"Desktop development with C++"**
-3. Open **"x64 Native Tools Command Prompt for VS 2022"** from the Start Menu (required for 64-bit Python; "Developer PowerShell for VS" defaults to 32-bit and will fail)
+3. Open a normal terminal (setuptools finds Visual Studio itself) or **"x64 Native Tools Command Prompt for VS 2022"**. Avoid "Developer PowerShell for VS": it defaults to 32-bit and fails with 64-bit Python.
 
 ```cmd
 :: Python build dependencies
@@ -106,10 +106,12 @@ Open the **MSYS2 MinGW64** shell (not plain MSYS2, not cmd.exe):
 
 ```bash
 # System + Python dependencies (one-time)
-pacman -S --needed mingw-w64-x86_64-python \
+pacman -S --needed mingw-w64-x86_64-gcc \
+                   mingw-w64-x86_64-python \
                    mingw-w64-x86_64-python-pip \
                    mingw-w64-x86_64-python-setuptools \
-                   mingw-w64-x86_64-python-pytest
+                   mingw-w64-x86_64-python-pytest \
+                   mingw-w64-x86_64-python-numpy    # numpy: vector search only
 
 # Build
 cd python
@@ -117,8 +119,10 @@ python3 setup.py build_ext --inplace
 ```
 
 > On all platforms, `setup.py` automatically locates `snkv.h` — no manual
-> header step needed. On Linux/macOS it regenerates it via `make snkv.h`;
-> on Windows it falls back to the pre-built `snkv.h` included in the repo.
+> header step needed. Where `make` is available it regenerates it via
+> `make snkv.h`; otherwise it uses an existing `python/snkv.h`, or downloads
+> the one from the latest GitHub release. To build Windows from the current
+> code, generate it first from Git Bash: `sh scripts/gen_snkv_header.sh > python/snkv.h`.
 
 ---
 
@@ -172,7 +176,7 @@ exists = db.exists(b"key")
 
 # Delete
 del db["key"]
-db.delete(b"key")             # same as del; no error if key absent
+db.delete(b"key")             # same as del; raises NotFoundError if absent
 
 # Upsert
 db.put(b"key", b"value")      # identical to db["key"] = value
@@ -391,9 +395,9 @@ val = db.get(b"session")                # returns bytes or None if expired
 # Check remaining lifetime
 from snkv import NotFoundError
 try:
-    remaining = db.ttl(b"session")      # seconds remaining (float)
+    remaining = db.ttl(b"session")      # seconds remaining (float); None if the key has no TTL
 except NotFoundError:
-    remaining = None                    # key expired or never set
+    remaining = None                    # key missing or expired
 
 # Purge all expired keys from disk (returns count removed)
 n = db.purge_expired()
@@ -437,7 +441,7 @@ with KVStore("mydb.db") as db:    # plain open works now
 
 | Method | Description |
 |---|---|
-| `KVStore.open_encrypted(path, password, **kwargs)` | Class method — open or create encrypted store |
+| `KVStore.open_encrypted(path, password)` | Class method — open or create encrypted store |
 | `db.is_encrypted()` | Returns `True` if store is encrypted |
 | `db.reencrypt(new_password)` | Change password; re-encrypts all values atomically |
 | `db.remove_encryption()` | Decrypt in-place; store becomes plain |
@@ -448,7 +452,7 @@ with KVStore("mydb.db") as db:    # plain open works now
 
 ## Vector Search
 
-Integrated HNSW approximate nearest-neighbour index: the native SNKV vector store (`kvstore_vec`, built on [usearch](https://github.com/unum-cloud/usearch)), compiled into the `snkv` extension. All vectors and KV data live in the same `.db` file — no separate index file, no external service.
+Integrated HNSW approximate nearest-neighbour index: the native SNKV vector store (`kvstore_vec`, built on [usearch](https://github.com/unum-cloud/usearch)), compiled into the `snkv` extension. All vectors and KV data live in the same `.db` file — no external service. The in-memory index is also cached in a sidecar file to speed up reopening (see below).
 
 ### Installation
 
@@ -484,9 +488,9 @@ with VectorStore("store.db", dim=128, space="cosine") as vs:
 
 ### Quantization
 
-`dtype` controls the in-memory HNSW graph precision only — on-disk storage in `_snkv_vec_` is always float32.
+`dtype` controls the in-memory HNSW graph precision only — on-disk storage in `__snkv_vec__` is always float32.
 
-| dtype | RAM per vector (dim=768) | Notes |
+| dtype | Vector data in RAM (dim=768; graph links extra) | Notes |
 |---|---|---|
 | `"f32"` | 3072 bytes | Full precision (default) |
 | `"f16"` | 1536 bytes | Half RAM, negligible recall loss |
@@ -569,9 +573,8 @@ snkv.Error (base)
 ├── snkv.LockedError         (SQLITE_LOCKED)
 ├── snkv.ReadOnlyError       (write attempted on read-only store)
 ├── snkv.CorruptError        (database file is corrupt)
-└── snkv.AuthError           (wrong password or not an encrypted store)
-
-snkv.vector.VectorIndexError  (index dropped or empty; not a subclass of snkv.Error)
+├── snkv.AuthError           (wrong password or not an encrypted store)
+└── snkv.vector.VectorIndexError  (vector index dropped or empty)
 ```
 
 ```python
@@ -612,7 +615,7 @@ cd python
 PYTHONPATH=. python3 -m pytest tests/ -v
 ```
 
-All 599 tests should pass.
+All 606 tests should pass (the 95 vector tests need numpy).
 
 ---
 

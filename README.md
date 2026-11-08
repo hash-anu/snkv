@@ -21,6 +21,8 @@ SNKV:    Application → KV API → B-Tree → Disk
 > **Looking for Python?** The Python bindings are no longer maintained on `master`.
 > Use the [`python_bindings`](https://github.com/hash-anu/snkv/tree/python_bindings) branch.
 
+> **Using SNKV in a product?** Paid support, device-specific builds and custom features are available. See [Commercial Support](#commercial-support).
+
 ---
 
 ## Quick Start
@@ -146,6 +148,19 @@ Comparisons against [LMDB](https://github.com/hash-anu/lmdb-benchmark) and [Rock
 
 **Good fit:** read-heavy or mixed workloads (point reads and existence checks run about 2.3–2.5x faster than SQLite), native TTL (sessions, caches, leases), embedded or memory-constrained targets, and simple C integration.
 **Consider alternatives:** RocksDB for maximum write throughput, LMDB for maximum read speed when memory is plentiful.
+
+---
+
+## Commercial Support
+
+Using SNKV in a product? Paid help is available from the author:
+
+- **Priority fixes and support**: your bug or question goes first, with a response time agreed up front.
+- **Builds for your device**: SNKV tuned for your RAM, flash and RTOS (cache size, Argon2 cost, threading off), tested on your target.
+- **Integration and review**: help designing your storage layer, migrating from SQLite or another store, or reviewing how you use SNKV.
+- **Custom features**: a feature your product needs, developed and maintained in SNKV.
+
+Contact: [Discord](https://discord.gg/Wwe9dFy3P) or [open an issue titled "Commercial support"](https://github.com/hash-anu/snkv/issues/new?title=Commercial%20support).
 
 ---
 
