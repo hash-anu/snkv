@@ -6,7 +6,9 @@
 ** (default + "cf1"): put / delete / get / exists / put_if_absent / put_ttl,
 ** explicit transactions (commit, rollback), forward / reverse / prefix
 ** scans, seek, writes while an iterator is open, cf_clear, count,
-** checkpoint, and close + reopen.  The same operations run on a simple
+** checkpoint, close + reopen, puts whose TTL has already expired,
+** purge_expired, dropping and recreating cf1, and incremental_vacuum.
+** The same operations run on a simple
 ** in-memory model; any difference, and any unexpected error code, aborts
 ** (libFuzzer reports it with the input that caused it).  At the end of each
 ** input the store is closed, reopened and compared again, and must pass
@@ -33,6 +35,11 @@ static int inEnd(In *in){ return in->i >= in->n; }
 /* ------------------------------------------------------------- model */
 #define MAXK  5
 #define MAXE  20000            /* 400 ops x up to 20 writes each */
+/* ttl: 0 none, 1 far in the future, TTL_GONE already expired.  An expired
+** entry is still stored: scans skip it, count includes it, and get/exists
+** report it absent and delete it (lazy expiry) unless called inside an
+** explicit transaction. */
+#define TTL_GONE 2
 typedef struct Ent { uint8_t k[MAXK]; int nk; uint8_t *v; int nv; int ttl; } Ent;
 typedef struct Model { Ent e[2][MAXE]; int n[2]; } Model;
 
@@ -45,6 +52,10 @@ static int mFind(Model *m, int cf, const uint8_t *k, int nk){
     if( keyCmp(m->e[cf][i].k, m->e[cf][i].nk, k, nk) == 0 ) return i;
   }
   return -1;
+}
+static int mLive(Model *m, int cf, const uint8_t *k, int nk){   /* found and not expired */
+  int i = mFind(m, cf, k, nk);
+  return i >= 0 && m->e[cf][i].ttl != TTL_GONE ? i : -1;
 }
 static void mPut(Model *m, int cf, const uint8_t *k, int nk, const uint8_t *v, int nv, int ttl){
   int i = mFind(m, cf, k, nk);
@@ -107,6 +118,19 @@ static int readVal(In *in){
 
 /* ----------------------------------------------------------- checks */
 #define TTL_FAR ((int64_t)4102444800000LL)       /* year 2100 */
+#define TTL_PAST ((int64_t)1)                     /* 1970: already expired */
+
+/* From model index want, step past entries a scan must not return:
+** expired ones, and ones outside the prefix. */
+static int skipHidden(Model *m, int ci, int want, int step, const uint8_t *pfx, int npfx){
+  while( want >= 0 && want < m->n[ci] ){
+    Ent *e = &m->e[ci][want];
+    if( e->ttl != TTL_GONE
+     && (!npfx || (e->nk >= npfx && memcmp(e->k, pfx, (size_t)npfx) == 0)) ) break;
+    want += step;
+  }
+  return want;
+}
 
 static void checkScan(KVColumnFamily *cf, Model *m, int ci, int reverse,
                       const uint8_t *pfx, int npfx){
@@ -128,16 +152,14 @@ static void checkScan(KVColumnFamily *cf, Model *m, int ci, int reverse,
     void *k = NULL, *v = NULL; int nk = 0, nv = 0;
     if( kvstore_iterator_key(it, &k, &nk) != KVSTORE_OK ) FAIL("iterator key");
     if( kvstore_iterator_value(it, &v, &nv) != KVSTORE_OK ) FAIL("iterator value");
-    while( want >= 0 && want < m->n[ci] && npfx
-        && (m->e[ci][want].nk < npfx || memcmp(m->e[ci][want].k, pfx, (size_t)npfx) != 0) ) want += step;
+    want = skipHidden(m, ci, want, step, pfx, npfx);
     if( want < 0 || want >= m->n[ci] ) FAIL("scan returned an extra key (cf %d)", ci);
     Ent *e = &m->e[ci][want];
     if( keyCmp(k, nk, e->k, e->nk) != 0 ) FAIL("scan key mismatch (cf %d)", ci);
     if( nv != e->nv || (nv && memcmp(v, e->v, (size_t)nv) != 0) ) FAIL("scan value mismatch (cf %d)", ci);
     want += step;
   }
-  while( want >= 0 && want < m->n[ci] && npfx
-      && (m->e[ci][want].nk < npfx || memcmp(m->e[ci][want].k, pfx, (size_t)npfx) != 0) ) want += step;
+  want = skipHidden(m, ci, want, step, pfx, npfx);
   if( want >= 0 && want < m->n[ci] ) FAIL("scan missed a key (cf %d)", ci);
   kvstore_iterator_close(it);
 }
@@ -146,11 +168,17 @@ static void checkAll(KVColumnFamily *cfs[2], Model *m){
   for(int ci = 0; ci < 2; ci++){
     checkScan(cfs[ci], m, ci, 0, NULL, 0);
     int64_t cnt = -1;
+    /* The count includes expired keys not yet removed. */
     if( kvstore_cf_count(cfs[ci], &cnt) != KVSTORE_OK || cnt != m->n[ci] ) FAIL("count %lld != %d", (long long)cnt, m->n[ci]);
-    for(int i = 0; i < m->n[ci]; i++){
+    for(int i = m->n[ci] - 1; i >= 0; i--){        /* backwards: mDel moves the last entry */
       Ent *e = &m->e[ci][i];
       void *v = NULL; int nv = 0; int64_t rem = 0;
       int rc = kvstore_cf_get_ttl(cfs[ci], e->k, e->nk, &v, &nv, &rem);
+      if( e->ttl == TTL_GONE ){                    /* lazy expiry deletes it */
+        if( rc != KVSTORE_NOTFOUND ) FAIL("get_ttl of an expired key rc=%d", rc);
+        mDel(m, ci, e->k, e->nk);
+        continue;
+      }
       if( rc != KVSTORE_OK ) FAIL("get_ttl of a present key rc=%d", rc);
       if( nv != e->nv || (nv && memcmp(v, e->v, (size_t)nv) != 0) ) FAIL("get_ttl value mismatch");
       if( e->ttl ? rem <= 0 : rem != KVSTORE_NO_TTL ) FAIL("ttl flag mismatch (rem %lld, want ttl %d)", (long long)rem, e->ttl);
@@ -210,7 +238,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size){
   static int trace = -1;
   if( trace < 0 ) trace = getenv("FUZZ_TRACE") != NULL;   /* print each op */
   for(int nOps = 0; !inEnd(&in) && nOps < 400; nOps++){
-    int op = inByte(&in) % 19;
+    /* Bytes below 247 keep their old meaning (op = byte % 19), so the saved
+    ** corpus and regress inputs mostly replay the same calls; 247-255 pick
+    ** the newer ops 19-22. */
+    int ob = inByte(&in);
+    int op = ob < 247 ? ob % 19 : 19 + (ob - 247) % 4;
     int ci = inByte(&in) & 1;
     if( trace ) fprintf(stderr, "op %2d cf %d (in txn %d)\n", op, ci, inTxn);
     KVColumnFamily *cf = cfs[ci];
@@ -225,26 +257,41 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size){
       case 3:                                    /* delete */
         nk = readKey(&in, k);
         rc = kvstore_cf_delete(cf, k, nk);
-        if( rc != (mFind(&m, ci, k, nk) >= 0 ? KVSTORE_OK : KVSTORE_NOTFOUND) ) FAIL("delete rc=%d", rc);
+        {
+          int i = mFind(&m, ci, k, nk);
+          int okRc = i < 0 ? KVSTORE_NOTFOUND : KVSTORE_OK;
+          /* An expired key is still stored: either answer is fine. */
+          int expired = i >= 0 && m.e[ci][i].ttl == TTL_GONE;
+          if( rc != okRc && !(expired && (rc == KVSTORE_OK || rc == KVSTORE_NOTFOUND)) ) FAIL("delete rc=%d", rc);
+        }
         mDel(&m, ci, k, nk);
         break;
       case 4: {                                  /* get */
         nk = readKey(&in, k);
         int i = mFind(&m, ci, k, nk);
         rc = kvstore_cf_get(cf, k, nk, &v, &nv);
-        if( i < 0 ){ if( rc != KVSTORE_NOTFOUND ) FAIL("get of absent key rc=%d", rc); }
+        if( i >= 0 && m.e[ci][i].ttl == TTL_GONE ){
+          if( rc != KVSTORE_NOTFOUND ) FAIL("get of an expired key rc=%d", rc);
+          /* Lazy expiry deletes it, except inside the caller's own write
+          ** transaction, which get must not change. */
+          if( !inTxn ) mDel(&m, ci, k, nk);
+        }
+        else if( i < 0 ){ if( rc != KVSTORE_NOTFOUND ) FAIL("get of absent key rc=%d", rc); }
         else if( rc != KVSTORE_OK || nv != m.e[ci][i].nv
               || (nv && memcmp(v, m.e[ci][i].v, (size_t)nv) != 0) ) FAIL("get mismatch rc=%d", rc);
         snkv_free(v);
         break;
       }
-      case 5:                                    /* exists */
+      case 5: {                                  /* exists */
         nk = readKey(&in, k);
-        if( kvstore_cf_exists(cf, k, nk, &ex) != KVSTORE_OK || ex != (mFind(&m, ci, k, nk) >= 0) ) FAIL("exists");
+        int i = mFind(&m, ci, k, nk);
+        if( kvstore_cf_exists(cf, k, nk, &ex) != KVSTORE_OK || ex != (mLive(&m, ci, k, nk) >= 0) ) FAIL("exists");
+        if( !inTxn && i >= 0 && m.e[ci][i].ttl == TTL_GONE ) mDel(&m, ci, k, nk);   /* lazy expiry, as for get */
         break;
+      }
       case 6: {                                  /* put_if_absent */
         nk = readKey(&in, k); nv = readVal(&in);
-        int ins = -1, had = mFind(&m, ci, k, nk) >= 0;
+        int ins = -1, had = mLive(&m, ci, k, nk) >= 0;
         if( kvstore_cf_put_if_absent(cf, k, nk, g_vbuf, nv, 0, &ins) != KVSTORE_OK || ins != !had ) FAIL("put_if_absent");
         if( !had ) mPut(&m, ci, k, nk, g_vbuf, nv, 0);
         break;
@@ -284,7 +331,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size){
         if( kvstore_iterator_seek(it, k, nk) != KVSTORE_OK ) FAIL("seek");
         mSort(&m, ci);
         int want = -1;
-        for(int i = 0; i < m.n[ci]; i++){ if( keyCmp(m.e[ci][i].k, m.e[ci][i].nk, k, nk) >= 0 ){ want = i; break; } }
+        for(int i = 0; i < m.n[ci]; i++){
+          if( m.e[ci][i].ttl != TTL_GONE && keyCmp(m.e[ci][i].k, m.e[ci][i].nk, k, nk) >= 0 ){ want = i; break; }
+        }
         if( want < 0 ){ if( !kvstore_iterator_eof(it) ) FAIL("seek past the end not eof"); }
         else{
           void *kk = NULL; int nkk = 0;
@@ -342,6 +391,37 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size){
         closeStore(kv, cfs);
         kv = openStore(journal, cfs);
         checkAll(cfs, &m);
+        break;
+      case 19:                                   /* put with a TTL already expired */
+        nk = readKey(&in, k); nv = readVal(&in);
+        if( kvstore_cf_put_ttl(cf, k, nk, g_vbuf, nv, TTL_PAST) != KVSTORE_OK ) FAIL("put_ttl (expired)");
+        mPut(&m, ci, k, nk, g_vbuf, nv, TTL_GONE);
+        break;
+      case 20: {                                 /* purge expired keys */
+        int want = 0, nd = -1;
+        for(int i = 0; i < m.n[ci]; i++) want += m.e[ci][i].ttl == TTL_GONE;
+        rc = kvstore_cf_purge_expired(cf, &nd);
+        if( rc != KVSTORE_OK || nd != want ) FAIL("purge_expired rc=%d deleted %d, want %d", rc, nd, want);
+        for(int i = m.n[ci] - 1; i >= 0; i--){
+          if( m.e[ci][i].ttl == TTL_GONE ) mDel(&m, ci, m.e[ci][i].k, m.e[ci][i].nk);
+        }
+        break;
+      }
+      case 21: {                                 /* drop cf1 and create it again (outside txns) */
+        if( inTxn ) break;
+        kvstore_cf_close(cfs[1]); cfs[1] = NULL;
+        rc = kvstore_cf_drop(kv, "cf1");
+        if( rc != KVSTORE_OK ) FAIL("cf_drop rc=%d: %s", rc, kvstore_errmsg(kv));
+        rc = kvstore_cf_create(kv, "cf1", &cfs[1]);
+        if( rc != KVSTORE_OK ) FAIL("cf_create after drop rc=%d: %s", rc, kvstore_errmsg(kv));
+        mClear(&m, 1);
+        int64_t cnt = -1;
+        if( kvstore_cf_count(cfs[1], &cnt) != KVSTORE_OK || cnt != 0 ) FAIL("recreated cf1 not empty (%lld)", (long long)cnt);
+        break;
+      }
+      case 22:                                   /* incremental vacuum (0 = all free pages) */
+        rc = kvstore_incremental_vacuum(kv, inByte(&in) % 4);
+        if( rc != KVSTORE_OK ) FAIL("incremental_vacuum rc=%d (in txn %d): %s", rc, inTxn, kvstore_errmsg(kv));
         break;
     }
   }

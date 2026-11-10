@@ -8,8 +8,9 @@
 ** lost, reordered or half-written when the power goes.
 **
 ** For a workload of transactions (puts of small and overflow-sized values,
-** deletes, TTL puts, a column family created/dropped, auto-commits and
-** checkpoints) the test first counts the write/sync/truncate/delete calls.
+** deletes, TTL puts (some already expired), a column family created/dropped,
+** auto-commits, checkpoints, incremental vacuum, purge_expired and cf_clear)
+** the test first counts the write/sync/truncate/delete calls.
 ** Then, for every crash point N, it reruns the workload with "power lost" at
 ** the N-th call: that call and every later one fails and changes nothing.
 ** The unsynced writes are then
@@ -332,6 +333,7 @@ static void valueBytes(int ns, int k, int ver, int len, unsigned char *out){
   for(int i = 0; i < len; i++) out[i] = (unsigned char)(ns * 31 + k * 7 + ver * 13 + i);
 }
 #define TTL_EXPIRE ((int64_t)4102444800000LL)   /* 2100-01-01: never expires here */
+#define TTL_PAST   ((int64_t)1)                 /* 1970: expired when written */
 
 /* =========================================================== the workload */
 
@@ -374,6 +376,13 @@ static int doOp(KVStore *kv, KVColumnFamily *cf1, KVColumnFamily *cf2, State *t)
     int len = (wlRand() % 5 == 0) ? 900 + (int)(wlRand() % (MAXVAL - 900)) : 1 + (int)(wlRand() % 60);
     int ver = e->ver + 1;
     valueBytes(ns, k, ver, len, vb);
+    if( isTtlKey(k) && wlRand() % 4 == 0 ){
+      /* Already expired: stored, but reads (and readState's scan) skip it
+      ** until kvstore_purge_expired removes it. */
+      rc = kvstore_put_ttl(kv, key, 4, vb, len, TTL_PAST);
+      e->present = 0; e->hasTtl = 0; e->ver = ver;
+      return rc;
+    }
     if( isTtlKey(k) ){
       rc = kvstore_put_ttl(kv, key, 4, vb, len, TTL_EXPIRE);
       e->hasTtl = 1;
@@ -421,7 +430,7 @@ static void workload(const Cfg *cfg, const char *db, Run *r){
   cur = t; pushState(r, &cur);
 
   for(int txn = 0; txn < 40; txn++){
-    int kind = (int)(wlRand() % 10);
+    int kind = (int)(wlRand() % 12);
     t = cur;
     if( cfg->enc && (txn == 15 || txn == 30) ){  /* re-key, then decrypt */
       if( txn == 15 ){
@@ -454,10 +463,21 @@ static void workload(const Cfg *cfg, const char *db, Run *r){
         rc = kvstore_cf_drop(kv, "cf2");
       }
       if( rc != KVSTORE_OK ){ r->inflight = t; r->hasInflight = 1; goto done; }
-    }else{                                       /* checkpoint: no new state */
+    }else if( kind == 9 ){                       /* checkpoint: no new state */
       if( kvstore_checkpoint(kv, KVSTORE_CHECKPOINT_PASSIVE, NULL, NULL) != KVSTORE_OK
        && cfg->journal == KVSTORE_JOURNAL_WAL ) goto done;
       continue;
+    }else if( kind == 10 ){                      /* vacuum: moves pages, same contents */
+      rc = kvstore_incremental_vacuum(kv, 0);
+      if( rc != KVSTORE_OK ){ r->inflight = t; r->hasInflight = 1; goto done; }
+    }else if( wlRand() % 2 ){                    /* purge expired: same visible contents */
+      rc = kvstore_purge_expired(kv, NULL);
+      if( rc != KVSTORE_OK ){ r->inflight = t; r->hasInflight = 1; goto done; }
+    }else{                                       /* clear cf1 */
+      /* Keep each key's version so a later value never repeats an old one. */
+      for(int k = 0; k < NKEYS; k++){ t.e[1][k].present = 0; t.e[1][k].hasTtl = 0; }
+      rc = kvstore_cf_clear(cf1);
+      if( rc != KVSTORE_OK ){ r->inflight = t; r->hasInflight = 1; goto done; }
     }
     cur = t;
     pushState(r, &cur);
