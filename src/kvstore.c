@@ -4900,8 +4900,10 @@ int kvstore_integrity_check(KVStore *pKV, char **pzErrMsg){
               rc = sqlite3BtreePayload(pCur, 0, 4, hdr);
               if( rc == SQLITE_OK ){
                 int nameLen = kvstoreGetLen(hdr);
-                int rootOff = 4 + nameLen;
-                if( nameLen >= 0 && (i64)rootOff + 4 <= (i64)payloadSz ){
+                /* Bounds check in i64 first: a corrupt length near INT_MAX
+                ** would overflow 4 + nameLen as an int. */
+                if( nameLen >= 0 && 4 + (i64)nameLen + 4 <= (i64)payloadSz ){
+                  int rootOff = 4 + nameLen;
                   unsigned char rootBytes[4];
                   rc = sqlite3BtreePayload(pCur, rootOff, 4, rootBytes);
                   if( rc == SQLITE_OK ){
@@ -5173,7 +5175,7 @@ int kvstore_cf_list(KVStore *pKV, char ***pazNames, int *pnCount){
       if( rc != SQLITE_OK ) break;
 
       int nameLen = kvstoreGetLen(hdr);
-      if( nameLen > 0 && 4 + nameLen <= (int)payloadSz ){
+      if( nameLen > 0 && 4 + (i64)nameLen <= (i64)payloadSz ){
         char *name = (char*)sqlite3Malloc(nameLen + 1);
         if( !name ){ rc = KVSTORE_NOMEM; break; }
 
