@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- On a damaged file whose column-family list stores a name length near
+  2 GB, `kvstore_integrity_check` and `kvstore_cf_list` computed `4 +
+  length` in a 32-bit `int`, which overflowed (undefined behaviour) before
+  the bounds check ran. The check is now done in 64 bits, so the bad entry is
+  skipped. Found by the nightly `fuzz_open` run; the input is saved in
+  `fuzz/regress/open/`.
+
 ## 0.9.0 — unreleased
 
 ### Breaking changes
